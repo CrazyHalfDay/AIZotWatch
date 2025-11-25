@@ -18,7 +18,7 @@ jobs:
     env:
       ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
       ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
-      ALTMETRIC_KEY: ${{ secrets.ALTMETRIC_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       OPENALEX_MAILTO: ${{ secrets.OPENALEX_MAILTO }}
       CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
     steps:

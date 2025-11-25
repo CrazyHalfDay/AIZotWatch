@@ -86,7 +86,7 @@ class WorkRanker:
         for candidate, vector, distance in zip(candidates, vectors, distances):
             similarity = float(distance[0]) if distance.size else 0.0
             recency_score = _compute_recency(candidate.published, self.settings)
-            citation_score, altmetric_score = _compute_metric(candidate)
+            citation_score = _compute_citation_score(candidate)
             journal_quality, journal_sjr = _journal_quality_score(candidate.venue, self.journal_metrics)
             author_bonus = _bonus(candidate.authors, self.settings.scoring.whitelist_authors)
             venue_bonus = _bonus(
@@ -98,8 +98,7 @@ class WorkRanker:
                 similarity * weights.similarity
                 + recency_score * weights.recency
                 + citation_score * weights.citations
-                + altmetric_score * weights.altmetric
-                + journal_quality * getattr(weights, "journal_quality", 0.0)
+                + journal_quality * weights.journal_quality
                 + author_bonus * weights.author_bonus
                 + venue_bonus * weights.venue_bonus
             )
@@ -166,12 +165,9 @@ def _compute_recency(published: datetime | None, settings: Settings) -> float:
     return 0.1
 
 
-def _compute_metric(candidate: CandidateWork) -> Tuple[float, float]:
+def _compute_citation_score(candidate: CandidateWork) -> float:
     citations = float(candidate.metrics.get("cited_by", candidate.metrics.get("is-referenced-by", 0.0)))
-    altmetric = float(candidate.metrics.get("altmetric", 0.0))
-    citation_score = float(np.log1p(citations)) if citations else 0.0
-    altmetric_score = float(np.log1p(altmetric)) if altmetric else 0.0
-    return citation_score, altmetric_score
+    return float(np.log1p(citations)) if citations else 0.0
 
 
 __all__ = ["WorkRanker"]

@@ -71,7 +71,6 @@ Required:
 
 Optional:
 - `OPENALEX_MAILTO`, `CROSSREF_MAILTO`: Polite API identifiers
-- `ALTMETRIC_KEY`: Altmetric API access (if enabled)
 
 ## Key Constraints
 

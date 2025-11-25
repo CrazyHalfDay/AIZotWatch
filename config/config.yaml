@@ -4,40 +4,43 @@ zotero:
   mode: "api"
   api:
     user_id: "${ZOTERO_USER_ID}"
-    api_key_env: "ZOTERO_API_KEY"
+    api_key: "${ZOTERO_API_KEY}"
     page_size: 100
     polite_delay_ms: 200
 
 sources:
-  window_days: 7
-  openalex:
-    enabled: false
-    mailto: "you@example.com"
-  crossref:
-    enabled: true
-    mailto: "you@example.com"
   arxiv:
     enabled: true
-    categories: ["q-bio.GN", "cs.LG"]
-  biorxiv:
+    categories:
+      - "cs.LG"   # Machine Learning
+      - "cs.CV"   # Computer Vision and Pattern Recognition
+      - "cs.AI"   # Artificial Intelligence
+      - "stat.ML" # Machine Learning (Statistics)
+    days_back: 7
+    max_results: 500
+  crossref:
     enabled: true
-    from_days_ago: 7
+    mailto: "${CROSSREF_MAILTO}"
+    days_back: 7
+  openalex:
+    enabled: false
+    mailto: "${OPENALEX_MAILTO}"
+    days_back: 7
+  biorxiv:
+    enabled: false
+    days_back: 7
   medrxiv:
     enabled: false
-    from_days_ago: 7
-  altmetric:
-    enabled: false
-    api_key_env: "ALTMETRIC_KEY"
+    days_back: 7
 
 scoring:
   weights:
-    similarity: 0.45
+    similarity: 0.50
     recency: 0.15
     citations: 0.15
-    altmetric: 0.10
-    journal_quality: 0.04
+    journal_quality: 0.09
     author_bonus: 0.02
-    venue_bonus: 0.04
+    venue_bonus: 0.09
   thresholds:
     must_read: 0.75
     consider: 0.5
@@ -50,6 +53,6 @@ scoring:
 
 embedding:
   model: "voyage-3.5"
-  api_key_env: "VOYAGE_API_KEY"
+  api_key: "${VOYAGE_API_KEY}"
   input_type: "document"
   batch_size: 128

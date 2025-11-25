@@ -27,7 +27,7 @@ class ZoteroClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.session = requests.Session()
-        api_key = settings.zotero.api.api_key()
+        api_key = settings.zotero.api.api_key
         self.session.headers.update(
             {
                 "Zotero-API-Version": "3",

@@ -42,21 +42,19 @@ class CandidateFetcher:
                 "Candidate cache is stale (age %.1f hours); refreshing",
                 age.total_seconds() / 3600,
             )
-        window_days = self.settings.sources.window_days
-        since = datetime.now(timezone.utc) - timedelta(days=window_days)
         results: List[CandidateWork] = []
 
         if self.settings.sources.openalex.enabled:
-            results.extend(self._fetch_openalex(since))
+            results.extend(self._fetch_openalex())
         if self.settings.sources.crossref.enabled:
-            results.extend(self._fetch_crossref(since))
-            results.extend(self._fetch_crossref_top_venues(since))
+            results.extend(self._fetch_crossref())
+            results.extend(self._fetch_crossref_top_venues())
         if self.settings.sources.arxiv.enabled:
             results.extend(self._fetch_arxiv())
         if self.settings.sources.biorxiv.enabled:
-            results.extend(self._fetch_biorxiv(window_days))
+            results.extend(self._fetch_biorxiv())
         if self.settings.sources.medrxiv.enabled:
-            results.extend(self._fetch_biorxiv(window_days, medrxiv=True))
+            results.extend(self._fetch_biorxiv(medrxiv=True))
 
         logger.info("Fetched %d candidate works", len(results))
         self._save_cache(results)
@@ -121,13 +119,15 @@ class CandidateFetcher:
         data["published"] = ensure_isoformat(candidate.published)
         return data
 
-    def _fetch_openalex(self, since: datetime) -> List[CandidateWork]:
+    def _fetch_openalex(self) -> List[CandidateWork]:
+        config = self.settings.sources.openalex
+        since = datetime.now(timezone.utc) - timedelta(days=config.days_back)
         url = "https://api.openalex.org/works"
         params = {
             "filter": f"from_publication_date:{since.date().isoformat()}",
             "sort": "publication_date:desc",
             "per-page": 200,
-            "mailto": self.settings.sources.openalex.mailto,
+            "mailto": config.mailto,
         }
         logger.info("Fetching OpenAlex works since %s", since.date())
         resp = self.session.get(url, params=params)
@@ -159,14 +159,16 @@ class CandidateFetcher:
             )
         return results
 
-    def _fetch_crossref(self, since: datetime) -> List[CandidateWork]:
+    def _fetch_crossref(self) -> List[CandidateWork]:
+        config = self.settings.sources.crossref
+        since = datetime.now(timezone.utc) - timedelta(days=config.days_back)
         url = "https://api.crossref.org/works"
         params = {
             "filter": f"from-pub-date:{since.date().isoformat()}",
             "sort": "created",
             "order": "desc",
             "rows": 200,
-            "mailto": self.settings.sources.crossref.mailto,
+            "mailto": config.mailto,
         }
         logger.info("Fetching Crossref works since %s", since.date())
         resp = self.session.get(url, params=params, timeout=30)
@@ -198,9 +200,11 @@ class CandidateFetcher:
             )
         return results
 
-    def _fetch_crossref_top_venues(self, since: datetime) -> List[CandidateWork]:
+    def _fetch_crossref_top_venues(self) -> List[CandidateWork]:
         if not self.top_venues:
             return []
+        config = self.settings.sources.crossref
+        since = datetime.now(timezone.utc) - timedelta(days=config.days_back)
         results: List[CandidateWork] = []
         for venue in self.top_venues:
             params = {
@@ -208,7 +212,7 @@ class CandidateFetcher:
                 "sort": "created",
                 "order": "desc",
                 "rows": 100,
-                "mailto": self.settings.sources.crossref.mailto,
+                "mailto": config.mailto,
             }
             try:
                 resp = self.session.get("https://api.crossref.org/works", params=params, timeout=30)
@@ -248,16 +252,30 @@ class CandidateFetcher:
         return results
 
     def _fetch_arxiv(self) -> List[CandidateWork]:
-        categories = self.settings.sources.arxiv.categories
-        query = " OR ".join(f"cat:{cat}" for cat in categories)
+        config = self.settings.sources.arxiv
+        categories = config.categories
+
+        # Use submittedDate filter for date range
+        to_date = datetime.now(timezone.utc)
+        from_date = to_date - timedelta(days=config.days_back)
+        date_filter = f"submittedDate:[{from_date:%Y%m%d}0000+TO+{to_date:%Y%m%d}2359]"
+
+        cat_query = " OR ".join(f"cat:{cat}" for cat in categories)
+        query = f"({cat_query})+AND+{date_filter}"
+
         url = "https://export.arxiv.org/api/query"
         params = {
             "search_query": query,
             "sortBy": "submittedDate",
             "sortOrder": "descending",
-            "max_results": 100,
+            "max_results": config.max_results,
         }
-        logger.info("Fetching arXiv entries for categories: %s", ", ".join(categories))
+        logger.info(
+            "Fetching arXiv entries for categories: %s (last %d days, max %d)",
+            ", ".join(categories),
+            config.days_back,
+            config.max_results,
+        )
         resp = self.session.get(url, params=params, timeout=30)
         resp.raise_for_status()
         feed = feedparser.parse(resp.text)
@@ -284,10 +302,16 @@ class CandidateFetcher:
             )
         return results
 
-    def _fetch_biorxiv(self, window_days: int, medrxiv: bool = False) -> List[CandidateWork]:
-        base = "medrxiv" if medrxiv else "biorxiv"
+    def _fetch_biorxiv(self, medrxiv: bool = False) -> List[CandidateWork]:
+        if medrxiv:
+            config = self.settings.sources.medrxiv
+            base = "medrxiv"
+        else:
+            config = self.settings.sources.biorxiv
+            base = "biorxiv"
+
         to_date = datetime.now(timezone.utc)
-        from_date = to_date - timedelta(days=window_days)
+        from_date = to_date - timedelta(days=config.days_back)
         url = f"https://api.biorxiv.org/details/{base}/{from_date:%Y-%m-%d}/{to_date:%Y-%m-%d}"
         logger.info(
             "Fetching %s preprints from %s to %s",

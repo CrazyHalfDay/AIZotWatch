@@ -7,16 +7,10 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ZoteroApiConfig(BaseModel):
-    user_id: str = Field(..., alias="user_id")
-    api_key_env: str = Field("ZOTERO_API_KEY", alias="api_key_env")
+    user_id: str
+    api_key: str
     page_size: int = 100
     polite_delay_ms: int = 200
-
-    def api_key(self) -> str:
-        key = os.getenv(self.api_key_env)
-        if not key:
-            raise RuntimeError(f"Environment variable '{self.api_key_env}' is required for Zotero API access.")
-        return key
 
 
 class ZoteroConfig(BaseModel):
@@ -32,59 +26,50 @@ class ZoteroConfig(BaseModel):
         return value
 
 
-class AltmetricConfig(BaseModel):
-    enabled: bool = False
-    api_key_env: Optional[str] = None
-
-    def api_key(self) -> Optional[str]:
-        if not self.enabled or not self.api_key_env:
-            return None
-        return os.getenv(self.api_key_env)
-
-
 class OpenAlexConfig(BaseModel):
     enabled: bool = True
     mailto: str = "you@example.com"
+    days_back: int = 7
 
 
 class CrossRefConfig(BaseModel):
     enabled: bool = True
     mailto: str = "you@example.com"
+    days_back: int = 7
 
 
 class ArxivConfig(BaseModel):
     enabled: bool = True
     categories: List[str] = Field(default_factory=lambda: ["cs.LG"])
+    days_back: int = 7
+    max_results: int = 500
 
 
 class BioRxivConfig(BaseModel):
     enabled: bool = True
-    from_days_ago: int = 30
+    days_back: int = 7
 
 
 class MedRxivConfig(BaseModel):
     enabled: bool = False
-    from_days_ago: int = 30
+    days_back: int = 7
 
 
 class SourcesConfig(BaseModel):
-    window_days: int = 30
     openalex: OpenAlexConfig = Field(default_factory=OpenAlexConfig)
     crossref: CrossRefConfig = Field(default_factory=CrossRefConfig)
     arxiv: ArxivConfig = Field(default_factory=ArxivConfig)
     biorxiv: BioRxivConfig = Field(default_factory=BioRxivConfig)
     medrxiv: MedRxivConfig = Field(default_factory=MedRxivConfig)
-    altmetric: AltmetricConfig = Field(default_factory=AltmetricConfig)
 
 
 class ScoreWeights(BaseModel):
-    similarity: float = 0.45
+    similarity: float = 0.50
     recency: float = 0.15
     citations: float = 0.15
-    altmetric: float = 0.10
-    journal_quality: float = 0.08
+    journal_quality: float = 0.09
     author_bonus: float = 0.02
-    venue_bonus: float = 0.05
+    venue_bonus: float = 0.09
 
     def normalized(self) -> "ScoreWeights":
         total = sum(self.model_dump().values())
@@ -109,15 +94,9 @@ class ScoringConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     model: str = "voyage-3.5"
-    api_key_env: str = "VOYAGE_API_KEY"
+    api_key: str
     input_type: str = "document"
     batch_size: int = 128
-
-    def api_key(self) -> str:
-        key = os.getenv(self.api_key_env)
-        if not key:
-            raise RuntimeError(f"Environment variable '{self.api_key_env}' is required for Voyage API.")
-        return key
 
 
 class Settings(BaseModel):

@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Iterable
 
 import numpy as np
@@ -12,24 +11,21 @@ class TextVectorizer:
     def __init__(
         self,
         model_name: str = "voyage-3.5",
-        api_key_env: str = "VOYAGE_API_KEY",
+        api_key: str = "",
         input_type: str = "document",
         batch_size: int = 128,
     ):
         self.model_name = model_name
-        self.api_key_env = api_key_env
+        self.api_key = api_key
         self.input_type = input_type
         self.batch_size = batch_size
         self._client = None
 
     def _get_client(self):
         if self._client is None:
-            if voyageai is None:
-                raise RuntimeError("voyageai is not installed. Install it or adjust requirements.")
-            api_key = os.getenv(self.api_key_env)
-            if not api_key:
-                raise RuntimeError(f"Environment variable '{self.api_key_env}' is required for Voyage API.")
-            self._client = voyageai.Client(api_key=api_key)
+            if not self.api_key:
+                raise RuntimeError("Voyage API key is required.")
+            self._client = voyageai.Client(api_key=self.api_key)
         return self._client
 
     def encode(self, texts: Iterable[str]) -> np.ndarray:

@@ -70,7 +70,7 @@ def run_profile(base_dir: Path, settings: Settings, storage: ProfileStorage, *, 
     )
     vectorizer = TextVectorizer(
         model_name=settings.embedding.model,
-        api_key_env=settings.embedding.api_key_env,
+        api_key=settings.embedding.api_key,
         input_type=settings.embedding.input_type,
         batch_size=settings.embedding.batch_size,
     )
@@ -105,7 +105,7 @@ def run_watch(
 
     vectorizer = TextVectorizer(
         model_name=settings.embedding.model,
-        api_key_env=settings.embedding.api_key_env,
+        api_key=settings.embedding.api_key,
         input_type=settings.embedding.input_type,
         batch_size=settings.embedding.batch_size,
     )
