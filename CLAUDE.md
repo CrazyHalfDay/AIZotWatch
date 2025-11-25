@@ -33,7 +33,7 @@ uv run python -m src.cli watch --verbose --rss
 ### Pipeline Flow
 
 1. **Ingest** (`ingest_zotero_api.py`): Fetches items from Zotero Web API, stores in SQLite
-2. **Profile Build** (`build_profile.py`): Vectorizes library items using sentence-transformers, builds FAISS index, extracts top authors/venues
+2. **Profile Build** (`build_profile.py`): Vectorizes library items using Voyage AI API (voyage-3.5), builds FAISS index, extracts top authors/venues
 3. **Candidate Fetch** (`fetch_new.py`): Pulls recent papers from Crossref, arXiv, bioRxiv/medRxiv, OpenAlex
 4. **Deduplication** (`dedupe.py`): Filters out papers already in the user's library
 5. **Scoring** (`score_rank.py`): Ranks candidates using weighted combination of similarity, recency, citations, journal quality, and whitelist bonuses
@@ -49,13 +49,15 @@ uv run python -m src.cli watch --verbose --rss
 
 ### Configuration Files (config/)
 
-- `zotero.yaml`: Zotero API settings (user_id uses `${ZOTERO_USER_ID}` env var expansion)
-- `sources.yaml`: Data source toggles and parameters (window_days, categories)
-- `scoring.yaml`: Score weights, thresholds, decay settings, author/venue whitelists
+- `config.yaml`: Unified configuration file containing all settings:
+  - `zotero`: Zotero API settings (user_id uses `${ZOTERO_USER_ID}` env var expansion)
+  - `sources`: Data source toggles and parameters (window_days, categories)
+  - `scoring`: Score weights, thresholds, decay settings, author/venue whitelists
+  - `embedding`: Embedding model configuration (model name, API key env var, input type)
 
 ### Core Components
 
-- `TextVectorizer` (`vectorizer.py`): Wraps sentence-transformers (all-MiniLM-L6-v2)
+- `TextVectorizer` (`vectorizer.py`): Wraps Voyage AI API (voyage-3.5, 1024-dim embeddings)
 - `FaissIndex` (`faiss_store.py`): Manages FAISS index for semantic similarity
 - `ProfileStorage` (`storage.py`): SQLite abstraction for items and embeddings
 - `Settings` (`settings.py`): Pydantic models for configuration with env var expansion
@@ -65,6 +67,7 @@ uv run python -m src.cli watch --verbose --rss
 Required:
 - `ZOTERO_API_KEY`: Zotero Web API key
 - `ZOTERO_USER_ID`: Zotero user ID
+- `VOYAGE_API_KEY`: Voyage AI API key for text embeddings
 
 Optional:
 - `OPENALEX_MAILTO`, `CROSSREF_MAILTO`: Polite API identifiers

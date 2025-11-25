@@ -32,8 +32,7 @@ class ZoteroItem(BaseModel):
     def from_zotero_api(cls, item: Dict[str, object]) -> "ZoteroItem":
         data = item.get("data", {})
         creators = [
-            " ".join(filter(None, [c.get("firstName"), c.get("lastName")])).strip()
-            for c in data.get("creators", [])
+            " ".join(filter(None, [c.get("firstName"), c.get("lastName")])).strip() for c in data.get("creators", [])
         ]
         return cls(
             key=data.get("key") or item.get("key"),

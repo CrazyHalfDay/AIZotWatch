@@ -135,16 +135,12 @@ class ProfileStorage:
             yield _row_to_item(row)
 
     def fetch_items_without_embedding(self) -> List[Tuple[ZoteroItem, Optional[str]]]:
-        cur = self.connect().execute(
-            "SELECT * FROM items WHERE embedding IS NULL ORDER BY updated_at ASC"
-        )
+        cur = self.connect().execute("SELECT * FROM items WHERE embedding IS NULL ORDER BY updated_at ASC")
         rows = cur.fetchall()
         return [(_row_to_item(row), row["content_hash"]) for row in rows]
 
     def fetch_all_embeddings(self) -> List[Tuple[str, bytes]]:
-        cur = self.connect().execute(
-            "SELECT key, embedding FROM items WHERE embedding IS NOT NULL"
-        )
+        cur = self.connect().execute("SELECT key, embedding FROM items WHERE embedding IS NOT NULL")
         return [(row["key"], row["embedding"]) for row in cur]
 
 

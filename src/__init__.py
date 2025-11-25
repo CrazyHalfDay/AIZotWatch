@@ -1,3 +1,3 @@
-"""ZotWatcher package initialization."""
+"""ZotWatch package initialization."""
 
 __all__ = []

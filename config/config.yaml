@@ -1,0 +1,55 @@
+# ZotWatch Configuration
+
+zotero:
+  mode: "api"
+  api:
+    user_id: "${ZOTERO_USER_ID}"
+    api_key_env: "ZOTERO_API_KEY"
+    page_size: 100
+    polite_delay_ms: 200
+
+sources:
+  window_days: 7
+  openalex:
+    enabled: false
+    mailto: "you@example.com"
+  crossref:
+    enabled: true
+    mailto: "you@example.com"
+  arxiv:
+    enabled: true
+    categories: ["q-bio.GN", "cs.LG"]
+  biorxiv:
+    enabled: true
+    from_days_ago: 7
+  medrxiv:
+    enabled: false
+    from_days_ago: 7
+  altmetric:
+    enabled: false
+    api_key_env: "ALTMETRIC_KEY"
+
+scoring:
+  weights:
+    similarity: 0.45
+    recency: 0.15
+    citations: 0.15
+    altmetric: 0.10
+    journal_quality: 0.04
+    author_bonus: 0.02
+    venue_bonus: 0.04
+  thresholds:
+    must_read: 0.75
+    consider: 0.5
+  decay_days:
+    fast: 3
+    medium: 7
+    slow: 30
+  whitelist_authors: []
+  whitelist_venues: []
+
+embedding:
+  model: "voyage-3.5"
+  api_key_env: "VOYAGE_API_KEY"
+  input_type: "document"
+  batch_size: 128

@@ -32,16 +32,14 @@ class ZoteroClient:
             {
                 "Zotero-API-Version": "3",
                 "Authorization": f"Bearer {api_key}",
-                "User-Agent": "ZotWatcher/0.1",
+                "User-Agent": "ZotWatch/0.1",
             }
         )
         self.base_user_url = f"{API_BASE}/users/{settings.zotero.api.user_id}"
         self.base_items_url = f"{self.base_user_url}/items"
         self.polite_delay = settings.zotero.api.polite_delay_ms / 1000
 
-    def iter_items(
-        self, since_version: Optional[int] = None
-    ) -> Iterable[requests.Response]:
+    def iter_items(self, since_version: Optional[int] = None) -> Iterable[requests.Response]:
         params = {
             "limit": self.settings.zotero.api.page_size,
             "sort": "dateAdded",
@@ -60,9 +58,7 @@ class ZoteroClient:
                 headers=headers,
             )
             if resp.status_code == 304:
-                logger.info(
-                    "Zotero API indicated no changes since version %s", since_version
-                )
+                logger.info("Zotero API indicated no changes since version %s", since_version)
                 return
             resp.raise_for_status()
             yield resp
@@ -105,9 +101,7 @@ class ZoteroIngestor:
         stats = IngestStats()
         self.storage.initialize()
         since_version = None if full else self.storage.last_modified_version()
-        logger.info(
-            "Starting Zotero ingest (full=%s, since_version=%s)", full, since_version
-        )
+        logger.info("Starting Zotero ingest (full=%s, since_version=%s)", full, since_version)
         max_version = since_version or 0
 
         for response in self.client.iter_items(since_version=since_version):
@@ -126,9 +120,7 @@ class ZoteroIngestor:
                 stats.fetched += 1
                 stats.updated += 1
 
-        deleted_keys = self.client.fetch_deleted(
-            since_version=max_version if not full else None
-        )
+        deleted_keys = self.client.fetch_deleted(since_version=max_version if not full else None)
         self.storage.remove_items(deleted_keys)
         stats.removed = len(deleted_keys)
 

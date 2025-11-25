@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ZoteroApiConfig(BaseModel):
@@ -15,9 +15,7 @@ class ZoteroApiConfig(BaseModel):
     def api_key(self) -> str:
         key = os.getenv(self.api_key_env)
         if not key:
-            raise RuntimeError(
-                f"Environment variable '{self.api_key_env}' is required for Zotero API access."
-            )
+            raise RuntimeError(f"Environment variable '{self.api_key_env}' is required for Zotero API access.")
         return key
 
 
@@ -25,13 +23,12 @@ class ZoteroConfig(BaseModel):
     mode: str = "api"
     api: ZoteroApiConfig = Field(default_factory=ZoteroApiConfig)
 
-    @validator("mode")
+    @field_validator("mode")
+    @classmethod
     def validate_mode(cls, value: str) -> str:
         allowed = {"api", "bbt"}
         if value not in allowed:
-            raise ValueError(
-                f"Unsupported Zotero mode '{value}'. Allowed: {sorted(allowed)}"
-            )
+            raise ValueError(f"Unsupported Zotero mode '{value}'. Allowed: {sorted(allowed)}")
         return value
 
 
@@ -90,12 +87,10 @@ class ScoreWeights(BaseModel):
     venue_bonus: float = 0.05
 
     def normalized(self) -> "ScoreWeights":
-        total = sum(self.dict().values())
+        total = sum(self.model_dump().values())
         if not total:
-            raise ValueError(
-                "Score weights sum to zero; at least one positive weight is required."
-            )
-        normalized = {k: v / total for k, v in self.dict().items()}
+            raise ValueError("Score weights sum to zero; at least one positive weight is required.")
+        normalized = {k: v / total for k, v in self.model_dump().items()}
         return ScoreWeights(**normalized)
 
 
@@ -107,17 +102,29 @@ class Thresholds(BaseModel):
 class ScoringConfig(BaseModel):
     weights: ScoreWeights = Field(default_factory=ScoreWeights)
     thresholds: Thresholds = Field(default_factory=Thresholds)
-    decay_days: Dict[str, int] = Field(
-        default_factory=lambda: {"fast": 30, "medium": 60, "slow": 180}
-    )
+    decay_days: Dict[str, int] = Field(default_factory=lambda: {"fast": 30, "medium": 60, "slow": 180})
     whitelist_authors: List[str] = Field(default_factory=list)
     whitelist_venues: List[str] = Field(default_factory=list)
+
+
+class EmbeddingConfig(BaseModel):
+    model: str = "voyage-3.5"
+    api_key_env: str = "VOYAGE_API_KEY"
+    input_type: str = "document"
+    batch_size: int = 128
+
+    def api_key(self) -> str:
+        key = os.getenv(self.api_key_env)
+        if not key:
+            raise RuntimeError(f"Environment variable '{self.api_key_env}' is required for Voyage API.")
+        return key
 
 
 class Settings(BaseModel):
     zotero: ZoteroConfig
     sources: SourcesConfig
     scoring: ScoringConfig
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
 def _expand_env_vars(data: Any) -> Any:
@@ -137,21 +144,19 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
         data = yaml.safe_load(fh) or {}
     data = _expand_env_vars(data)
     if not isinstance(data, dict):
-        raise ValueError(
-            f"Configuration file {path} must contain a mapping at the top level."
-        )
+        raise ValueError(f"Configuration file {path} must contain a mapping at the top level.")
     return data
 
 
 def load_settings(base_dir: Path | str) -> Settings:
     base = Path(base_dir)
-    zotero_cfg = _load_yaml(base / "config" / "zotero.yaml")
-    sources_cfg = _load_yaml(base / "config" / "sources.yaml")
-    scoring_cfg = _load_yaml(base / "config" / "scoring.yaml")
+    config_path = base / "config" / "config.yaml"
+    config = _load_yaml(config_path)
     return Settings(
-        zotero=ZoteroConfig(**zotero_cfg),
-        sources=SourcesConfig(**sources_cfg),
-        scoring=ScoringConfig(**scoring_cfg),
+        zotero=ZoteroConfig(**config.get("zotero", {})),
+        sources=SourcesConfig(**config.get("sources", {})),
+        scoring=ScoringConfig(**config.get("scoring", {})),
+        embedding=EmbeddingConfig(**config.get("embedding", {})),
     )
 
 
@@ -161,4 +166,5 @@ __all__ = [
     "ZoteroConfig",
     "SourcesConfig",
     "ScoringConfig",
+    "EmbeddingConfig",
 ]

@@ -36,9 +36,7 @@ class ProfileBuilder:
     def run(self) -> ProfileArtifacts:
         items = list(self.storage.iter_items())
         if not items:
-            raise RuntimeError(
-                "No items found in storage; run ingest before building profile."
-            )
+            raise RuntimeError("No items found in storage; run ingest before building profile.")
 
         logger.info("Vectorizing %d library items", len(items))
         texts = [item.content_for_embedding() for item in items]

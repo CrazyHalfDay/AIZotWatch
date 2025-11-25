@@ -2,22 +2,16 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
+import faiss
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    import faiss
-except ImportError:  # pragma: no cover - runtime dependency
-    faiss = None  # type: ignore
-
 
 class FaissIndex:
-    def __init__(self, dim: int, index: "faiss.Index" | None = None):  # type: ignore
+    def __init__(self, dim: int, index: faiss.Index | None = None):  # type: ignore
         if faiss is None:
-            raise RuntimeError(
-                "faiss is required; install faiss-cpu or adjust configuration."
-            )
+            raise RuntimeError("faiss is required; install faiss-cpu or adjust configuration.")
         self.dim = dim
         self.index = index or faiss.IndexFlatIP(dim)
 
@@ -37,17 +31,13 @@ class FaissIndex:
     @classmethod
     def load(cls, path: Path | str) -> "FaissIndex":
         if faiss is None:
-            raise RuntimeError(
-                "faiss is required; install faiss-cpu or adjust configuration."
-            )
+            raise RuntimeError("faiss is required; install faiss-cpu or adjust configuration.")
         index = faiss.read_index(str(path))
         if index.ntotal == 0:
             raise ValueError("Loaded FAISS index is empty")
         return cls(index.d, index)
 
-    def search(
-        self, vectors: np.ndarray, top_k: int = 10
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def search(self, vectors: np.ndarray, top_k: int = 10) -> Tuple[np.ndarray, np.ndarray]:
         if vectors.ndim == 1:
             vectors = vectors.reshape(1, -1)
         return self.index.search(vectors.astype("float32"), top_k)

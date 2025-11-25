@@ -111,15 +111,13 @@ class CandidateFetcher:
             "candidates": [self._serialize_candidate(c) for c in candidates],
         }
         try:
-            self.cache_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            self.cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to write candidate cache: %s", exc)
 
     @staticmethod
     def _serialize_candidate(candidate: CandidateWork) -> dict:
-        data = candidate.dict()
+        data = candidate.model_dump()
         data["published"] = ensure_isoformat(candidate.published)
         return data
 
@@ -150,20 +148,13 @@ class CandidateFetcher:
                     identifier=work_id or item.get("doi") or title,
                     title=title,
                     abstract=_extract_openalex_abstract(item),
-                    authors=[
-                        auth.get("author", {}).get("display_name", "")
-                        for auth in item.get("authorships", [])
-                    ],
+                    authors=[auth.get("author", {}).get("display_name", "") for auth in item.get("authorships", [])],
                     doi=item.get("doi"),
                     url=source_info.get("url") or landing_page,
                     published=_parse_date(item.get("publication_date")),
                     venue=source_info.get("display_name"),
                     metrics={"cited_by": float(item.get("cited_by_count", 0))},
-                    extra={
-                        "concepts": [
-                            c.get("display_name") for c in item.get("concepts", [])
-                        ]
-                    },
+                    extra={"concepts": [c.get("display_name") for c in item.get("concepts", [])]},
                 )
             )
         return results
@@ -188,8 +179,7 @@ class CandidateFetcher:
                 continue
             doi = item.get("DOI")
             authors = [
-                " ".join(filter(None, [p.get("given"), p.get("family")])).strip()
-                for p in item.get("author", [])
+                " ".join(filter(None, [p.get("given"), p.get("family")])).strip() for p in item.get("author", [])
             ]
             results.append(
                 CandidateWork(
@@ -202,9 +192,7 @@ class CandidateFetcher:
                     url=item.get("URL"),
                     published=_parse_date(item.get("created", {}).get("date-time")),
                     venue=(item.get("container-title") or [None])[0],
-                    metrics={
-                        "is-referenced-by": float(item.get("is-referenced-by-count", 0))
-                    },
+                    metrics={"is-referenced-by": float(item.get("is-referenced-by-count", 0))},
                     extra={"type": item.get("type")},
                 )
             )
@@ -223,9 +211,7 @@ class CandidateFetcher:
                 "mailto": self.settings.sources.crossref.mailto,
             }
             try:
-                resp = self.session.get(
-                    "https://api.crossref.org/works", params=params, timeout=30
-                )
+                resp = self.session.get("https://api.crossref.org/works", params=params, timeout=30)
                 resp.raise_for_status()
             except Exception as exc:
                 logger.warning("Failed to fetch Crossref top venue %s: %s", venue, exc)
@@ -237,8 +223,7 @@ class CandidateFetcher:
                     continue
                 doi = item.get("DOI")
                 authors = [
-                    " ".join(filter(None, [p.get("given"), p.get("family")])).strip()
-                    for p in item.get("author", [])
+                    " ".join(filter(None, [p.get("given"), p.get("family")])).strip() for p in item.get("author", [])
                 ]
                 results.append(
                     CandidateWork(
@@ -251,11 +236,7 @@ class CandidateFetcher:
                         url=item.get("URL"),
                         published=_parse_date(item.get("created", {}).get("date-time")),
                         venue=venue,
-                        metrics={
-                            "is-referenced-by": float(
-                                item.get("is-referenced-by-count", 0)
-                            )
-                        },
+                        metrics={"is-referenced-by": float(item.get("is-referenced-by-count", 0))},
                         extra={
                             "source": "top_venue",
                             "type": item.get("type"),
@@ -298,18 +279,12 @@ class CandidateFetcher:
                     url=entry.get("link"),
                     published=published,
                     venue="arXiv",
-                    extra={
-                        "primary_category": entry.get("arxiv_primary_category", {}).get(
-                            "term"
-                        )
-                    },
+                    extra={"primary_category": entry.get("arxiv_primary_category", {}).get("term")},
                 )
             )
         return results
 
-    def _fetch_biorxiv(
-        self, window_days: int, medrxiv: bool = False
-    ) -> List[CandidateWork]:
+    def _fetch_biorxiv(self, window_days: int, medrxiv: bool = False) -> List[CandidateWork]:
         base = "medrxiv" if medrxiv else "biorxiv"
         to_date = datetime.now(timezone.utc)
         from_date = to_date - timedelta(days=window_days)
@@ -338,11 +313,7 @@ class CandidateFetcher:
                     identifier=doi or entry.get("biorxiv_id") or title,
                     title=title,
                     abstract=entry.get("abstract"),
-                    authors=[
-                        a.strip()
-                        for a in entry.get("authors", "").split(";")
-                        if a.strip()
-                    ],
+                    authors=[a.strip() for a in entry.get("authors", "").split(";") if a.strip()],
                     doi=doi,
                     url=rel_link,
                     published=_parse_date(entry.get("date")),

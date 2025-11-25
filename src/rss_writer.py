@@ -13,7 +13,7 @@ def write_rss(
     works: Iterable[RankedWork],
     output_path: Path | str,
     *,
-    title: str = "ZotWatcher Feed",
+    title: str = "ZotWatch Feed",
     link: str = "https://example.com",
     description: str = "AI assisted literature watch",
 ) -> Path:
@@ -23,9 +23,7 @@ def write_rss(
     ET.SubElement(channel, "title").text = title
     ET.SubElement(channel, "link").text = link
     ET.SubElement(channel, "description").text = description
-    ET.SubElement(channel, "lastBuildDate").text = _format_rfc822(
-        datetime.now(timezone.utc)
-    )
+    ET.SubElement(channel, "lastBuildDate").text = _format_rfc822(datetime.now(timezone.utc))
 
     for work in works_list:
         item = ET.SubElement(channel, "item")

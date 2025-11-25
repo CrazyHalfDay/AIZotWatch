@@ -17,6 +17,7 @@ from .score_rank import WorkRanker
 from .settings import Settings, load_settings
 from .storage import ProfileStorage
 from .report_html import render_html
+from .vectorizer import TextVectorizer
 
 load_dotenv()  # Load default .env if present
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,30 +26,16 @@ RSS_PATH = BASE_DIR / "reports" / "feed.xml"
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="ZotWatcher CLI")
+    parser = argparse.ArgumentParser(description="ZotWatch CLI")
     parser.add_argument("command", choices=["profile", "watch"], help="Command to run")
-    parser.add_argument(
-        "--base-dir", default=str(BASE_DIR), help="Repository base directory"
-    )
+    parser.add_argument("--base-dir", default=str(BASE_DIR), help="Repository base directory")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
-    parser.add_argument(
-        "--full", action="store_true", help="Full rebuild (profile command)"
-    )
-    parser.add_argument(
-        "--weekly", action="store_true", help="Alias for --full in profile command"
-    )
-    parser.add_argument(
-        "--rss", action="store_true", help="Generate RSS feed (watch command)"
-    )
-    parser.add_argument(
-        "--report", action="store_true", help="Generate HTML report (watch command)"
-    )
-    parser.add_argument(
-        "--top", type=int, default=50, help="Number of top results to keep"
-    )
-    parser.add_argument(
-        "--push", action="store_true", help="Push top items back to Zotero"
-    )
+    parser.add_argument("--full", action="store_true", help="Full rebuild (profile command)")
+    parser.add_argument("--weekly", action="store_true", help="Alias for --full in profile command")
+    parser.add_argument("--rss", action="store_true", help="Generate RSS feed (watch command)")
+    parser.add_argument("--report", action="store_true", help="Generate HTML report (watch command)")
+    parser.add_argument("--top", type=int, default=50, help="Number of top results to keep")
+    parser.add_argument("--push", action="store_true", help="Push top items back to Zotero")
 
     args = parser.parse_args(argv)
 
@@ -72,9 +59,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         )
 
 
-def run_profile(
-    base_dir: Path, settings: Settings, storage: ProfileStorage, *, full: bool
-) -> None:
+def run_profile(base_dir: Path, settings: Settings, storage: ProfileStorage, *, full: bool) -> None:
     ingest = ZoteroIngestor(storage, settings)
     stats = ingest.run(full=full)
     logging.getLogger(__name__).info(
@@ -83,7 +68,13 @@ def run_profile(
         stats.updated,
         stats.removed,
     )
-    builder = ProfileBuilder(base_dir, storage, settings)
+    vectorizer = TextVectorizer(
+        model_name=settings.embedding.model,
+        api_key_env=settings.embedding.api_key_env,
+        input_type=settings.embedding.input_type,
+        batch_size=settings.embedding.batch_size,
+    )
+    builder = ProfileBuilder(base_dir, storage, settings, vectorizer=vectorizer)
     artifacts = builder.run()
     logging.getLogger(__name__).info(
         "Profile artifacts generated: sqlite=%s faiss=%s json=%s",
@@ -112,7 +103,13 @@ def run_watch(
     dedupe = DedupeEngine(storage)
     filtered = dedupe.filter(candidates)
 
-    ranker = WorkRanker(base_dir, settings)
+    vectorizer = TextVectorizer(
+        model_name=settings.embedding.model,
+        api_key_env=settings.embedding.api_key_env,
+        input_type=settings.embedding.input_type,
+        batch_size=settings.embedding.batch_size,
+    )
+    ranker = WorkRanker(base_dir, settings, vectorizer=vectorizer)
     ranked = ranker.rank(filtered)
 
     ranked = _filter_recent(ranked, days=7)
@@ -155,9 +152,7 @@ def _filter_recent(ranked: list[RankedWork], *, days: int) -> list[RankedWork]:
     kept = [work for work in ranked if work.published and work.published >= cutoff]
     removed = len(ranked) - len(kept)
     if removed > 0:
-        logging.getLogger(__name__).info(
-            "Dropped %d items older than %d days", removed, days
-        )
+        logging.getLogger(__name__).info("Dropped %d items older than %d days", removed, days)
     return kept
 
 

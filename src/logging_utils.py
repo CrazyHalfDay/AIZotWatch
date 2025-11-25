@@ -13,7 +13,7 @@ def setup_logging(level: int = logging.INFO, verbose: bool = False) -> None:
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
-    return logging.getLogger(name or "zotwatcher")
+    return logging.getLogger(name or "ZotWatch")
 
 
 __all__ = ["setup_logging", "get_logger"]

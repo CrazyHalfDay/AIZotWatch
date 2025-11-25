@@ -44,13 +44,9 @@ class DedupeEngine:
             if doi and doi in seen_keys:
                 continue
             if key in self.existing_ids or key in seen_keys:
-                logger.debug(
-                    "Skipping %s due to identifier duplication", work.identifier
-                )
+                logger.debug("Skipping %s due to identifier duplication", work.identifier)
                 continue
-            if self._is_title_duplicate(title) or _is_title_in_list(
-                title, candidate_titles, self.title_threshold
-            ):
+            if self._is_title_duplicate(title) or _is_title_in_list(title, candidate_titles, self.title_threshold):
                 logger.debug("Skipping %s due to title similarity", work.identifier)
                 continue
 

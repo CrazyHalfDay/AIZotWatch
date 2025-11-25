@@ -87,12 +87,8 @@ class WorkRanker:
             similarity = float(distance[0]) if distance.size else 0.0
             recency_score = _compute_recency(candidate.published, self.settings)
             citation_score, altmetric_score = _compute_metric(candidate)
-            journal_quality, journal_sjr = _journal_quality_score(
-                candidate.venue, self.journal_metrics
-            )
-            author_bonus = _bonus(
-                candidate.authors, self.settings.scoring.whitelist_authors
-            )
+            journal_quality, journal_sjr = _journal_quality_score(candidate.venue, self.journal_metrics)
+            author_bonus = _bonus(candidate.authors, self.settings.scoring.whitelist_authors)
             venue_bonus = _bonus(
                 [candidate.venue] if candidate.venue else [],
                 self.settings.scoring.whitelist_venues,
@@ -116,7 +112,7 @@ class WorkRanker:
 
             ranked.append(
                 RankedWork(
-                    **candidate.dict(),
+                    **candidate.model_dump(),
                     score=score,
                     similarity=similarity,
                     recency_score=recency_score,
@@ -140,9 +136,7 @@ def _bonus(values: List[str], whitelist: List[str]) -> float:
     return 0.0
 
 
-def _journal_quality_score(
-    venue: Optional[str], metrics: Dict[str, float]
-) -> Tuple[float, Optional[float]]:
+def _journal_quality_score(venue: Optional[str], metrics: Dict[str, float]) -> Tuple[float, Optional[float]]:
     if not venue:
         return 1.0, None
     key = venue.strip().lower()
@@ -173,11 +167,7 @@ def _compute_recency(published: datetime | None, settings: Settings) -> float:
 
 
 def _compute_metric(candidate: CandidateWork) -> Tuple[float, float]:
-    citations = float(
-        candidate.metrics.get(
-            "cited_by", candidate.metrics.get("is-referenced-by", 0.0)
-        )
-    )
+    citations = float(candidate.metrics.get("cited_by", candidate.metrics.get("is-referenced-by", 0.0)))
     altmetric = float(candidate.metrics.get("altmetric", 0.0))
     citation_score = float(np.log1p(citations)) if citations else 0.0
     altmetric_score = float(np.log1p(altmetric)) if altmetric else 0.0

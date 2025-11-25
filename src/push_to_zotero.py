@@ -21,16 +21,14 @@ class ZoteroPusher:
             {
                 "Zotero-API-Version": "3",
                 "Authorization": f"Bearer {api_key}",
-                "User-Agent": "ZotWatcher/0.1",
+                "User-Agent": "ZotWatch/0.1",
                 "Content-Type": "application/json",
             }
         )
         self.base_url = f"{API_BASE}/users/{settings.zotero.api.user_id}"
         self._collection_key: Optional[str] = None
 
-    def push(
-        self, works: Iterable[RankedWork], note_template: str | None = None
-    ) -> None:
+    def push(self, works: Iterable[RankedWork], note_template: str | None = None) -> None:
         works_list = list(works)
         if not works_list:
             logger.info("No works provided for Zotero push")
@@ -38,15 +36,13 @@ class ZoteroPusher:
         collection_key = self._ensure_collection()
         payload = []
         for work in works_list:
-            note = (note_template or "Recommended due to score {score:.3f}").format(
-                **work.dict()
-            )
+            note = (note_template or "Recommended due to score {score:.3f}").format(**work.model_dump())
             payload.append(
                 {
                     "itemType": "note",
                     "note": note,
                     "tags": [
-                        {"tag": "ZotWatcher"},
+                        {"tag": "ZotWatch"},
                         {"tag": work.label},
                     ],
                     "collections": [collection_key],
@@ -75,9 +71,7 @@ class ZoteroPusher:
         resp = self.session.post(collections_url, json=[{"name": COLLECTION_NAME}])
         resp.raise_for_status()
         created = resp.json()[0]
-        self._collection_key = (
-            created.get("successful", {}).get("0", {}).get("data", {}).get("key")
-        )
+        self._collection_key = created.get("successful", {}).get("0", {}).get("data", {}).get("key")
         if not self._collection_key:
             raise RuntimeError("Failed to create or retrieve Zotero collection")
         return self._collection_key

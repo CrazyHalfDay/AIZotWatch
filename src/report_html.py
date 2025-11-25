@@ -14,7 +14,7 @@ _TEMPLATE = """
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>ZotWatcher Report {{ generated_at }}</title>
+  <title>ZotWatch Report {{ generated_at }}</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; }
     h1 { border-bottom: 2px solid #444; padding-bottom: 0.5rem; }
@@ -23,7 +23,7 @@ _TEMPLATE = """
   </style>
 </head>
 <body>
-  <h1>ZotWatcher Recommendations</h1>
+  <h1>ZotWatch Recommendations</h1>
   <p>Generated at {{ generated_at }}</p>
   {% for work in works %}
     <article>
