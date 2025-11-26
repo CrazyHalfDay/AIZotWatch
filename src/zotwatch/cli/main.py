@@ -249,7 +249,15 @@ def watch(
     # Enrich missing abstracts
     if settings.sources.semantic_scholar.enabled:
         click.echo("Enriching missing abstracts via Semantic Scholar...")
-        enricher = AbstractEnricher(settings, base_dir)
+        # Create LLM client for universal scraper fallback if enabled
+        llm_for_enrichment = None
+        if settings.llm.enabled and settings.sources.semantic_scholar.scraper.enabled:
+            try:
+                llm_for_enrichment = _create_llm_client(settings.llm)
+                logger.debug("LLM client created for abstract enrichment scraper")
+            except Exception as e:
+                logger.warning("Failed to create LLM client for enrichment: %s", e)
+        enricher = AbstractEnricher(settings, base_dir, llm=llm_for_enrichment)
         candidates, enrich_stats = enricher.enrich(candidates)
         # Display before/after comparison
         click.echo(
@@ -270,6 +278,14 @@ def watch(
     dedupe = DedupeEngine(storage)
     filtered = dedupe.filter(candidates)
     click.echo(f"  After dedup: {len(filtered)} candidates")
+
+    # Filter out candidates without abstracts (required for accurate similarity scoring)
+    before_abstract_filter = len(filtered)
+    filtered = [c for c in filtered if c.abstract]
+    removed_no_abstract = before_abstract_filter - len(filtered)
+    if removed_no_abstract > 0:
+        click.echo(f"  Filtered: {removed_no_abstract} candidates without abstracts removed")
+        logger.info("Removed %d candidates without abstracts", removed_no_abstract)
 
     # Rank (with unified embedding cache)
     click.echo("Ranking candidates...")
