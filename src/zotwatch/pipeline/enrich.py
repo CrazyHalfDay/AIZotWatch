@@ -73,7 +73,7 @@ class AbstractEnricher:
         if cache is not None:
             self.cache = cache
         else:
-            cache_path = self.base_dir / "data" / "metadata_cache.sqlite"
+            cache_path = self.base_dir / "data" / "metadata.sqlite"
             self.cache = MetadataCache(cache_path)
 
     def enrich(self, candidates: List[CandidateWork]) -> Tuple[List[CandidateWork], EnrichmentStats]:

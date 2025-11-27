@@ -21,10 +21,9 @@ jobs:
       ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
       ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
       VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-      # ZotWatch Optional
-      CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
       # Deploy settings - CHANGE THESE TO YOUR VALUES
       GIT_USER_NAME: 'Yan Tang'
       GIT_USER_EMAIL: '360383464@qq.com'
@@ -44,9 +43,8 @@ jobs:
       - name: Ensure directories
         run: mkdir -p data reports
 
-      # Cache profile data (embeddings, FAISS index, etc.)
-      # These change rarely, key by config hash only
-      - name: Cache profile data
+      # Cache ZotWatch data (profile, embeddings, metadata)
+      - name: Cache ZotWatch data
         uses: actions/cache@v4
         with:
           path: |
@@ -54,24 +52,10 @@ jobs:
             data/faiss.index
             data/profile.json
             data/embeddings.sqlite
-          key: profile-${{ hashFiles('config/config.yaml') }}
+            data/metadata.sqlite
+          key: zotwatch-${{ hashFiles('config/config.yaml') }}
           restore-keys: |
-            profile-
-
-      # Cache metadata (abstracts, etc.) separately - changes more frequently
-      # Use date-based key so multiple runs on the same day share cache
-      - name: Get date for cache key
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      - name: Cache metadata
-        uses: actions/cache@v4
-        with:
-          path: |
-            data/metadata_cache.sqlite
-          key: metadata-${{ steps.date.outputs.date }}
-          restore-keys: |
-            metadata-
+            zotwatch-
 
       # Cache Camoufox browser
       - name: Cache Camoufox browser

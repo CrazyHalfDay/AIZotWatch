@@ -339,7 +339,7 @@ def watch(
         click.echo(f"  Cleaned up {removed} expired embedding cache entries")
 
     # Cleanup expired metadata cache entries
-    metadata_cache = MetadataCache(base_dir / "data" / "metadata_cache.sqlite")
+    metadata_cache = MetadataCache(base_dir / "data" / "metadata.sqlite")
     removed_meta = metadata_cache.cleanup_expired()
     if removed_meta > 0:
         click.echo(f"  Cleaned up {removed_meta} expired metadata cache entries")
@@ -347,7 +347,7 @@ def watch(
 
     # Filter
     ranked = _filter_recent(ranked, days=7)
-    ranked = _limit_preprints(ranked, max_ratio=1.0)
+    ranked = _limit_preprints(ranked, max_ratio=0.9)
 
     if top and len(ranked) > top:
         ranked = ranked[:top]
