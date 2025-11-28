@@ -157,13 +157,21 @@ class PaperSummary(BaseModel):
     tokens_used: int = 0
 
 
+class TopicSummary(BaseModel):
+    """Summary for a single research topic."""
+
+    topic_name: str  # e.g., "大语言模型"
+    paper_count: int
+    description: str  # 1-2 sentences describing key research points
+
+
 class OverallSummary(BaseModel):
     """Overall summary for a section of papers."""
 
     section_type: str  # "featured" or "similarity"
-    summary_text: str  # 4-6 sentences in Chinese
+    overview: str  # First sentence: topic distribution summary
+    topics: list[TopicSummary] = Field(default_factory=list)
     paper_count: int
-    key_themes: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     model_used: str
     tokens_used: int = 0
@@ -183,5 +191,6 @@ __all__ = [
     "BulletSummary",
     "DetailedAnalysis",
     "PaperSummary",
+    "TopicSummary",
     "OverallSummary",
 ]

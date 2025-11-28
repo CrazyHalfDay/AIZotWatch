@@ -59,7 +59,7 @@ Guidelines:
 
 Important: Only return the JSON object, no additional text or markdown formatting."""
 
-OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，撰写一段综合性总结。
+OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题进行分组并撰写总结。
 
 论文数量：{paper_count}
 论文类型：{section_type}
@@ -67,15 +67,27 @@ OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，撰写一段综�
 论文列表：
 {papers_list}
 
-请撰写 4-6 句话的中文总结，涵盖以下方面：
-1. 这批论文的主要研究主题和趋势
-2. 采用的主要研究方法或技术
-3. 几篇代表性论文及其核心贡献
-4. 这些论文对相关领域的整体价值
+请完成以下任务：
+1. 根据论文内容，将论文分成若干个研究主题（数量由你根据内容自动判断）
+2. 撰写一句概述性的开头，说明各主题的论文数量分布
+3. 对每个主题，用 1-2 句话描述该主题下论文的关键研究要点
 
-请以 JSON 格式返回，包含以下键：
-- summary_text: 综合性总结（4-6 句话）
-- key_themes: 主要研究主题列表（3-5 个关键词）
+请以 JSON 格式返回：
+{{
+  "overview": "本期推荐涵盖了X篇关于主题A的论文、Y篇关于主题B的论文...",
+  "topics": [
+    {{
+      "topic_name": "主题名称（2-6字）",
+      "paper_count": 数量,
+      "description": "1-2句话描述该主题的研究重点和关键方法"
+    }}
+  ]
+}}
+
+注意：
+- 主题分组应覆盖所有论文
+- overview 应简洁说明各主题论文数量分布
+- description 应具体描述研究内容，而非泛泛而谈
 
 重要：只返回 JSON 对象，不要添加任何额外文字或 markdown 格式。"""
 

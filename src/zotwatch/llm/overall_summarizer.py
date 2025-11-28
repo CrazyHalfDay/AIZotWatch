@@ -7,6 +7,7 @@ from zotwatch.core.models import (
     FeaturedWork,
     OverallSummary,
     RankedWork,
+    TopicSummary,
 )
 from zotwatch.utils.datetime import utc_now
 
@@ -97,7 +98,7 @@ class OverallSummarizer:
         model_used: str,
         tokens_used: int,
     ) -> OverallSummary:
-        """Parse LLM response into OverallSummary."""
+        """Parse LLM response into OverallSummary with topics."""
         try:
             content = content.strip()
             if content.startswith("```"):
@@ -108,11 +109,20 @@ class OverallSummarizer:
 
             data = json.loads(content)
 
+            topics = [
+                TopicSummary(
+                    topic_name=t.get("topic_name", "未命名"),
+                    paper_count=t.get("paper_count", 0),
+                    description=t.get("description", ""),
+                )
+                for t in data.get("topics", [])
+            ]
+
             return OverallSummary(
                 section_type=section_type,
-                summary_text=data.get("summary_text", ""),
+                overview=data.get("overview", ""),
+                topics=topics,
                 paper_count=paper_count,
-                key_themes=data.get("key_themes", []),
                 generated_at=utc_now(),
                 model_used=model_used,
                 tokens_used=tokens_used,
@@ -121,9 +131,9 @@ class OverallSummarizer:
             logger.warning("Failed to parse overall summary: %s", e)
             return OverallSummary(
                 section_type=section_type,
-                summary_text=content[:500] if content else "无法生成总结",
+                overview=f"本期共推荐 {paper_count} 篇论文。",
+                topics=[],
                 paper_count=paper_count,
-                key_themes=[],
                 generated_at=utc_now(),
                 model_used=model_used,
                 tokens_used=tokens_used,

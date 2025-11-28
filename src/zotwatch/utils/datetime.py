@@ -1,6 +1,6 @@
 """DateTime utilities for ZotWatch."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def utc_now() -> datetime:
@@ -12,6 +12,17 @@ def utc_today_start() -> datetime:
     """Get start of today (midnight) in UTC."""
     now = datetime.now(timezone.utc)
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def utc_yesterday_end() -> datetime:
+    """Get end of yesterday (23:59:59) in UTC.
+
+    Used for querying complete past days only, ensuring consistent results
+    regardless of when the program runs during the current day.
+    """
+    today_start = utc_today_start()
+    yesterday_start = today_start - timedelta(days=1)
+    return yesterday_start.replace(hour=23, minute=59, second=59)
 
 
 def ensure_isoformat(dt: datetime | None) -> str | None:
@@ -59,6 +70,7 @@ def parse_date(value) -> datetime | None:
 __all__ = [
     "utc_now",
     "utc_today_start",
+    "utc_yesterday_end",
     "ensure_isoformat",
     "iso_to_datetime",
     "ensure_aware",

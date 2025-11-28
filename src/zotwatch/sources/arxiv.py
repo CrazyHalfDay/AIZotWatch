@@ -8,7 +8,7 @@ import requests
 
 from zotwatch.config.settings import Settings
 from zotwatch.core.models import CandidateWork
-from zotwatch.utils.datetime import utc_today_start
+from zotwatch.utils.datetime import utc_yesterday_end
 
 from .base import BaseSource, SourceRegistry, clean_title, parse_date
 
@@ -39,10 +39,12 @@ class ArxivSource(BaseSource):
 
         categories = self.config.categories
         categories_set = set(categories)  # For fast lookup
-        # Use today's UTC midnight as reference point for consistent date range
-        today = utc_today_start()
-        from_date = today - timedelta(days=days_back)
-        to_date = today  # Format string will use YYYYMMDD2359, including today
+        # Query complete past days only (not including today)
+        # This ensures consistent results regardless of when the program runs
+        yesterday = utc_yesterday_end()
+        yesterday_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        from_date = yesterday_start - timedelta(days=days_back - 1)
+        to_date = yesterday_start  # End date is yesterday
         max_results = self.config.max_results
 
         # Use submittedDate filter for date range
@@ -62,9 +64,10 @@ class ArxivSource(BaseSource):
         }
 
         logger.info(
-            "Fetching arXiv entries for categories: %s (last %d days, max %d)",
+            "Fetching arXiv entries for categories: %s (%s to %s, max %d)",
             ", ".join(categories),
-            days_back,
+            from_date.strftime("%Y-%m-%d"),
+            to_date.strftime("%Y-%m-%d"),
             max_results,
         )
 

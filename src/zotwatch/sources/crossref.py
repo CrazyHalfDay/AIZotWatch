@@ -10,7 +10,7 @@ import requests
 
 from zotwatch.config.settings import Settings
 from zotwatch.core.models import CandidateWork
-from zotwatch.utils.datetime import utc_today_start
+from zotwatch.utils.datetime import utc_yesterday_end
 
 from .base import BaseSource, SourceRegistry, clean_html, clean_title, is_non_article_title, parse_date
 
@@ -80,11 +80,15 @@ class CrossrefSource(BaseSource):
         max_results: int,
     ) -> list[CandidateWork]:
         """Fetch works from specific journals by ISSN."""
-        since = utc_today_start() - timedelta(days=days_back)
+        # Query complete past days only (not including today)
+        yesterday = utc_yesterday_end()
+        yesterday_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        since = yesterday_start - timedelta(days=days_back - 1)
+        until = yesterday_start  # End date is yesterday
 
         # Build filter string with ISSNs (OR logic)
         issn_filter = ",".join(f"issn:{issn}" for issn in issns)
-        filter_str = f"from-created-date:{since.date().isoformat()},{issn_filter}"
+        filter_str = f"from-created-date:{since.date().isoformat()},until-created-date:{until.date().isoformat()},{issn_filter}"
 
         params = {
             "filter": filter_str,
@@ -96,8 +100,9 @@ class CrossrefSource(BaseSource):
         }
 
         logger.info(
-            "Fetching Crossref works since %s from %d journals (max %d)",
+            "Fetching Crossref works from %s to %s from %d journals (max %d)",
             since.date(),
+            until.date(),
             len(issns),
             max_results,
         )
