@@ -91,10 +91,87 @@ OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题�
 
 重要：只返回 JSON 对象，不要添加任何额外文字或 markdown 格式。"""
 
+DOMAIN_CLASSIFICATION_PROMPT = """请分析以下学术论文列表，将它们分类到不同的研究领域。
+
+论文列表（共{paper_count}篇）：
+{papers_list}
+
+请将论文分类到最合适的研究领域，要求：
+1. 领域名称应简洁（2-6个中文字符）
+2. 每个领域至少包含2篇论文
+3. 最多不超过{max_domains}个领域
+4. 每个领域提供3个代表性论文标题
+
+请以JSON格式返回：
+{{
+  "domains": [
+    {{
+      "domain": "领域名称",
+      "paper_count": 数量,
+      "sample_titles": ["标题1", "标题2", "标题3"]
+    }}
+  ]
+}}
+
+重要：只返回JSON对象，不要添加任何额外文字或markdown格式。"""
+
+PROFILE_ANALYSIS_PROMPT = """请根据以下研究者的**文献阅读和收藏记录**统计数据，分析其研究兴趣画像。
+
+**重要说明**：以下数据来自用户的 Zotero 文献库收藏，反映的是用户的**阅读偏好和研究兴趣**，而非用户本人发表的论文。请基于此进行分析，不要将这些论文误解为用户的研究成果。
+
+## 基础统计
+- 收藏文献总数：{total_papers}篇
+- 收藏时间范围：{year_range}
+
+## 阅读兴趣领域分布（Top 5）
+{top_domains}
+
+## 高频关注作者（文献库中频繁出现的作者，Top 10）
+{top_authors}
+
+## 常关注的期刊/会议（Top 10）
+{top_venues}
+
+## 高频关键词（Top 20）
+{top_keywords}
+
+## 近期阅读趋势（最近3年季度统计）
+{quarterly_trends}
+
+## 近期新增收藏特征
+{recent_analysis}
+
+请生成以下分析内容：
+
+1. **研究兴趣概述**：概括用户关注的核心研究方向（2-3句话）
+2. **深度关注领域**：分析用户在哪些领域有持续深入的阅读积累（2-3句话）
+3. **跨学科阅读倾向**：分析用户的跨学科阅读特点（1-2句话）
+4. **兴趣演变趋势**：根据近期阅读数据，分析研究兴趣的变化趋势（2-3句话）
+5. **延伸阅读建议**：基于现有阅读兴趣，推荐可能感兴趣的研究方向（1-2句话）
+
+请以JSON格式返回：
+{{
+  "research_focus_summary": "研究兴趣概述",
+  "strength_areas": "深度关注领域",
+  "interdisciplinary_notes": "跨学科阅读倾向",
+  "trend_observations": "兴趣演变趋势",
+  "recommendations": "延伸阅读建议"
+}}
+
+注意：
+- 分析应基于实际数据，不要臆测
+- 这是用户的阅读收藏记录，不是发表成果，请使用"关注"、"阅读"、"收藏"等措辞
+- 语言应专业但易懂
+- 建议应具体可行
+
+重要：只返回JSON对象，不要添加任何额外文字或markdown格式。"""
+
 
 __all__ = [
     "BULLET_SUMMARY_PROMPT",
     "DETAILED_ANALYSIS_PROMPT",
     "INTEREST_REFINEMENT_PROMPT",
     "OVERALL_SUMMARY_PROMPT",
+    "DOMAIN_CLASSIFICATION_PROMPT",
+    "PROFILE_ANALYSIS_PROMPT",
 ]

@@ -119,7 +119,6 @@ class ProfileArtifacts:
 
     sqlite_path: str
     faiss_path: str
-    profile_json_path: str
 
 
 # LLM Summary Models
@@ -181,6 +180,96 @@ class OverallSummary(BaseModel):
 RankedWork.model_rebuild()
 
 
+# Researcher Profile Models
+
+
+class DomainDistribution(BaseModel):
+    """Research domain distribution item."""
+
+    domain: str
+    paper_count: int
+    percentage: float = 0.0
+    sample_titles: list[str] = Field(default_factory=list)
+
+
+class KeywordStats(BaseModel):
+    """Keyword frequency statistics."""
+
+    keyword: str
+    count: int
+    source: str = "tag"  # "tag" or "extracted"
+
+
+class AuthorStats(BaseModel):
+    """Author appearance statistics."""
+
+    author: str
+    paper_count: int
+    years_active: list[int] = Field(default_factory=list)
+
+
+class VenueStats(BaseModel):
+    """Venue (journal/conference) statistics."""
+
+    venue: str
+    paper_count: int
+    venue_type: str = "journal"  # "journal" or "conference"
+
+
+class QuarterlyTrend(BaseModel):
+    """Quarterly publication trend."""
+
+    quarter: str  # Format: "2024-Q1"
+    paper_count: int
+    top_domains: list[str] = Field(default_factory=list)
+
+
+class RecentPapersAnalysis(BaseModel):
+    """Analysis of recently added papers."""
+
+    period_days: int
+    paper_count: int
+    new_keywords: list[str] = Field(default_factory=list)
+    emerging_domains: list[str] = Field(default_factory=list)
+
+
+class ResearcherProfileInsights(BaseModel):
+    """LLM-generated natural language insights."""
+
+    research_focus_summary: str  # Main research directions
+    strength_areas: str  # Research strengths
+    interdisciplinary_notes: str  # Cross-domain observations
+    trend_observations: str  # How interests have evolved
+    recommendations: str  # Suggested directions
+
+
+class ResearcherProfile(BaseModel):
+    """Complete researcher profile analysis."""
+
+    # Statistics
+    total_papers: int
+    year_range: tuple[int, int] = (0, 0)
+    frequent_author_count: int = 0  # Authors with ≥N appearances
+
+    # Distributions
+    domains: list[DomainDistribution] = Field(default_factory=list)
+    keywords: list[KeywordStats] = Field(default_factory=list)
+    authors: list[AuthorStats] = Field(default_factory=list)
+    venues: list[VenueStats] = Field(default_factory=list)
+    quarterly_trends: list[QuarterlyTrend] = Field(default_factory=list)
+
+    # Recent activity
+    recent_analysis: RecentPapersAnalysis | None = None
+
+    # LLM insights
+    insights: ResearcherProfileInsights | None = None
+
+    # Metadata
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    model_used: str | None = None
+    library_hash: str | None = None  # Hash of library state for cache invalidation
+
+
 __all__ = [
     "ZoteroItem",
     "CandidateWork",
@@ -193,4 +282,13 @@ __all__ = [
     "PaperSummary",
     "TopicSummary",
     "OverallSummary",
+    # Researcher Profile Models
+    "DomainDistribution",
+    "KeywordStats",
+    "AuthorStats",
+    "VenueStats",
+    "QuarterlyTrend",
+    "RecentPapersAnalysis",
+    "ResearcherProfileInsights",
+    "ResearcherProfile",
 ]

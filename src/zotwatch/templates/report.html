@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ZotWatch 文献推荐 - {{ generated_at.strftime('%Y-%m-%d') }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -44,17 +45,279 @@
     </div>
   </header>
 
+  <!-- Researcher Profile Section (Collapsible) -->
+  {% if researcher_profile %}
+  <section class="py-6 border-b border-border-color">
+    <div class="content-container">
+      <!-- Collapsible Header -->
+      <button id="btn-researcher-profile" onclick="toggleSection('researcher-profile')"
+              class="w-full text-left text-xl font-bold text-text-primary mb-4 flex items-center justify-between group hover:text-accent transition-colors">
+        <span class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+          </svg>
+          研究兴趣画像
+        </span>
+        <span class="flex items-center gap-2 text-sm font-normal text-text-secondary group-hover:text-accent">
+          <span id="hint-researcher-profile">点击展开</span>
+          <svg class="w-4 h-4 transform transition-transform" id="icon-researcher-profile" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </span>
+      </button>
+
+      <!-- Collapsible Content -->
+      <div id="researcher-profile" class="section-expand collapsed">
+      <!-- Basic Stats - Compact Row -->
+      <div class="bg-bg-card rounded-lg border border-border-color p-4 mb-4">
+        <div class="grid grid-cols-4 gap-3 text-center">
+          <div>
+            <div class="text-xl font-bold text-accent">{{ researcher_profile.total_papers }}</div>
+            <div class="text-xs text-text-secondary">收藏论文</div>
+          </div>
+          <div>
+            <div class="text-xl font-bold text-accent">{{ researcher_profile.year_range[0] }}-{{ researcher_profile.year_range[1] }}</div>
+            <div class="text-xs text-text-secondary">收藏年份</div>
+          </div>
+          <div>
+            <div class="text-xl font-bold text-accent">&gt;{{ researcher_profile.domains|length }}</div>
+            <div class="text-xs text-text-secondary">兴趣领域</div>
+          </div>
+          <div>
+            <div class="text-xl font-bold text-accent">{{ researcher_profile.frequent_author_count }}</div>
+            <div class="text-xs text-text-secondary">高频作者</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LLM Insights - Compact -->
+      {% if researcher_profile.insights %}
+      <div class="bg-accent/10 rounded-lg border border-accent/30 p-4 mb-4">
+        <h3 class="text-sm font-semibold text-accent mb-2 flex items-center gap-2">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
+          </svg>
+          AI 研究兴趣分析
+        </h3>
+        <div class="space-y-2 text-xs text-text-primary leading-relaxed">
+          <p><span class="font-medium text-accent">研究兴趣：</span>{{ researcher_profile.insights.research_focus_summary }}</p>
+          <p><span class="font-medium text-accent">深度关注：</span>{{ researcher_profile.insights.strength_areas }}</p>
+          <p><span class="font-medium text-accent">跨学科倾向：</span>{{ researcher_profile.insights.interdisciplinary_notes }}</p>
+          <p><span class="font-medium text-accent">兴趣演变：</span>{{ researcher_profile.insights.trend_observations }}</p>
+          <p><span class="font-medium text-accent">阅读建议：</span>{{ researcher_profile.insights.recommendations }}</p>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Charts Row: Domains + Trends -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <!-- Research Domains Chart -->
+        {% if researcher_profile.domains %}
+        <div class="bg-bg-card rounded-lg border border-border-color p-4">
+          <h4 class="text-sm font-medium text-text-primary mb-3">研究领域分布</h4>
+          <div style="height: 180px;">
+            <canvas id="domainsChart"></canvas>
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Quarterly Trends Chart -->
+        {% if researcher_profile.quarterly_trends %}
+        <div class="bg-bg-card rounded-lg border border-border-color p-4">
+          <h4 class="text-sm font-medium text-text-primary mb-3">阅读趋势（季度）</h4>
+          <div style="height: 180px;">
+            <canvas id="trendsChart"></canvas>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Authors and Venues Row -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <!-- Top Authors -->
+        {% if researcher_profile.authors %}
+        <div class="bg-bg-card rounded-lg border border-border-color p-4">
+          <h4 class="text-sm font-medium text-text-primary mb-2">高频关注作者</h4>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            {% for author in researcher_profile.authors[:12] %}
+            <div class="flex justify-between truncate">
+              <span class="text-text-primary truncate" title="{{ author.author }}">{{ author.author }}</span>
+              <span class="text-text-secondary ml-1 flex-shrink-0">{{ author.paper_count }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Top Venues -->
+        {% if researcher_profile.venues %}
+        <div class="bg-bg-card rounded-lg border border-border-color p-4">
+          <h4 class="text-sm font-medium text-text-primary mb-2">常关注期刊/会议</h4>
+          <div class="space-y-1 text-xs">
+            {% for venue in researcher_profile.venues[:8] %}
+            <div class="flex items-center justify-between">
+              <span class="text-text-primary truncate flex-1" title="{{ venue.venue }}">{{ venue.venue }}</span>
+              <span class="text-xs px-1 py-0.5 rounded {{ 'bg-amber-100 text-amber-700' if venue.venue_type == 'conference' else 'bg-blue-100 text-blue-700' }} ml-1 flex-shrink-0">
+                {{ '会议' if venue.venue_type == 'conference' else '期刊' }}
+              </span>
+              <span class="text-text-secondary ml-1 flex-shrink-0">{{ venue.paper_count }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Keywords -->
+      {% if researcher_profile.keywords %}
+      <div class="bg-bg-card rounded-lg border border-border-color p-4 mb-3">
+        <h4 class="text-sm font-medium text-text-primary mb-2">高频关键词</h4>
+        <div class="flex flex-wrap gap-1.5">
+          {% for kw in researcher_profile.keywords[:20] %}
+          <span class="px-2 py-0.5 bg-bg-hover rounded text-xs text-text-primary">
+            {{ kw.keyword }} <span class="text-text-secondary">({{ kw.count }})</span>
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Generation info -->
+      <div class="text-xs text-text-secondary text-right">
+        画像生成于 {{ researcher_profile.generated_at.strftime('%Y-%m-%d %H:%M') }} UTC
+        {% if researcher_profile.model_used %}· {{ researcher_profile.model_used }}{% endif %}
+      </div>
+      </div><!-- End of collapsible content -->
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- Chart.js Initialization for Researcher Profile -->
+  {% if researcher_profile %}
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Chart.js global defaults for academic style
+      Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+      Chart.defaults.font.size = 11;
+      Chart.defaults.color = '#64748b';
+      Chart.defaults.animation = false;
+
+      {% if researcher_profile.domains %}
+      // Domains Horizontal Bar Chart
+      const domainsCtx = document.getElementById('domainsChart');
+      if (domainsCtx) {
+        new Chart(domainsCtx, {
+          type: 'bar',
+          data: {
+            labels: [{% for d in researcher_profile.domains[:8] %}'{{ d.domain }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+            datasets: [{
+              data: [{% for d in researcher_profile.domains[:8] %}{{ d.paper_count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+              backgroundColor: 'rgba(37, 99, 235, 0.7)',
+              borderColor: 'rgba(37, 99, 235, 1)',
+              borderWidth: 1,
+              borderRadius: 2,
+              barThickness: 16
+            }]
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { enabled: false }
+            },
+            scales: {
+              x: {
+                beginAtZero: true,
+                grid: { color: 'rgba(226, 232, 240, 0.5)' },
+                ticks: { precision: 0 }
+              },
+              y: {
+                grid: { display: false },
+                ticks: { font: { size: 10 } }
+              }
+            }
+          }
+        });
+      }
+      {% endif %}
+
+      {% if researcher_profile.quarterly_trends %}
+      // Quarterly Trends Bar Chart with 3 cycling colors (one per month in quarter)
+      const trendsCtx = document.getElementById('trendsChart');
+      if (trendsCtx) {
+        const trends = [{% for t in researcher_profile.quarterly_trends[-12:] %}{ q: '{{ t.quarter }}', c: {{ t.paper_count }} }{% if not loop.last %}, {% endif %}{% endfor %}];
+        // Color palette: 3 colors cycling for months within quarters
+        const monthColors = [
+          { bg: 'rgba(59, 130, 246, 0.7)', border: 'rgba(59, 130, 246, 1)' },   // Blue
+          { bg: 'rgba(16, 185, 129, 0.7)', border: 'rgba(16, 185, 129, 1)' },   // Green
+          { bg: 'rgba(245, 158, 11, 0.7)', border: 'rgba(245, 158, 11, 1)' }    // Amber
+        ];
+        const bgColors = trends.map((t, i) => monthColors[i % 3].bg);
+        const borderColors = trends.map((t, i) => monthColors[i % 3].border);
+        new Chart(trendsCtx, {
+          type: 'bar',
+          data: {
+            labels: trends.map(t => t.q.replace('-', '\n')),
+            datasets: [{
+              data: trends.map(t => t.c),
+              backgroundColor: bgColors,
+              borderColor: borderColors,
+              borderWidth: 1,
+              borderRadius: 2,
+              barThickness: 20
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { enabled: false }
+            },
+            scales: {
+              x: {
+                grid: { display: false },
+                ticks: { font: { size: 9 }, maxRotation: 0 }
+              },
+              y: {
+                beginAtZero: true,
+                grid: { color: 'rgba(226, 232, 240, 0.5)' },
+                ticks: { precision: 0 }
+              }
+            }
+          }
+        });
+      }
+      {% endif %}
+    });
+  </script>
+  {% endif %}
+
   <!-- Overall Summaries Section -->
   {% if overall_summaries %}
   <section class="py-8 border-b border-border-color">
     <div class="content-container">
-      <h2 class="text-xl font-bold text-text-primary mb-6 flex items-center gap-2">
-        <svg class="w-5 h-5 text-accent" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
-        </svg>
-        本期研究趋势概览
-      </h2>
+      <!-- Collapsible Header -->
+      <button id="btn-overall-summaries" onclick="toggleSection('overall-summaries')"
+              class="w-full text-left text-xl font-bold text-text-primary mb-4 flex items-center justify-between group hover:text-accent transition-colors">
+        <span class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
+          </svg>
+          本期研究趋势概览
+        </span>
+        <span class="flex items-center gap-2 text-sm font-normal text-text-secondary group-hover:text-accent">
+          <span id="hint-overall-summaries">点击收起</span>
+          <svg class="w-4 h-4 transform transition-transform rotate-180" id="icon-overall-summaries" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </span>
+      </button>
 
+      <!-- Collapsible Content -->
+      <div id="overall-summaries" class="section-expand expanded">
       <div class="space-y-6">
         {% if overall_summaries.featured %}
         <div class="bg-bg-card rounded-lg border border-border-color p-5">
@@ -90,6 +353,7 @@
         </div>
         {% endif %}
       </div>
+      </div><!-- End of collapsible content -->
     </div>
   </section>
   {% endif %}
@@ -98,18 +362,26 @@
   {% if featured_works %}
   <section class="py-8 border-b border-border-color">
     <div class="content-container">
-      <div class="mb-6 flex items-center justify-between">
-        <div>
-          <h2 class="text-lg font-semibold text-text-primary mb-1 flex items-center gap-2">
-            <svg class="w-5 h-5 text-accent" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
-            </svg>
-            精选推荐
-          </h2>
-          <p class="text-sm text-text-secondary">基于研究兴趣匹配，共 {{ featured_works|length }} 篇</p>
-        </div>
-      </div>
+      <!-- Collapsible Header -->
+      <button id="btn-featured-works" onclick="toggleSection('featured-works')"
+              class="w-full text-left text-xl font-bold text-text-primary mb-4 flex items-center justify-between group hover:text-accent transition-colors">
+        <span class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+          </svg>
+          精选推荐
+        </span>
+        <span class="flex items-center gap-2 text-sm font-normal text-text-secondary group-hover:text-accent">
+          <span class="text-xs">基于研究兴趣匹配，共 {{ featured_works|length }} 篇</span>
+          <span id="hint-featured-works">点击收起</span>
+          <svg class="w-4 h-4 transform transition-transform rotate-180" id="icon-featured-works" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </span>
+      </button>
 
+      <!-- Collapsible Content -->
+      <div id="featured-works" class="section-expand expanded">
       <div class="space-y-5">
         {% for work in featured_works %}
         <article class="bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors">
@@ -235,6 +507,7 @@
         </article>
         {% endfor %}
       </div>
+      </div><!-- End of collapsible content -->
     </div>
   </section>
   {% endif %}
@@ -242,11 +515,26 @@
   <!-- Similarity Recommendations Section -->
   <main class="py-8">
     <div class="content-container">
-      <div class="mb-6">
-        <h2 class="text-lg font-semibold text-text-primary mb-1">相似度推荐</h2>
-        <p class="text-sm text-text-secondary">按相关性评分排序，点击标题查看原文</p>
-      </div>
+      <!-- Collapsible Header -->
+      <button id="btn-similarity-works" onclick="toggleSection('similarity-works')"
+              class="w-full text-left text-xl font-bold text-text-primary mb-4 flex items-center justify-between group hover:text-accent transition-colors">
+        <span class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+          相似度推荐
+        </span>
+        <span class="flex items-center gap-2 text-sm font-normal text-text-secondary group-hover:text-accent">
+          <span class="text-xs">按相关性评分排序，共 {{ works|length }} 篇</span>
+          <span id="hint-similarity-works">点击收起</span>
+          <svg class="w-4 h-4 transform transition-transform rotate-180" id="icon-similarity-works" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </span>
+      </button>
 
+      <!-- Collapsible Content -->
+      <div id="similarity-works" class="section-expand expanded">
       <div class="space-y-5">
         {% for work in works %}
         <article class="bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors">
@@ -377,6 +665,7 @@
         </article>
         {% endfor %}
       </div>
+      </div><!-- End of collapsible content -->
     </div>
   </main>
 
@@ -392,19 +681,26 @@
       const el = document.getElementById(id);
       const btn = document.getElementById('btn-' + id);
       const icon = document.getElementById('icon-' + id);
+      const hint = document.getElementById('hint-' + id);
       if (el.classList.contains('collapsed')) {
         el.classList.remove('collapsed');
         el.classList.add('expanded');
         if (btn && btn.textContent.includes('详细分析')) {
           btn.innerHTML = '<svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>收起详细分析';
         }
+        if (hint) hint.textContent = '点击收起';
         if (icon) icon.style.transform = 'rotate(180deg)';
+        // Trigger chart resize for hidden charts
+        if (id === 'researcher-profile') {
+          setTimeout(() => { window.dispatchEvent(new Event('resize')); }, 100);
+        }
       } else {
         el.classList.remove('expanded');
         el.classList.add('collapsed');
         if (btn && btn.textContent.includes('详细分析')) {
           btn.innerHTML = '<svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>查看详细分析';
         }
+        if (hint) hint.textContent = '点击展开';
         if (icon) icon.style.transform = 'rotate(0deg)';
       }
     }

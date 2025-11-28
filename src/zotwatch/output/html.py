@@ -7,7 +7,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from zotwatch.core.models import FeaturedWork, OverallSummary, RankedWork
+from zotwatch.core.models import FeaturedWork, OverallSummary, RankedWork, ResearcherProfile
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ def render_html(
     template_name: str = "report.html",
     featured_works: list[FeaturedWork] | None = None,
     overall_summaries: dict[str, OverallSummary] | None = None,
+    researcher_profile: ResearcherProfile | None = None,
 ) -> Path:
     """Render HTML report from ranked works.
 
@@ -40,6 +41,7 @@ def render_html(
         template_name: Name of template file.
         featured_works: Optional list of featured works based on user interests.
         overall_summaries: Optional dict with "featured" and/or "similarity" OverallSummary.
+        researcher_profile: Optional researcher profile analysis.
 
     Returns:
         Path to written HTML file.
@@ -72,6 +74,7 @@ def render_html(
         generated_at=generated_at,
         featured_works=featured_works or [],
         overall_summaries=overall_summaries or {},
+        researcher_profile=researcher_profile,
     )
 
     path = Path(output_path)

@@ -1,6 +1,5 @@
 """Scoring and ranking pipeline."""
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +22,6 @@ class RankerArtifacts:
     """Paths to ranker artifact files."""
 
     index_path: Path
-    profile_path: Path
 
 
 class WorkRanker:
@@ -70,17 +68,8 @@ class WorkRanker:
 
         self.artifacts = RankerArtifacts(
             index_path=self.base_dir / "data" / "faiss.index",
-            profile_path=self.base_dir / "data" / "profile.json",
         )
         self.index = FaissIndex.load(self.artifacts.index_path)
-        self.profile = self._load_profile()
-
-    def _load_profile(self) -> dict:
-        """Load profile JSON."""
-        path = self.artifacts.profile_path
-        if not path.exists():
-            raise FileNotFoundError("Profile JSON not found; run profile build first.")
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def rank(self, candidates: list[CandidateWork]) -> list[RankedWork]:
         """Rank candidates by embedding similarity."""

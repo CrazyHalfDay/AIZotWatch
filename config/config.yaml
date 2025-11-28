@@ -99,3 +99,16 @@ output:
   html:
     template: "report.html"
     include_summaries: true
+
+# Profile Analysis Configuration
+profile:
+  # Keywords/tags to exclude from statistics (e.g., personal markers)
+  exclude_keywords:
+    - "⏳"
+    - "✔️"
+    - "💎"
+    - "/done"
+    - "/reading"
+    - "/unread"
+  # Minimum author appearance threshold for "frequent author" count
+  author_min_count: 10

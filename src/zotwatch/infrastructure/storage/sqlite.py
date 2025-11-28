@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from zotwatch.core.models import PaperSummary, ZoteroItem
+from zotwatch.core.models import PaperSummary, ResearcherProfile, ZoteroItem
 
 
 SCHEMA = """
@@ -40,9 +40,17 @@ CREATE TABLE IF NOT EXISTS summaries (
     expires_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS profile_analysis (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    library_hash TEXT NOT NULL,
+    profile_json TEXT NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_version ON items(version);
 CREATE INDEX IF NOT EXISTS idx_items_content_hash ON items(content_hash);
 CREATE INDEX IF NOT EXISTS idx_summaries_expires ON summaries(expires_at);
+CREATE INDEX IF NOT EXISTS idx_profile_hash ON profile_analysis(library_hash);
 """
 
 
@@ -225,6 +233,49 @@ class ProfileStorage:
             (paper_id,),
         )
         return cur.fetchone() is not None
+
+    # Profile analysis helpers
+
+    def get_profile_analysis(self, library_hash: str) -> ResearcherProfile | None:
+        """Get cached profile analysis if hash matches.
+
+        Args:
+            library_hash: Hash of the current library state.
+
+        Returns:
+            Cached ResearcherProfile if hash matches, None otherwise.
+        """
+        cur = self.connect().execute(
+            "SELECT profile_json FROM profile_analysis WHERE library_hash = ?",
+            (library_hash,),
+        )
+        row = cur.fetchone()
+        if row:
+            return ResearcherProfile.model_validate_json(row["profile_json"])
+        return None
+
+    def save_profile_analysis(self, profile: ResearcherProfile) -> None:
+        """Save profile analysis to cache.
+
+        Args:
+            profile: ResearcherProfile to cache.
+        """
+        if not profile.library_hash:
+            raise ValueError("Profile must have library_hash set for caching")
+
+        self.connect().execute(
+            """
+            INSERT OR REPLACE INTO profile_analysis (id, library_hash, profile_json, generated_at)
+            VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (profile.library_hash, profile.model_dump_json()),
+        )
+        self.connect().commit()
+
+    def clear_profile_cache(self) -> None:
+        """Clear profile analysis cache."""
+        self.connect().execute("DELETE FROM profile_analysis")
+        self.connect().commit()
 
 
 def _row_to_item(row: sqlite3.Row) -> ZoteroItem:

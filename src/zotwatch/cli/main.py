@@ -10,15 +10,15 @@ from dotenv import load_dotenv
 from zotwatch import __version__
 from zotwatch.config import Settings, load_settings
 from zotwatch.config.settings import LLMConfig
-from zotwatch.core.models import FeaturedWork, RankedWork
+from zotwatch.core.models import FeaturedWork, RankedWork, ResearcherProfile
 from zotwatch.infrastructure.embedding import EmbeddingCache, VoyageEmbedding, VoyageReranker
 from zotwatch.infrastructure.enrichment.cache import MetadataCache
 from zotwatch.infrastructure.storage import ProfileStorage
-from zotwatch.llm import InterestRefiner, KimiClient, OpenRouterClient, OverallSummarizer, PaperSummarizer
+from zotwatch.llm import InterestRefiner, KimiClient, LibraryAnalyzer, OpenRouterClient, OverallSummarizer, PaperSummarizer
 from zotwatch.llm.base import BaseLLMProvider
 from zotwatch.output import render_html, write_rss
 from zotwatch.output.push import ZoteroPusher
-from zotwatch.pipeline import DedupeEngine, FeaturedSelector, ProfileBuilder, WorkRanker
+from zotwatch.pipeline import DedupeEngine, FeaturedSelector, ProfileBuilder, ProfileStatsExtractor, WorkRanker
 from zotwatch.pipeline.enrich import AbstractEnricher
 from zotwatch.pipeline.fetch import CandidateFetcher
 from zotwatch.sources.zotero import ZoteroIngestor
@@ -96,8 +96,8 @@ def _create_llm_client(config: LLMConfig) -> BaseLLMProvider:
 def _profile_exists(base_dir: Path) -> bool:
     """Check if profile artifacts exist."""
     faiss_path = base_dir / "data" / "faiss.index"
-    profile_path = base_dir / "data" / "profile.json"
-    return faiss_path.exists() and profile_path.exists()
+    sqlite_path = base_dir / "data" / "profile.sqlite"
+    return faiss_path.exists() and sqlite_path.exists()
 
 
 def _build_profile(
@@ -144,7 +144,6 @@ def _build_profile(
     click.echo("Profile built successfully:")
     click.echo(f"  SQLite: {artifacts.sqlite_path}")
     click.echo(f"  FAISS: {artifacts.faiss_path}")
-    click.echo(f"  JSON: {artifacts.profile_json_path}")
 
 
 @cli.command()
@@ -198,7 +197,6 @@ def profile(ctx: click.Context, full: bool) -> None:
     click.echo("Profile built successfully:")
     click.echo(f"  SQLite: {artifacts.sqlite_path}")
     click.echo(f"  FAISS: {artifacts.faiss_path}")
-    click.echo(f"  JSON: {artifacts.profile_json_path}")
 
 
 @cli.command()
@@ -240,6 +238,51 @@ def watch(
     click.echo("Syncing with Zotero...")
     ingestor = ZoteroIngestor(storage, settings)
     ingestor.run(full=False)
+
+    # Generate researcher profile analysis
+    researcher_profile: ResearcherProfile | None = None
+    if settings.llm.enabled:
+        click.echo("Analyzing researcher profile...")
+        all_items = storage.get_all_items()
+
+        if all_items:
+            # Check cache first
+            stats_extractor = ProfileStatsExtractor()
+            current_hash = stats_extractor.compute_library_hash(all_items)
+            cached_profile = storage.get_profile_analysis(current_hash)
+
+            if cached_profile:
+                click.echo("  Using cached profile analysis")
+                researcher_profile = cached_profile
+            else:
+                # Extract statistics
+                click.echo("  Extracting library statistics...")
+                researcher_profile = stats_extractor.extract_all(
+                    all_items,
+                    exclude_keywords=settings.profile.exclude_keywords,
+                    author_min_count=settings.profile.author_min_count,
+                )
+
+                # Use LLM for domain classification and insights
+                try:
+                    llm_client = _create_llm_client(settings.llm)
+                    analyzer = LibraryAnalyzer(llm_client, model=settings.llm.model)
+
+                    click.echo("  Classifying research domains...")
+                    researcher_profile.domains = analyzer.classify_domains(all_items)
+
+                    click.echo("  Generating AI insights...")
+                    researcher_profile.insights = analyzer.generate_insights(researcher_profile)
+                    researcher_profile.model_used = settings.llm.model
+
+                    # Cache the result
+                    storage.save_profile_analysis(researcher_profile)
+                    click.echo("  Profile analysis complete and cached")
+                except Exception as e:
+                    logger.warning("Failed to generate profile insights: %s", e)
+                    click.echo(f"  AI insights skipped (error: {e})")
+        else:
+            click.echo("  No items in library, skipping profile analysis")
 
     # Fetch candidates
     click.echo("Fetching candidates from sources...")
@@ -427,6 +470,7 @@ def watch(
             template_dir=template_dir if template_dir.exists() else None,
             featured_works=featured_works if featured_works else None,
             overall_summaries=overall_summaries if overall_summaries else None,
+            researcher_profile=researcher_profile,
         )
         click.echo(f"HTML report: {report_path}")
 

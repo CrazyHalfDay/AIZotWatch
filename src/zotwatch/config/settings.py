@@ -168,6 +168,14 @@ class OutputConfig(BaseModel):
     html: HTMLConfig = Field(default_factory=HTMLConfig)
 
 
+# Profile Configuration
+class ProfileConfig(BaseModel):
+    """Profile analysis configuration."""
+
+    exclude_keywords: list[str] = Field(default_factory=list)  # Keywords/tags to exclude
+    author_min_count: int = 10  # Minimum appearances for "frequent author"
+
+
 # Main Settings
 class Settings(BaseModel):
     """Main configuration settings."""
@@ -178,6 +186,7 @@ class Settings(BaseModel):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    profile: ProfileConfig = Field(default_factory=ProfileConfig)
 
 
 def load_settings(base_dir: Path | str) -> Settings:
@@ -193,6 +202,7 @@ def load_settings(base_dir: Path | str) -> Settings:
         embedding=EmbeddingConfig(**config.get("embedding", {})),
         llm=LLMConfig(**config.get("llm", {})),
         output=OutputConfig(**config.get("output", {})),
+        profile=ProfileConfig(**config.get("profile", {})),
     )
 
 
@@ -209,4 +219,5 @@ __all__ = [
     "EmbeddingConfig",
     "LLMConfig",
     "OutputConfig",
+    "ProfileConfig",
 ]

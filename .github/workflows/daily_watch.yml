@@ -50,7 +50,6 @@ jobs:
           path: |
             data/profile.sqlite
             data/faiss.index
-            data/profile.json
             data/embeddings.sqlite
             data/metadata.sqlite
           key: zotwatch-${{ hashFiles('config/config.yaml') }}
