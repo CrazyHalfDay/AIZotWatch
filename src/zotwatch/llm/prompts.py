@@ -54,8 +54,9 @@ Please output a JSON object with the following fields:
 Guidelines:
 - The refined_query should be a comprehensive English description suitable for semantic search
 - include_keywords should contain 5-10 important technical terms
-- exclude_keywords should contain terms the user explicitly wants to avoid
-- If no exclusions are mentioned, return an empty array for exclude_keywords
+- exclude_keywords rules (VERY IMPORTANT - be conservative):
+  * ONLY include keywords if the user EXPLICITLY mentions wanting to exclude a specific domain/topic
+  * Return an empty array [] if no exclusions are explicitly mentioned
 
 Important: Only return the JSON object, no additional text or markdown formatting."""
 
@@ -70,7 +71,7 @@ OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题�
 请完成以下任务：
 1. 根据论文内容，将论文分成若干个研究主题（数量由你根据内容自动判断）
 2. 撰写一句概述性的开头，说明各主题的论文数量分布
-3. 对每个主题，用 1-2 句话描述该主题下论文的关键研究要点
+3. 对每个主题，用 1-2 句话描述该主题下论文的关键研究要点。在提到具体论文时，必须使用双书名号（《》）括起论文标题或其方法简称来指代该论文，不要使用不明确的或泛指的表述
 
 请以 JSON 格式返回：
 {{
@@ -79,7 +80,7 @@ OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题�
     {{
       "topic_name": "主题名称（2-6字）",
       "paper_count": 数量,
-      "description": "1-2句话描述该主题的研究重点和关键方法"
+      "description": "1-2句话描述该主题的研究重点和关键方法，提到论文时使用《论文标题》或《方法简称》"
     }}
   ]
 }}
@@ -88,6 +89,7 @@ OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题�
 - 主题分组应覆盖所有论文
 - overview 应简洁说明各主题论文数量分布
 - description 应具体描述研究内容，而非泛泛而谈
+- 提到论文时必须使用《论文标题》或《方法简称》格式，例如：《BERT》、《Attention Is All You Need》
 
 重要：只返回 JSON 对象，不要添加任何额外文字或 markdown 格式。"""
 

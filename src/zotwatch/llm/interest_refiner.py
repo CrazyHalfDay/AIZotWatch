@@ -37,7 +37,12 @@ class InterestRefiner:
 
         logger.debug("LLM response for interest refinement: %s", response.content)
 
-        return self._parse_response(response.content)
+        result = self._parse_response(response.content)
+
+        if result.exclude_keywords:
+            logger.info("Exclude keywords generated: %s", result.exclude_keywords)
+
+        return result
 
     def _parse_response(self, content: str) -> RefinedInterests:
         """Parse LLM JSON response into RefinedInterests."""

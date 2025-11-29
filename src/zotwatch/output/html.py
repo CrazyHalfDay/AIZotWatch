@@ -23,6 +23,24 @@ def _get_builtin_template_dir() -> Path:
     return Path(str(resources.files("zotwatch.templates")))
 
 
+def _convert_utc_to_tz(dt: datetime | None, target_tz: ZoneInfo) -> datetime | None:
+    """Convert a datetime from UTC to target timezone.
+
+    Args:
+        dt: Datetime to convert (assumes naive datetime is UTC).
+        target_tz: Target timezone.
+
+    Returns:
+        Converted datetime, or None if input is None.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # Assume naive datetime is UTC
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(target_tz)
+
+
 def render_html(
     works: list[RankedWork],
     output_path: Path | str,
@@ -73,6 +91,11 @@ def render_html(
         )
         raise FileNotFoundError(f"Template {template_name} not found in {template_dir}")
 
+    # Convert profile generation time to user timezone
+    profile_generated_at = None
+    if researcher_profile:
+        profile_generated_at = _convert_utc_to_tz(researcher_profile.generated_at, tz)
+
     rendered = template.render(
         works=works,
         generated_at=generated_at,
@@ -80,6 +103,7 @@ def render_html(
         interest_works=interest_works or [],
         overall_summaries=overall_summaries or {},
         researcher_profile=researcher_profile,
+        profile_generated_at=profile_generated_at,
     )
 
     path = Path(output_path)

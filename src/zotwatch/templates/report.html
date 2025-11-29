@@ -185,7 +185,7 @@
 
       <!-- Generation info -->
       <div class="text-xs text-text-secondary text-right">
-        画像生成于 {{ researcher_profile.generated_at.strftime('%Y-%m-%d %H:%M') }} UTC
+        画像生成于 {{ profile_generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
         {% if researcher_profile.model_used %}· {{ researcher_profile.model_used }}{% endif %}
       </div>
       </div><!-- End of collapsible content -->
