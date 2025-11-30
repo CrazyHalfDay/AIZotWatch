@@ -21,7 +21,7 @@ sources:
   crossref:
     enabled: true
     mailto: "${CROSSREF_MAILTO}"
-    days_back: 1
+    days_back: 2
     max_results: 3000
   # Abstract scraper for enriching missing abstracts (Camoufox + rule-based + LLM fallback)
   scraper:
