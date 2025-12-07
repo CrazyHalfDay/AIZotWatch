@@ -1,5 +1,6 @@
 """Profile statistics extraction from Zotero library."""
 
+import calendar
 import hashlib
 import json
 import logging
@@ -379,29 +380,39 @@ class ProfileStatsExtractor:
         )
 
     def _calculate_collection_duration(self, items: list[ZoteroItem]) -> str | None:
-        """Calculate collection duration as 'X年Y月' format.
+        """Calculate collection duration with year/month/day granularity.
 
-        Args:
-            items: Zotero items with date_added field.
-
-        Returns:
-            Duration string in 'X年Y月' format, or None if no date_added data.
+        Formats:
+        - < 1 month: "X天"
+        - < 1 year: "X月Y天"
+        - ≥ 1 year: "X年Y月"
         """
-        dates = [i.date_added for i in items if i.date_added]
+        dates = [ensure_aware(i.date_added) for i in items if i.date_added]
+        dates = [d for d in dates if d]
         if not dates:
             return None
 
-        earliest = min(dates)
-        latest = max(dates)
+        start_date = min(dates).date()
+        end_date = max(dates).date()
 
-        # Calculate difference in months
-        total_months = (latest.year - earliest.year) * 12 + (latest.month - earliest.month)
-        years = total_months // 12
-        months = total_months % 12
+        years = end_date.year - start_date.year
+        months = end_date.month - start_date.month
+        days = end_date.day - start_date.day
 
+        # Borrow days from previous month if needed
+        if days < 0:
+            months -= 1
+            prev_month = end_date.month - 1 or 12
+            prev_year = end_date.year if end_date.month > 1 else end_date.year - 1
+            days += calendar.monthrange(prev_year, prev_month)[1]
+
+        # Borrow months from previous year if needed
+        if months < 0:
+            years -= 1
+            months += 12
+
+        if years == 0 and months == 0:
+            return f"{days}天"
         if years == 0:
-            return f"{months}月"
-        elif months == 0:
-            return f"{years}年"
-        else:
-            return f"{years}年{months}月"
+            return f"{months}月{days}天"
+        return f"{years}年{months}月"

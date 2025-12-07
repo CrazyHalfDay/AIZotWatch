@@ -322,7 +322,7 @@ class ResearcherProfile(BaseModel):
     # Statistics
     total_papers: int
     year_range: tuple[int, int] = (0, 0)
-    collection_duration: str | None = None  # "X年Y月" format
+    collection_duration: str | None = None  # "X年Y月"/"X月Y天"/"X天"
     frequent_author_count: int = 0  # Authors with ≥N appearances
 
     # Distributions
