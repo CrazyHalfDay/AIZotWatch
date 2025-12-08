@@ -519,31 +519,6 @@
 
           node.call(drag);
 
-          // Track selected node state (persists across drag)
-          let selectedNodeId = null;
-
-          // Click handler for toggle selection
-          node.on('click', function(event, d) {
-            event.stopPropagation();
-            if (selectedNodeId === d.id) {
-              // Click same node again: deselect
-              selectedNodeId = null;
-              resetHighlight();
-            } else {
-              // Select new node
-              selectedNodeId = d.id;
-              highlightNode(d);
-            }
-          });
-
-          // Click on SVG background to deselect
-          svg.on('click', function(event) {
-            if (event.target === this || event.target.tagName === 'svg') {
-              selectedNodeId = null;
-              resetHighlight();
-            }
-          });
-
           simulation.on('tick', () => {
             node.attr('transform', d => {
               const r = sizeScale(d.size);
@@ -569,7 +544,7 @@
             if (!event.active) simulation.alphaTarget(0.05).restart();
             d.fx = d.x;
             d.fy = d.y;
-            highlightNode(this, d);
+            highlightNode(d);
             d3.select(this).style('cursor', 'grabbing');
           }
 
@@ -586,6 +561,7 @@
             d.fx = null;
             d.fy = null;
             d3.select(this).style('cursor', 'grab');
+            resetHighlight();
           }
 
           function highlightNode(selectedNode) {
@@ -596,54 +572,66 @@
               if (l.target.id === selectedNode.id) connectedIds.add(l.source.id);
             });
 
-            // Step 1: Move elements to appropriate layers based on highlight state
-            // Layer order (bottom to top): dimmed links -> dimmed nodes -> highlighted links -> highlighted nodes
-
-            // Move links to appropriate layers
-            link.each(function(l) {
-              const isHighlighted = l.source.id === selectedNode.id || l.target.id === selectedNode.id;
-              const targetLayer = isHighlighted ? layerHighlightedLinks : layerDimmedLinks;
-              targetLayer.node().appendChild(this);
-            });
-
-            // Move nodes to appropriate layers
-            node.each(function(d) {
-              const isSelected = d.id === selectedNode.id;
-              const isConnected = connectedIds.has(d.id);
-              const targetLayer = (isSelected || isConnected) ? layerHighlightedNodes : layerDimmedNodes;
-              targetLayer.node().appendChild(this);
-            });
-
-            // Step 2: Style all elements (dimmed vs highlighted)
+            // Step 1: Style dimmed elements
             link
-              .attr('stroke-opacity', l =>
-                l.source.id === selectedNode.id || l.target.id === selectedNode.id ? 1 : 0.08)
-              .attr('stroke', l =>
-                l.source.id === selectedNode.id || l.target.id === selectedNode.id ? '#3b82f6' : '#e2e8f0')
-              .attr('stroke-width', l =>
-                l.source.id === selectedNode.id || l.target.id === selectedNode.id ?
-                  Math.max(2.5, l.value * 3) : Math.max(1, l.value * 1.5));
+              .attr('stroke-opacity', 0.1)
+              .attr('stroke', '#cbd5e1')
+              .attr('stroke-width', d => Math.max(1, d.value * 1.5));
 
             node.each(function(d) {
-              const isSelected = d.id === selectedNode.id;
-              const isConnected = connectedIds.has(d.id);
-
               d3.select(this).select('circle')
-                .attr('fill-opacity', isSelected || isConnected ? 1 : 0.2)
-                .attr('stroke', isSelected ? '#2563eb' : isConnected ? '#f59e0b' : '#fff')
-                .attr('stroke-width', isSelected || isConnected ? (isMobile ? 2.5 : 3) : (isMobile ? 1.5 : 2))
-                .style('filter', isSelected || isConnected ? 'drop-shadow(0 2px 4px rgba(59, 130, 246, 0.3))' : 'none');
+                .attr('fill-opacity', 0.25)
+                .attr('stroke', '#fff')
+                .attr('stroke-width', isMobile ? 1.5 : 2);
 
               d3.select(this).selectAll('text')
-                .attr('opacity', isSelected || isConnected ? 1 : 0.25);
+                .attr('opacity', 0.3);
             });
 
-            // Step 3: Within highlighted nodes layer, ensure selected node is on top
-            node.each(function(d) {
-              if (d.id === selectedNode.id) {
-                layerHighlightedNodes.node().appendChild(this);
-              }
+            // Step 2: Move dimmed elements to bottom layers
+            link.each(function() {
+              layerDimmedLinks.node().appendChild(this);
             });
+            node.each(function() {
+              layerDimmedNodes.node().appendChild(this);
+            });
+
+            // Step 3: Style and move highlighted links to top
+            link.filter(l => l.source.id === selectedNode.id || l.target.id === selectedNode.id)
+              .attr('stroke-opacity', 1)
+              .attr('stroke', '#2563eb')
+              .attr('stroke-width', d => Math.max(2.5, d.value * 3))
+              .each(function() {
+                layerHighlightedLinks.node().appendChild(this);
+              });
+
+            // Step 4: Style and move connected nodes to top
+            node.filter(d => connectedIds.has(d.id))
+              .each(function(d) {
+                d3.select(this).select('circle')
+                  .attr('fill-opacity', 1)
+                  .attr('stroke', '#60a5fa')
+                  .attr('stroke-width', isMobile ? 2.5 : 3);
+
+                d3.select(this).selectAll('text')
+                  .attr('opacity', 1);
+
+                layerHighlightedNodes.node().appendChild(this);
+              });
+
+            // Step 5: Style and move selected node to very top
+            node.filter(d => d.id === selectedNode.id)
+              .each(function(d) {
+                d3.select(this).select('circle')
+                  .attr('fill-opacity', 1)
+                  .attr('stroke', '#2563eb')
+                  .attr('stroke-width', isMobile ? 3 : 4);
+
+                d3.select(this).selectAll('text')
+                  .attr('opacity', 1);
+
+                layerHighlightedNodes.node().appendChild(this);
+              });
           }
 
           function resetHighlight() {
