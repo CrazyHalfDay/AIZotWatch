@@ -69,7 +69,7 @@ scoring:
 
   # Journal impact factor scoring configuration
   journal:
-    arxiv_score: 0.2          # Score for arXiv preprints
+    arxiv_score: 0.6          # Score for arXiv preprints
     chinese_core_score: 0.7   # Score for Chinese core journals
     unknown_score: 0.3        # Score for unknown journals
     log_base: 25.0            # Log base for IF normalization
