@@ -58,7 +58,7 @@ scoring:
         - 大洋—大陆俯冲带中金属元素与挥发分（以硫、卤素和碳为主）的起源、迁移与循环；
         - 亲铜元素相关的成矿过程、资源潜力与环境效应； 
         明确排除生物医学、生命科学及临床研究。
-    max_documents: 50  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
+    max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
 
   # Rerank settings (only used when interests.enabled=true)
@@ -69,16 +69,16 @@ scoring:
 
   # Journal impact factor scoring configuration
   journal:
-    arxiv_score: 0.0          # Score for arXiv preprints
-    chinese_core_score: 0.4   # Score for Chinese core journals
+    arxiv_score: 0.2          # Score for arXiv preprints
+    chinese_core_score: 0.7   # Score for Chinese core journals
     unknown_score: 0.3        # Score for unknown journals
     log_base: 25.0            # Log base for IF normalization
 
   # Final score composition weights
   # score = similarity_weight * similarity + impact_factor_weight * if_score
   final_weights:
-    similarity_weight: 0.7      # Weight for embedding similarity
-    impact_factor_weight: 0.3   # Weight for journal impact factor
+    similarity_weight: 0.8      # Weight for embedding similarity
+    impact_factor_weight: 0.2   # Weight for journal impact factor
 
 # Embedding configuration (provider MUST match rerank.provider when interests are enabled)
 embedding:
