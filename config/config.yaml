@@ -48,7 +48,7 @@ scoring:
 
   # User research interests for interest-based recommendations (optional)
   interests:
-    enabled: true
+    enabled: false
     description: |
       我现在重点关注下面的研究方向：
       1) SAR 图像和距离-多普勒图像的目标识别、检测、跟踪，尤其针对舰船目标
