@@ -10,7 +10,7 @@ zotero:
 
 sources:
   arxiv:
-    enabled: true
+    enabled: false
     categories:
       - "cs.LG"   # Machine Learning
       - "cs.CV"   # Computer Vision and Pattern Recognition
@@ -22,7 +22,7 @@ sources:
     enabled: true
     mailto: "${CROSSREF_MAILTO}"
     days_back: 2
-    max_results: 3000
+    max_results: 100
   # Abstract scraper (Camoufox + rule-based + LLM fallback)
   scraper:
     enabled: true
@@ -50,12 +50,14 @@ scoring:
   interests:
     enabled: false
     description: |
-      我现在重点关注下面的研究方向：
-      1) SAR 图像和距离-多普勒图像的目标识别、检测、跟踪，尤其针对舰船目标
-      2) 多源传感器融合，尤其是 SAR 与红外的融合、跨模态特征对齐和重识别（ReID）
-      3) 视觉基础模型预训练（例如：CLIP、MAE、DINO、JEPA 等相关方法）
-      4) 大语言模型的最新进展
-      5) 希望排除生物医学领域的研究
+        研究以亲铜元素（Cu、Ag、Au 等）地球化学为核心，
+        关注其在类地行星不同圈层中的分布、分配与迁移行为，
+        用于认识核幔分异以及地球壳幔演化过程。
+        重点问题包括：
+        - 深部地幔岩浆过程中亲铜元素与金属同位素行为；
+        - 大洋—大陆俯冲带中金属元素与挥发分（以硫、卤素和碳为主）的起源、迁移与循环；
+        - 亲铜元素相关的成矿过程、资源潜力与环境效应； 
+        明确排除生物医学、生命科学及临床研究。
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
 
@@ -67,7 +69,7 @@ scoring:
 
   # Journal impact factor scoring configuration
   journal:
-    arxiv_score: 0.6          # Score for arXiv preprints
+    arxiv_score: 0.2          # Score for arXiv preprints
     chinese_core_score: 0.7   # Score for Chinese core journals
     unknown_score: 0.3        # Score for unknown journals
     log_base: 25.0            # Log base for IF normalization
