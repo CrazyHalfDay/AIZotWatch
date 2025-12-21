@@ -14,7 +14,9 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pages: write
+      id-token: write
 
     env:
       # ZotWatch Required
@@ -86,44 +88,7 @@ jobs:
           mkdir -p public
           cp -r reports/* public/ || true
 
-      - name: Setup Deploy Private Key
-        env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-        run: |
-          mkdir -p ~/.ssh/
-          echo "$DEPLOY_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-
-      - name: Setup Git Config
-        run: |
-          git config --global user.name "${{ env.GIT_USER_NAME }}"
-          git config --global user.email "${{ env.GIT_USER_EMAIL }}"
-          git config --global init.defaultBranch main
-
-      - name: Deploy to GitHub Repository
-        run: |
-          # Clone existing repository
-          git clone --depth 1 git@github.com:${{ env.TARGET_REPOSITORY }}.git deploy_repo
-          cd deploy_repo
-
-          # Ensure zotwatch subdirectory exists (preserve historical reports)
-          mkdir -p ${{ env.DEPLOY_SUBDIR }}
-
-          # Copy new reports (overwrites same-dated reports, preserves historical ones)
-          cp ../public/report-*.html ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
-
-          # Overwrite feed.xml with latest version
-          cp ../public/feed.xml ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
-
-          # Copy latest report as index.html
-          LATEST=$(ls -t ${{ env.DEPLOY_SUBDIR }}/report-*.html 2>/dev/null | head -1 || echo "")
-          if [ -n "$LATEST" ]; then
-            cp "$LATEST" ${{ env.DEPLOY_SUBDIR }}/index.html
-          fi
-
-          # Commit and push
-          git add .
-          export TZ=${{ env.TIMEZONE }}
-          git commit -m "ZotWatch report updated: $(date '+%Y-%m-%d %H:%M:%S %Z')" || echo "No changes to commit"
-          git push origin main
+      - uses: actions/upload-pages-artifact@v3
+        with: 
+          path: ./public
+      - uses: actions/deploy-pages@v4
