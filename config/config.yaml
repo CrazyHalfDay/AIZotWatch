@@ -82,7 +82,7 @@ scoring:
 embedding:
   provider: "dashscope"  # Options: "voyage" or "dashscope"
   model: "text-embedding-v4"  # voyage: voyage-3.5, dashscope: text-embedding-v3
-  api_key: "${VOYAGE_API_KEY}"  # voyage: VOYAGE_API_KEY, dashscope: DASHSCOPE_API_KEY
+  api_key: "${DASHSCOPE_API_KEY}"  # voyage: VOYAGE_API_KEY, dashscope: DASHSCOPE_API_KEY
   batch_size: 10  # For DashScope models, must be <=10
 
 # LLM configuration for AI summaries and translation
