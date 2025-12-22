@@ -124,7 +124,7 @@ profile:
     - "⭐⭐⭐"
     - "⭐⭐⭐⭐"
     - "⭐⭐⭐⭐⭐"
-  author_min_count: 10  # Minimum appearances for "frequent author"
+  author_min_count: 5  # Minimum appearances for "frequent author"
   # Clustering configuration for semantic grouping of research papers
   # Uses adaptive Silhouette-based clustering with automatic k selection
   clustering:
@@ -135,8 +135,8 @@ profile:
     generate_labels: true          # Use LLM to generate cluster labels
     # Temporal weighting for time-decay of paper relevance
     temporal:
-      enabled: true
-      halflife_days: 180           # Papers half as relevant after 6 months
+      enabled: false
+      halflife_days: 365           # Papers half as relevant after 6 months
       min_weight: 0.05             # Floor weight for very old papers
 
 # Watch pipeline configuration
