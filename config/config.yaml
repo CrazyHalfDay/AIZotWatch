@@ -54,7 +54,7 @@ scoring:
       1) 深部地幔岩浆过程以及俯冲过程中亲铜元素（Cu、Ag、Au 等）与金属同位素行为；
       2) 大洋—大陆俯冲带中金属元素与挥发分（以硫、卤素和碳为主）的起源、迁移与循环；
       3) 亲铜元素相关的成矿过程、资源潜力与环境效应；
-      4) 希望排除生物医学领域的研究
+      4) 只关注地学领域的研究，注意区分化学材料领域，不要和地学领域弄混了。
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
 
