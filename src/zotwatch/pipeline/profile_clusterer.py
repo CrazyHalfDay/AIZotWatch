@@ -186,7 +186,8 @@ class ProfileClusterer:
         """Determine optimal cluster count using Silhouette score.
 
         Uses adaptive bounds to allow finer granularity for small datasets while
-        avoiding overly fragmented clustering.
+        avoiding overly fragmented clustering. Applies both configured and adaptive
+        minimum cluster constraints to prevent too few clusters.
 
         Args:
             n_samples: Number of samples to cluster.
@@ -217,7 +218,23 @@ class ProfileClusterer:
             logger.info("Library too small for multi-cluster analysis (%d samples)", n_samples)
             return 1
 
-        return self._find_optimal_k_silhouette(vectors, min_k=2, max_k=max_k)
+        # Apply minimum cluster constraint to prevent too few clusters
+        # Use adaptive floor based on sqrt(n)/3, combined with configured min_clusters
+        adaptive_min = max(2, int(np.sqrt(n_samples) / 3))
+        min_k = max(self.config.min_clusters, adaptive_min)
+
+        # Ensure min_k doesn't exceed max_k
+        min_k = min(min_k, max_k)
+
+        logger.debug(
+            "Cluster search bounds: min_k=%d (config=%d, adaptive=%d), max_k=%d",
+            min_k,
+            self.config.min_clusters,
+            adaptive_min,
+            max_k,
+        )
+
+        return self._find_optimal_k_silhouette(vectors, min_k=min_k, max_k=max_k)
 
     def _find_optimal_k_silhouette(self, vectors: np.ndarray, min_k: int, max_k: int) -> int:
         """Find optimal cluster count using Silhouette score with biased k-selection.
