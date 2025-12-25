@@ -2,7 +2,7 @@ name: Daily Watch & Deploy
 
 on:
   schedule:
-    - cron: "25 0 * * *"  # UTC 00:25 = Beijing Time 8:25
+    - cron: "0 23 * * *"  # UTC 00:25 = Beijing Time 8:25
   workflow_dispatch:  # Supports manual trigger
 
 # Allow one concurrent deployment
