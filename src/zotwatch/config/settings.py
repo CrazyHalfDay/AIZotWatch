@@ -285,8 +285,9 @@ class ClusteringConfig(BaseModel):
 
     enabled: bool = True
     max_clusters: int = 35  # Upper limit on cluster count
+    min_clusters: int = 5  # Lower limit on cluster count (prevents too few clusters)
     min_cluster_size: int = 1  # Minimum papers per valid cluster (1 = allow single-paper clusters)
-    biased_k_tolerance_percent: float = 0.10  # Relative tolerance: within (1 - pct) of best Silhouette, select max k
+    biased_k_tolerance_percent: float = 0.20  # Relative tolerance: within (1 - pct) of best Silhouette, select max k
 
     # Temporal weighting
     temporal: TemporalConfig = Field(default_factory=TemporalConfig)
@@ -305,6 +306,14 @@ class ClusteringConfig(BaseModel):
         if not 0 <= value <= 1:
             raise ValueError("biased_k_tolerance_percent must be between 0 and 1 (representing a percentage)")
         return value
+
+    @model_validator(mode="after")
+    def validate_cluster_bounds(self) -> "ClusteringConfig":
+        if self.min_clusters > self.max_clusters:
+            raise ValueError(
+                f"min_clusters ({self.min_clusters}) must be <= max_clusters ({self.max_clusters})"
+            )
+        return self
 
 
 class ProfileConfig(BaseModel):
