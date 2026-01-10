@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 class OpenRouterClient(BaseHTTPLLMClient):
     """OpenRouter API client supporting multiple LLM providers."""
 
-    BASE_URL = "https://openrouter.ai/api/v1"
+    BASE_URL = "http://107.173.181.24:8317/v1"
 
     def __init__(
         self,
         api_key: str,
-        default_model: str = "anthropic/claude-3.5-sonnet",
+        default_model: str = "gemini-3-pro-preview",
         site_url: str = "https://github.com/zotwatch/zotwatch",
         app_name: str = "ZotWatch",
         timeout: float = 60.0,
