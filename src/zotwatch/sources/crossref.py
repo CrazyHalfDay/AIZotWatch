@@ -74,7 +74,8 @@ class CrossrefSource(BaseSource):
                 reader = csv.DictReader(f)
                 for row in reader:
                     issn = (row.get("issn") or "").strip()
-                    if issn:
+                    # Skip empty and comment rows (ISSN starts with #)
+                    if issn and not issn.startswith("#"):
                         issns.append(issn)
         except OSError as exc:
             logger.warning("Failed to read journal whitelist file %s: %s", path, exc)

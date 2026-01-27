@@ -43,12 +43,13 @@ class JournalScorer:
                 reader = csv.DictReader(f)
                 for row in reader:
                     issn = (row.get("issn") or "").strip()
-                    if not issn:
+                    # Skip empty rows and comment rows (ISSN starts with #)
+                    if not issn or issn.startswith("#"):
                         continue
-                    category = row.get("category", "")
-                    if_str = row.get("impact_factor", "").strip()
+                    category = row.get("category") or ""
+                    if_str = (row.get("impact_factor") or "").strip()
                     whitelist[issn] = {
-                        "title": row.get("title", ""),
+                        "title": row.get("title") or "",
                         "category": category,
                         "impact_factor": None if if_str in ("NA", "") else float(if_str),
                         "is_cn": "(CN)" in category,
