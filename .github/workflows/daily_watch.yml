@@ -54,6 +54,7 @@ jobs:
             data/faiss.index
             data/embeddings.sqlite
             data/metadata.sqlite
+            data/archive.sqlite
           key: zotwatch-${{ hashFiles('config/config.yaml') }}-${{ github.run_number }}
           restore-keys: |
             zotwatch-${{ hashFiles('config/config.yaml') }}-
@@ -79,6 +80,9 @@ jobs:
 
       - name: Run ZotWatch
         run: uv run zotwatch watch --report --rss --top 30
+
+      - name: Generate Archive Page
+        run: uv run zotwatch archive --days 90
 
       # Deploy to external public repository
       - name: Prepare Pages
@@ -115,6 +119,9 @@ jobs:
 
           # Overwrite feed.xml with latest version
           cp ../public/feed.xml ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
+
+          # Copy archive.html
+          cp ../public/archive.html ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
 
           # Copy latest report as index.html
           LATEST=$(ls -t ${{ env.DEPLOY_SUBDIR }}/report-*.html 2>/dev/null | head -1 || echo "")
