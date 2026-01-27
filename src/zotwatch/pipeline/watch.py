@@ -5,6 +5,7 @@ into a single, testable pipeline class.
 """
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,11 +234,14 @@ class WatchPipeline:
         result = WatchResult()
         storage = self._get_storage()
         embedding_cache = self._get_embedding_cache()
+        pipeline_start = time.time()
 
         def progress(stage: str, msg: str) -> None:
             logger.info("[%s] %s", stage, msg)
             if on_progress:
                 on_progress(stage, msg)
+
+        progress("start", "Starting ZotWatch pipeline...")
 
         # 1. Ensure profile exists
         profile_built = self._ensure_profile_exists(on_progress=progress)
@@ -261,11 +265,13 @@ class WatchPipeline:
             result.researcher_profile = self._analyze_profile(storage, progress)
 
         # 4. Fetch candidates
-        progress("fetch", "Fetching candidates from sources...")
+        fetch_start = time.time()
+        progress("fetch", "Fetching candidates from configured sources...")
         fetcher = CandidateFetcher(self.settings, self.base_dir)
         candidates = fetcher.fetch_all()
         result.stats.candidates_fetched = len(candidates)
-        progress("fetch", f"Found {len(candidates)} candidates")
+        fetch_elapsed = time.time() - fetch_start
+        progress("fetch", f"Found {len(candidates)} candidates ({fetch_elapsed:.1f}s)")
 
         # 5. Enrich abstracts (optional)
         if self.settings.sources.scraper.enabled:
@@ -273,11 +279,12 @@ class WatchPipeline:
             result.stats.abstracts_enriched = enrich_stats.enriched
 
         # 6. Deduplicate
-        progress("dedupe", "Deduplicating candidates...")
+        progress("dedupe", "Filtering duplicates against library...")
         dedupe = DedupeEngine(storage)
+        before_dedupe = len(candidates)
         candidates = dedupe.filter(candidates)
         result.stats.candidates_after_dedupe = len(candidates)
-        progress("dedupe", f"After dedup: {len(candidates)} candidates")
+        progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
 
         # 6.5 Exclude by keywords (if configured)
         interests_config = self.settings.scoring.interests
@@ -304,10 +311,13 @@ class WatchPipeline:
             result.stats.interest_papers_selected = len(result.interest_works)
 
         # 9. Rank by profile similarity
-        progress("rank", "Ranking candidates by similarity...")
+        rank_start = time.time()
+        progress("rank", "Computing relevance scores...")
         ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
         ranked = ranker.rank(candidates)
         result.computed_thresholds = ranker.computed_thresholds
+        rank_elapsed = time.time() - rank_start
+        progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
 
 
         # 10. Apply filters
@@ -332,6 +342,10 @@ class WatchPipeline:
 
         # 14. Cleanup caches
         self._cleanup_caches(embedding_cache, progress)
+
+        # Report total elapsed time
+        total_elapsed = time.time() - pipeline_start
+        progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
 
         return result
 
@@ -535,7 +549,10 @@ class WatchPipeline:
             return
 
         # Summarize ranked works
-        progress("summary", f"Generating summaries for {len(result.ranked_works)} papers...")
+        summary_start = time.time()
+        # Estimate ~2s per paper for LLM summarization
+        est_time = len(result.ranked_works) * 2
+        progress("summary", f"Generating summaries for {len(result.ranked_works)} papers (est. ~{est_time}s)...")
         summarizer = PaperSummarizer(llm_client, storage, model=self.settings.llm.model)
         summary_result = summarizer.summarize_batch(result.ranked_works)
         result.stats.summaries_generated = summary_result.success_count
@@ -585,7 +602,8 @@ class WatchPipeline:
                 result.ranked_works, "similarity"
             )
 
-        progress("summary", f"Generated {result.stats.summaries_generated} summaries")
+        summary_elapsed = time.time() - summary_start
+        progress("summary", f"Generated {result.stats.summaries_generated} summaries ({summary_elapsed:.1f}s)")
 
     def _translate_titles(
         self,
@@ -602,6 +620,7 @@ class WatchPipeline:
         if not all_works:
             return
 
+        translate_start = time.time()
         progress("translate", f"Translating {len(all_works)} titles...")
         translator = TitleTranslator(llm_client, storage, model=self.settings.llm.model)
         translations = translator.translate_batch(all_works)
@@ -614,7 +633,8 @@ class WatchPipeline:
             if work.identifier in translations:
                 work.translated_title = translations[work.identifier]
 
-        progress("translate", f"Translated {len(translations)} titles")
+        translate_elapsed = time.time() - translate_start
+        progress("translate", f"Translated {len(translations)} titles ({translate_elapsed:.1f}s)")
 
     def _cleanup_caches(
         self,
