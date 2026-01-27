@@ -3,12 +3,56 @@
 import csv
 import logging
 import math
+from functools import lru_cache
 from pathlib import Path
 
 from zotwatch.config.settings import ScoringConfig
 from zotwatch.core.models import CandidateWork
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _load_journal_whitelist_cached(path_str: str) -> dict[str, dict]:
+    """Module-level cached journal whitelist loader.
+
+    Uses lru_cache to avoid re-reading CSV file on each JournalScorer instantiation.
+    The path is converted to string for hashability.
+
+    Args:
+        path_str: String path to journal_whitelist.csv.
+
+    Returns:
+        Dict mapping ISSN to journal info dict.
+    """
+    path = Path(path_str)
+    whitelist: dict[str, dict] = {}
+
+    if not path.exists():
+        logger.warning("Journal whitelist not found: %s", path)
+        return whitelist
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                issn = (row.get("issn") or "").strip()
+                # Skip empty rows and comment rows (ISSN starts with #)
+                if not issn or issn.startswith("#"):
+                    continue
+                category = row.get("category") or ""
+                if_str = (row.get("impact_factor") or "").strip()
+                whitelist[issn] = {
+                    "title": row.get("title") or "",
+                    "category": category,
+                    "impact_factor": None if if_str in ("NA", "") else float(if_str),
+                    "is_cn": "(CN)" in category,
+                }
+        logger.info("Loaded %d journals from whitelist (cached)", len(whitelist))
+    except Exception as exc:
+        logger.warning("Failed to load journal whitelist: %s", exc)
+
+    return whitelist
 
 
 class JournalScorer:
@@ -27,38 +71,9 @@ class JournalScorer:
         """
         self.base_dir = Path(base_dir)
         self.config = config
-        self._whitelist = self._load_whitelist()
-
-    def _load_whitelist(self) -> dict[str, dict]:
-        """Load journal whitelist with IF data."""
-        path = self.base_dir / "data" / "journal_whitelist.csv"
-        whitelist: dict[str, dict] = {}
-
-        if not path.exists():
-            logger.warning("Journal whitelist not found: %s", path)
-            return whitelist
-
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    issn = (row.get("issn") or "").strip()
-                    # Skip empty rows and comment rows (ISSN starts with #)
-                    if not issn or issn.startswith("#"):
-                        continue
-                    category = row.get("category") or ""
-                    if_str = (row.get("impact_factor") or "").strip()
-                    whitelist[issn] = {
-                        "title": row.get("title") or "",
-                        "category": category,
-                        "impact_factor": None if if_str in ("NA", "") else float(if_str),
-                        "is_cn": "(CN)" in category,
-                    }
-            logger.info("Loaded %d journals from whitelist", len(whitelist))
-        except Exception as exc:
-            logger.warning("Failed to load journal whitelist: %s", exc)
-
-        return whitelist
+        # Use module-level cached loader
+        whitelist_path = self.base_dir / "data" / "journal_whitelist.csv"
+        self._whitelist = _load_journal_whitelist_cached(str(whitelist_path))
 
     def compute_score(self, candidate: CandidateWork) -> tuple[float, float | None, bool]:
         """Compute IF score for a candidate.

@@ -2,6 +2,7 @@
 
 import logging
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 import faiss
 import numpy as np
@@ -239,11 +240,11 @@ class ProfileClusterer:
     def _find_optimal_k_silhouette(self, vectors: np.ndarray, min_k: int, max_k: int) -> int:
         """Find optimal cluster count using Silhouette score with biased k-selection.
 
-        Tests different k values and returns the largest k within tolerance of
+        Tests different k values in parallel and returns the largest k within tolerance of
         the best Silhouette score. This prefers finer-grained research domains.
 
         Algorithm:
-        1. Compute Silhouette score for each k in [min_k, max_k]
+        1. Compute Silhouette score for each k in [min_k, max_k] (parallelized)
         2. Find global best score S_max
         3. Within {k | S_k >= S_max - delta} where delta = pct * |S_max|,
            select the maximum k
@@ -260,7 +261,7 @@ class ProfileClusterer:
         dim = vectors.shape[1]
 
         logger.info(
-            "Searching for optimal k in range [%d, %d] using Silhouette score",
+            "Searching for optimal k in range [%d, %d] using Silhouette score (parallel)",
             min_k,
             max_k,
         )
@@ -278,38 +279,46 @@ class ProfileClusterer:
         else:
             sample_vectors = vectors
 
-        # Collect all (k, score) pairs
-        k_scores: list[tuple[int, float]] = []
-
-        for k in range(min_k, max_k + 1):
-            # Run k-means
-            kmeans = faiss.Kmeans(
-                dim,
-                k,
-                niter=10,  # Fewer iterations for search
-                verbose=False,
-                gpu=False,
-                spherical=True,
-                seed=42,
-                min_points_per_centroid=1,  # Allow evaluation of small clusters
-            )
-            kmeans.train(sample_vectors)
-            _, assignments = kmeans.index.search(sample_vectors, 1)
-            labels = assignments.flatten()
-
-            # Skip invalid silhouette cases (all points in one cluster)
-            if len(set(labels.tolist())) < 2:
-                logger.debug("k=%d skipped: single cluster produced, cannot compute silhouette", k)
-                continue
-
-            # Compute Silhouette score using sklearn (optimized C implementation)
+        def evaluate_k(k: int) -> tuple[int, float | None]:
+            """Evaluate a single k value and return (k, silhouette_score)."""
             try:
+                # Run k-means
+                kmeans = faiss.Kmeans(
+                    dim,
+                    k,
+                    niter=10,  # Fewer iterations for search
+                    verbose=False,
+                    gpu=False,
+                    spherical=True,
+                    seed=42,
+                    min_points_per_centroid=1,  # Allow evaluation of small clusters
+                )
+                kmeans.train(sample_vectors)
+                _, assignments = kmeans.index.search(sample_vectors, 1)
+                labels = assignments.flatten()
+
+                # Skip invalid silhouette cases (all points in one cluster)
+                if len(set(labels.tolist())) < 2:
+                    logger.debug("k=%d skipped: single cluster produced", k)
+                    return (k, None)
+
+                # Compute Silhouette score using sklearn (optimized C implementation)
                 score = silhouette_score(sample_vectors, labels, metric="cosine")
-                k_scores.append((k, score))
                 logger.debug("k=%d, silhouette=%.4f", k, score)
-            except ValueError as exc:
-                logger.debug("k=%d silhouette failed (%s); skipping", k, exc)
-                continue
+                return (k, score)
+            except Exception as exc:
+                logger.debug("k=%d evaluation failed (%s)", k, exc)
+                return (k, None)
+
+        # Parallel evaluation of k values
+        k_range = list(range(min_k, max_k + 1))
+        max_workers = min(4, len(k_range))  # Limit parallelism to avoid overhead
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(evaluate_k, k_range))
+
+        # Filter valid results
+        k_scores: list[tuple[int, float]] = [(k, s) for k, s in results if s is not None]
 
         # If no valid silhouette scores, fall back to single cluster
         if not k_scores:

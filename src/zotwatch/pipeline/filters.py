@@ -4,7 +4,9 @@ Extracted from cli/main.py to enable reuse and testing.
 """
 
 import logging
+import re
 from datetime import timedelta
+from functools import lru_cache
 
 from zotwatch.core.models import CandidateWork, RankedWork
 from zotwatch.utils.datetime import utc_today_start
@@ -101,13 +103,30 @@ def filter_without_abstract(
     return filtered, removed
 
 
+@lru_cache(maxsize=128)
+def _compile_keyword_pattern(keywords_tuple: tuple[str, ...]) -> re.Pattern:
+    """Compile keywords into a single regex pattern for efficient matching.
+
+    Uses word boundary matching to avoid partial matches.
+    Cached for reuse across calls with same keywords.
+    """
+    # Escape special regex characters and join with alternation
+    escaped = [re.escape(kw.lower()) for kw in keywords_tuple]
+    # Use word boundaries for more accurate matching
+    pattern = r"\b(" + "|".join(escaped) + r")\b"
+    return re.compile(pattern, re.IGNORECASE)
+
+
 def exclude_by_keywords(
     candidates: list[CandidateWork],
     exclude_keywords: list[str],
 ) -> tuple[list[CandidateWork], int]:
     """Remove candidates matching any exclude keyword.
 
-    Searches in title and abstract (case-insensitive).
+    Optimized implementation using:
+    1. Pre-compiled regex pattern for batch matching
+    2. Word boundary matching to avoid false positives
+    3. Caching of compiled patterns
 
     Args:
         candidates: List of candidate works to filter.
@@ -119,13 +138,27 @@ def exclude_by_keywords(
     if not exclude_keywords:
         return candidates, 0
 
-    exclude_lower = [kw.lower() for kw in exclude_keywords]
-    filtered = []
+    # Convert to tuple for hashability (enables lru_cache)
+    keywords_tuple = tuple(exclude_keywords)
 
-    for c in candidates:
-        text = f"{c.title} {c.abstract or ''}".lower()
-        if not any(kw in text for kw in exclude_lower):
-            filtered.append(c)
+    # Use simple substring matching for short keyword lists (faster than regex)
+    # Use regex for longer keyword lists (better scaling)
+    if len(exclude_keywords) <= 10:
+        # Simple substring matching for small keyword sets
+        exclude_lower = frozenset(kw.lower() for kw in exclude_keywords)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}".lower()
+            if not any(kw in text for kw in exclude_lower):
+                filtered.append(c)
+    else:
+        # Compiled regex for larger keyword sets
+        pattern = _compile_keyword_pattern(keywords_tuple)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}"
+            if not pattern.search(text):
+                filtered.append(c)
 
     removed = len(candidates) - len(filtered)
 
@@ -146,4 +179,3 @@ __all__ = [
     "exclude_by_keywords",
     "PREPRINT_SOURCES",
 ]
-
