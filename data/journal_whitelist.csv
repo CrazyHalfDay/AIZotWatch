@@ -50,5 +50,47 @@ issn,title,category,impact_factor
 1941-4261,Lithosphere,GEOSCIENCES,2.2
 1000-0569,Acta Petrologica Sinica,GEOSCIENCES,1.6
 
+# Additional Ore Deposits & Economic Geology Journals
+0026-4598,Mineralium Deposita,ORE_DEPOSITS,4.9
+0375-6742,Journal of Geochemical Exploration,ORE_DEPOSITS,3.3
+1344-1698,Resource Geology,ORE_DEPOSITS,1.1
 
+# Volcanology & Magmatism
+0377-0273,Journal of Volcanology and Geothermal Research,VOLCANOLOGY,2.3
+1468-8115,Geofluids,GEOFLUIDS,1.3
 
+# Mineralogy & Petrology (Additional)
+0010-7999,Mineralogy and Petrology,PETROLOGY,1.1
+0026-461X,Mineralogical Magazine,MINERALOGY,2.8
+1639-4488,Geostandards and Geoanalytical Research,GEOCHEMISTRY,3.0
+
+# Tectonics & Structural Geology
+0278-7407,Tectonics,TECTONICS,3.6
+1367-9120,Journal of Asian Earth Sciences,ASIAN_GEOLOGY,2.4
+1038-4871,Island Arc,ASIAN_GEOLOGY,1.3
+0031-9201,Physics of the Earth and Planetary Interiors,GEOPHYSICS,2.0
+
+# International Geology Review
+0020-6814,International Geology Review,GEOSCIENCES,2.5
+
+# Chinese Core Journals (Additional)
+1755-6724,Acta Geologica Sinica (English Edition),GEOSCIENCES_CN,2.0
+1869-1897,Science China Earth Sciences,GEOSCIENCES_CN,5.0
+
+# Additional Geochemistry & Isotope Journals
+0009-2541,Chemical Geology (Print ISSN),GEOCHEMISTRY,3.6
+0016-7037,Geochimica et Cosmochimica Acta (Print ISSN),GEOCHEMISTRY,4.5
+1467-4866,Geochemistry: Exploration Environment Analysis,GEOCHEMISTRY,1.5
+
+# Earth System Science
+1944-9224,Paleoceanography and Paleoclimatology,PALEOCLIMATE,3.4
+1523-0430,Arctic Antarctic and Alpine Research,POLAR,2.0
+0883-1351,PALAIOS,PALEONTOLOGY,1.5
+
+# Solid Earth & Mantle Studies
+0091-7613,Geology (Print ISSN - alternative),GEOSCIENCES,4.8
+0012-821X,Earth and Planetary Science Letters (Print ISSN),GEOSCIENCES,4.8
+
+# Planetary Geochemistry
+0027-1276,Meteoritics and Planetary Science,PLANETARY,2.9
+0032-0633,Planetary and Space Science,PLANETARY,2.0
