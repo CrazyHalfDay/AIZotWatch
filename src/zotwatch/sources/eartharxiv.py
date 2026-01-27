@@ -1,11 +1,16 @@
-"""EarthArXiv source implementation via OSF API.
+"""EarthArXiv source implementation via OAI-PMH API.
 
-EarthArXiv is a preprint server for Earth sciences hosted on OSF (Open Science Framework).
-API documentation: https://developer.osf.io/
+EarthArXiv preprint server for Earth sciences, hosted by California Digital Library.
+API documentation: https://eartharxiv.github.io/faq.html
+
+The new EarthArXiv uses OAI-PMH protocol (not OSF API since 2021 migration).
+OAI-PMH endpoint: https://eartharxiv.org/api/oai/
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from typing import Any
 
 import requests
 
@@ -15,26 +20,32 @@ from zotwatch.core.exceptions import SourceFetchError
 from zotwatch.core.models import CandidateWork
 from zotwatch.utils.datetime import utc_yesterday_end
 
-from .base import BaseSource, SourceRegistry, clean_title, parse_date
+from .base import BaseSource, SourceRegistry, clean_title
 
 logger = logging.getLogger(__name__)
 
-# OSF API base URL
-OSF_API_BASE = "https://api.osf.io/v2"
+# OAI-PMH namespaces
+OAI_NS = {
+    "oai": "http://www.openarchives.org/OAI/2.0/",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "oai_dc": "http://www.openarchives.org/OAI/2.0/oai_dc/",
+}
+
+# EarthArXiv OAI-PMH endpoint (new CDL-hosted platform)
+EARTHARXIV_OAI_URL = "https://eartharxiv.org/api/oai/"
 
 
 @SourceRegistry.register
 class EartharxivSource(BaseSource):
-    """EarthArXiv preprint source via OSF API."""
+    """EarthArXiv preprint source via OAI-PMH protocol."""
 
     def __init__(self, settings: Settings):
         super().__init__(settings)
         self.config = settings.sources.eartharxiv
         self.session = requests.Session()
-        # OSF API recommends setting User-Agent
         self.session.headers.update({
             "User-Agent": "ZotWatch/1.0 (https://github.com/CrazyHalfDay/AIZotWatch)",
-            "Accept": "application/json",
+            "Accept": "application/xml",
         })
 
     @property
@@ -46,7 +57,7 @@ class EartharxivSource(BaseSource):
         return self.config.enabled
 
     def fetch(self, days_back: int | None = None) -> list[CandidateWork]:
-        """Fetch EarthArXiv preprints from OSF API.
+        """Fetch EarthArXiv preprints via OAI-PMH ListRecords.
 
         Args:
             days_back: Number of days to look back (default from config).
@@ -59,158 +70,209 @@ class EartharxivSource(BaseSource):
 
         max_results = self.config.max_results
 
-        # Calculate date range (complete past days only)
+        # Calculate date range
         yesterday = utc_yesterday_end()
         yesterday_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
         from_date = yesterday_start - timedelta(days=days_back - 1)
 
         logger.info(
-            "Fetching EarthArXiv preprints from %s to %s (max %d)",
+            "Fetching EarthArXiv preprints from %s (max %d)",
             from_date.strftime("%Y-%m-%d"),
-            yesterday_start.strftime("%Y-%m-%d"),
             max_results,
         )
 
         results: list[CandidateWork] = []
-        page = 1
-        page_size = 100  # OSF API max page size
+        resumption_token: str | None = None
 
         while len(results) < max_results:
             try:
-                preprints = self._fetch_page(page, page_size, from_date)
+                records, resumption_token = self._fetch_records(
+                    from_date=from_date,
+                    resumption_token=resumption_token,
+                )
             except SourceFetchError:
                 raise
             except Exception as e:
-                logger.error("Error fetching EarthArXiv page %d: %s", page, e)
+                logger.error("Error fetching EarthArXiv records: %s", e)
                 break
 
-            if not preprints:
+            if not records:
                 break
 
-            for preprint in preprints:
+            for record in records:
                 if len(results) >= max_results:
                     break
 
-                work = self._parse_preprint(preprint)
+                work = self._parse_record(record)
                 if work:
-                    # Filter by date (API filter may not be exact)
-                    if work.published and work.published >= from_date:
-                        results.append(work)
+                    results.append(work)
 
-            # Check if there are more pages
-            if len(preprints) < page_size:
+            # No more pages
+            if not resumption_token:
                 break
-
-            page += 1
 
         logger.info("Fetched %d EarthArXiv preprints", len(results))
         return results
 
-    def _fetch_page(
+    def _fetch_records(
         self,
-        page: int,
-        page_size: int,
         from_date: datetime,
-    ) -> list[dict]:
-        """Fetch a single page of preprints from OSF API.
+        resumption_token: str | None = None,
+    ) -> tuple[list[ET.Element], str | None]:
+        """Fetch records from OAI-PMH endpoint.
 
         Args:
-            page: Page number (1-indexed).
-            page_size: Number of results per page.
-            from_date: Filter preprints published after this date.
+            from_date: Filter records from this date.
+            resumption_token: Token for pagination (from previous response).
 
         Returns:
-            List of preprint data dictionaries.
+            Tuple of (list of record elements, next resumption token or None).
         """
-        url = f"{OSF_API_BASE}/preprints/"
-        params = {
-            "filter[provider]": "eartharxiv",
-            "filter[date_published][gte]": from_date.strftime("%Y-%m-%d"),
-            "filter[reviews_state]": "accepted",  # Only accepted preprints
-            "sort": "-date_published",  # Most recent first
-            "page": page,
-            "page[size]": page_size,
-            "embed": "contributors",  # Embed author information in same request
-        }
+        if resumption_token:
+            # Use resumption token for subsequent requests
+            params = {
+                "verb": "ListRecords",
+                "resumptionToken": resumption_token,
+            }
+        else:
+            # Initial request with date filter
+            params = {
+                "verb": "ListRecords",
+                "metadataPrefix": "oai_dc",
+                "from": from_date.strftime("%Y-%m-%d"),
+            }
 
         try:
-            resp = self.session.get(url, params=params, timeout=DEFAULT_HTTP_TIMEOUT)
+            resp = self.session.get(
+                EARTHARXIV_OAI_URL,
+                params=params,
+                timeout=DEFAULT_HTTP_TIMEOUT,
+            )
             resp.raise_for_status()
         except requests.exceptions.Timeout:
             raise SourceFetchError(
                 "eartharxiv",
-                f"Request timed out after {DEFAULT_HTTP_TIMEOUT}s (page {page})",
+                f"Request timed out after {DEFAULT_HTTP_TIMEOUT}s",
             ) from None
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response is not None else "unknown"
-            raise SourceFetchError(
-                "eartharxiv",
-                f"HTTP {status} error (page {page})",
-            ) from e
+            raise SourceFetchError("eartharxiv", f"HTTP {status} error") from e
         except requests.exceptions.RequestException as e:
             raise SourceFetchError(
                 "eartharxiv",
                 f"Network error: {type(e).__name__}",
             ) from e
 
-        data = resp.json()
-        return data.get("data", [])
+        # Parse XML response
+        try:
+            root = ET.fromstring(resp.content)
+        except ET.ParseError as e:
+            logger.error("Failed to parse OAI-PMH response: %s", e)
+            return [], None
 
-    def _parse_preprint(self, preprint: dict) -> CandidateWork | None:
-        """Parse OSF preprint data to CandidateWork.
+        # Check for OAI-PMH errors
+        error = root.find(".//oai:error", OAI_NS)
+        if error is not None:
+            error_code = error.get("code", "unknown")
+            error_msg = error.text or "Unknown error"
+            if error_code == "noRecordsMatch":
+                # No records in date range - not an error
+                logger.info("No EarthArXiv records found in date range")
+                return [], None
+            logger.error("OAI-PMH error: %s - %s", error_code, error_msg)
+            return [], None
+
+        # Extract records
+        records = root.findall(".//oai:record", OAI_NS)
+
+        # Get resumption token for pagination
+        next_token = None
+        token_elem = root.find(".//oai:resumptionToken", OAI_NS)
+        if token_elem is not None and token_elem.text:
+            next_token = token_elem.text.strip()
+
+        return records, next_token
+
+    def _parse_record(self, record: ET.Element) -> CandidateWork | None:
+        """Parse OAI-PMH record to CandidateWork.
 
         Args:
-            preprint: Preprint data from OSF API.
+            record: XML Element containing the record.
 
         Returns:
             CandidateWork or None if parsing fails.
         """
-        attrs = preprint.get("attributes", {})
-        links = preprint.get("links", {})
-        embeds = preprint.get("embeds", {})
+        # Get Dublin Core metadata
+        dc = record.find(".//oai_dc:dc", OAI_NS)
+        if dc is None:
+            return None
 
-        title = clean_title(attrs.get("title"))
+        # Title
+        title_elem = dc.find("dc:title", OAI_NS)
+        title = clean_title(title_elem.text if title_elem is not None else None)
         if not title:
             return None
 
-        # Skip withdrawn preprints
-        if attrs.get("reviews_state") == "withdrawn":
-            return None
+        # Abstract/Description
+        desc_elem = dc.find("dc:description", OAI_NS)
+        abstract = (desc_elem.text or "").strip() if desc_elem is not None else None
 
-        # Get DOI from links or attributes
+        # Authors (multiple dc:creator elements)
+        authors = []
+        for creator in dc.findall("dc:creator", OAI_NS):
+            if creator.text:
+                authors.append(creator.text.strip())
+
+        # DOI (from dc:identifier elements)
         doi = None
-        preprint_doi_url = links.get("preprint_doi")
-        if preprint_doi_url and "doi.org/" in preprint_doi_url:
-            doi = preprint_doi_url.split("doi.org/")[-1]
+        url = None
+        identifier = None
+        for id_elem in dc.findall("dc:identifier", OAI_NS):
+            if id_elem.text:
+                text = id_elem.text.strip()
+                if "doi.org/" in text:
+                    doi = text.split("doi.org/")[-1]
+                elif text.startswith("10."):
+                    doi = text
+                elif text.startswith("http"):
+                    url = text
+                elif text.isdigit():
+                    identifier = text
 
-        # Parse publication date
-        published = parse_date(attrs.get("date_published"))
+        # Publication date (first dc:date)
+        published = None
+        date_elem = dc.find("dc:date", OAI_NS)
+        if date_elem is not None and date_elem.text:
+            try:
+                date_str = date_elem.text.strip()
+                if "T" in date_str:
+                    published = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                else:
+                    published = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                pass
 
-        # Get abstract (description in OSF API)
-        abstract = (attrs.get("description") or "").strip() or None
-
-        # Get tags as keywords
-        tags = attrs.get("tags", [])
-
-        # Get subjects (hierarchical)
+        # Subjects/Keywords
         subjects = []
-        for subject_list in attrs.get("subjects", []):
-            for subject in subject_list:
-                if isinstance(subject, dict):
-                    subjects.append(subject.get("text", ""))
+        for subj in dc.findall("dc:subject", OAI_NS):
+            if subj.text:
+                subjects.append(subj.text.strip())
 
-        # Build URL
-        url = links.get("html") or links.get("self")
+        # Build URL if not found
+        if not url and identifier:
+            url = f"https://eartharxiv.org/repository/view/{identifier}/"
 
-        # Get preprint ID
-        identifier = preprint.get("id") or preprint.get("links", {}).get("iri", "")
-
-        # Extract authors from embedded contributors
-        authors = self._extract_authors(embeds.get("contributors", {}))
+        # Use OAI identifier as fallback
+        header = record.find(".//oai:header", OAI_NS)
+        oai_id = None
+        if header is not None:
+            id_elem = header.find("oai:identifier", OAI_NS)
+            if id_elem is not None and id_elem.text:
+                oai_id = id_elem.text.strip()
 
         return CandidateWork(
             source="eartharxiv",
-            identifier=identifier or title,
+            identifier=oai_id or identifier or title,
             title=title,
             abstract=abstract,
             authors=authors,
@@ -219,51 +281,9 @@ class EartharxivSource(BaseSource):
             published=published,
             venue="EarthArXiv",
             extra={
-                "tags": tags,
                 "subjects": subjects,
-                "version": attrs.get("version", 1),
             },
         )
-
-    def _extract_authors(self, contributors_data: dict) -> list[str]:
-        """Extract author names from embedded contributors data.
-
-        Args:
-            contributors_data: Embedded contributors response from OSF API.
-
-        Returns:
-            List of author full names, sorted by contribution index.
-        """
-        authors = []
-        contributor_list = contributors_data.get("data", [])
-
-        # Sort by index to maintain author order
-        sorted_contributors = sorted(
-            contributor_list,
-            key=lambda c: c.get("attributes", {}).get("index", 999),
-        )
-
-        for contributor in sorted_contributors:
-            attrs = contributor.get("attributes", {})
-
-            # Only include bibliographic (citable) contributors
-            if not attrs.get("bibliographic", True):
-                continue
-
-            # Try to get name from embedded user data
-            user_embed = contributor.get("embeds", {}).get("users", {}).get("data", {})
-            user_attrs = user_embed.get("attributes", {})
-
-            full_name = user_attrs.get("full_name")
-
-            # Fallback to unregistered_contributor field
-            if not full_name:
-                full_name = attrs.get("unregistered_contributor")
-
-            if full_name:
-                authors.append(full_name.strip())
-
-        return authors
 
 
 __all__ = ["EartharxivSource"]
