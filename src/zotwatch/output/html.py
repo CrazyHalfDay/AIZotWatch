@@ -197,4 +197,73 @@ def render_html(
     return path
 
 
-__all__ = ["render_html"]
+def render_archive(
+    grouped_works: dict[str, list[RankedWork]],
+    output_path: Path | str,
+    *,
+    group_by: str = "date",
+    stats: dict | None = None,
+    sources: list[dict] | None = None,
+    template_dir: Path | None = None,
+    template_name: str = "archive.html",
+    timezone_name: str = "UTC",
+) -> Path:
+    """Render archive page with grouped works.
+
+    Args:
+        grouped_works: Works grouped by the specified dimension.
+        output_path: Path to write HTML file.
+        group_by: Grouping dimension (date, venue, source, label).
+        stats: Archive statistics from ArchiveStorage.get_stats().
+        sources: Source distribution from ArchiveStorage.get_sources().
+        template_dir: Directory containing templates.
+        template_name: Name of template file.
+        timezone_name: IANA timezone name.
+
+    Returns:
+        Path to written HTML file.
+    """
+    tz = ZoneInfo(timezone_name)
+    generated_at = datetime.now(tz)
+
+    # Determine template directory
+    if template_dir is None:
+        template_dir = _get_builtin_template_dir()
+
+    template_path = template_dir / template_name
+
+    if template_path.exists():
+        env = Environment(
+            loader=FileSystemLoader(str(template_dir)),
+            autoescape=select_autoescape(["html", "xml"]),
+        )
+        template = env.get_template(template_name)
+    else:
+        raise FileNotFoundError(f"Template {template_name} not found in {template_dir}")
+
+    # Default stats if not provided
+    if stats is None:
+        total_works = sum(len(works) for works in grouped_works.values())
+        stats = {
+            "total": total_works,
+            "must_read": 0,
+            "consider": 0,
+        }
+
+    rendered = template.render(
+        grouped_works=grouped_works,
+        generated_at=generated_at,
+        timezone_name=timezone_name,
+        group_by=group_by,
+        stats=stats,
+        sources=sources or [],
+    )
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered, encoding="utf-8")
+    logger.info("Wrote archive page with %d groups to %s", len(grouped_works), path)
+    return path
+
+
+__all__ = ["render_html", "render_archive"]
