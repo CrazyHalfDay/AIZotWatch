@@ -53,12 +53,16 @@ Please output a JSON object with the following fields:
 
 Guidelines:
 - The refined_query should be a comprehensive English description suitable for semantic search
-- include_keywords should contain 5-10 important technical terms
-- exclude_keywords rules (VERY IMPORTANT - be conservative):
-  * ONLY include keywords if the user EXPLICITLY mentions wanting to exclude a specific domain/topic
-  * Return an empty array [] if no exclusions are explicitly mentioned
+- include_keywords should contain 5-10 important technical terms from the user's research domain
+- exclude_keywords rules (IMPORTANT):
+  * If the user mentions ANY domain/field they want to EXCLUDE or DISTINGUISH FROM, generate 10-20 comprehensive exclusion keywords for those domains
+  * Consider related terminology, synonyms, and common sub-topics of the excluded domain
+  * For example, if user wants to exclude "materials science", include keywords like: "nanomaterial", "battery", "catalyst", "thin film", "alloy", "semiconductor", "polymer", "coating", "electrode", "lithium-ion", "photovoltaic", "superconductor", etc.
+  * If user wants geoscience only, exclude common materials science applications and engineering terms
+  * Return an empty array [] ONLY if no exclusions are mentioned at all
 
 Important: Only return the JSON object, no additional text or markdown formatting."""
+
 
 OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题进行分组并撰写总结。
 

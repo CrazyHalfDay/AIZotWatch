@@ -50,13 +50,65 @@ scoring:
   interests:
     enabled: true
     description: |
-      我现在重点关注下面的研究方向：
+      我是一名地球化学/岩石学方向的研究者，重点关注以下研究方向：
       1) 深部地幔岩浆过程以及俯冲过程中亲铜元素（Cu、Ag、Au 等）与金属同位素行为；
       2) 大洋—大陆俯冲带中金属元素与挥发分（以硫、卤素和碳为主）的起源、迁移与循环；
       3) 亲铜元素相关的成矿过程、资源潜力与环境效应；
-      4) 只关注地学领域的研究，注意区分化学材料领域，不要和地学领域弄混了。
+      4) 我只关注地学领域的研究(geochemistry, petrology, volcanology, geology, mineralogy)。
+      
+      【重要：请明确排除以下领域】
+      - 材料科学(materials science)：如纳米材料、电池材料、催化剂、薄膜、合金、半导体、聚合物、涂层
+      - 化学工程(chemical engineering)：如化工反应器、分离工艺、萃取工业
+      - 生物医学(biomedical)：如药物递送、生物传感器、医用材料
+      - 环境工程(environmental engineering)：如废水处理、污染物降解、吸附材料
+      - 食品科学、农业化学、电化学电池、光电材料、超导材料、磁性材料
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
+    # Static exclude keywords (case-insensitive, applied to ALL candidates)
+    exclude_keywords:
+      # Materials Science & Engineering
+      - "nanomaterial"
+      - "nanoparticle"
+      - "nanocomposite"
+      - "thin film"
+      - "thin-film"
+      - "battery"
+      - "lithium-ion"
+      - "lithium ion"
+      - "electrode"
+      - "anode"
+      - "cathode"
+      - "electrochemical cell"
+      - "photovoltaic"
+      - "solar cell"
+      - "superconductor"
+      - "semiconductor"
+      - "transistor"
+      - "polymer"
+      - "coating"
+      - "alloy"
+      - "catalyst"
+      - "photocatalyst"
+      - "electrocatalyst"
+      # Biomedical & Pharmaceutical
+      - "drug delivery"
+      - "biosensor"
+      - "biomedical"
+      - "pharmaceutical"
+      - "therapeutic"
+      - "nanocarrier"
+      - "tissue engineering"
+      # Environmental Engineering (non-geological)
+      - "wastewater"
+      - "sewage"
+      - "pollutant degradation"
+      - "adsorption material"
+      - "membrane separation"
+      # Food & Agriculture
+      - "food science"
+      - "food processing"
+      - "agrochemical"
+
 
   # Rerank settings (only used when interests.enabled=true)
   # Provider MUST match embedding.provider when interests are enabled

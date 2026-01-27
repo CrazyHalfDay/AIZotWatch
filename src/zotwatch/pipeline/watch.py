@@ -38,7 +38,7 @@ from zotwatch.llm.factory import create_llm_client
 from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
-from zotwatch.pipeline.filters import filter_recent, filter_without_abstract, limit_preprints
+from zotwatch.pipeline.filters import exclude_by_keywords, filter_recent, filter_without_abstract, limit_preprints
 from zotwatch.pipeline.profile_ranker import ComputedThresholds
 from zotwatch.sources.zotero import ZoteroIngestor
 
@@ -66,6 +66,7 @@ class WatchStats:
 
     candidates_fetched: int = 0
     candidates_after_dedupe: int = 0
+    candidates_after_keyword_filter: int = 0  # After exclude_keywords filtering
     candidates_after_abstract_filter: int = 0
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
@@ -278,6 +279,18 @@ class WatchPipeline:
         result.stats.candidates_after_dedupe = len(candidates)
         progress("dedupe", f"After dedup: {len(candidates)} candidates")
 
+        # 6.5 Exclude by keywords (if configured)
+        interests_config = self.settings.scoring.interests
+        if interests_config.exclude_keywords:
+            candidates, removed = exclude_by_keywords(
+                candidates, interests_config.exclude_keywords
+            )
+            result.stats.candidates_after_keyword_filter = len(candidates)
+            if removed > 0:
+                progress("filter", f"Excluded {removed} candidates by keywords")
+        else:
+            result.stats.candidates_after_keyword_filter = len(candidates)
+
         # 7. Filter without abstract (if required)
         if self.config.require_abstract:
             candidates, removed = filter_without_abstract(candidates)
@@ -286,7 +299,6 @@ class WatchPipeline:
                 progress("filter", f"Removed {removed} candidates without abstracts")
 
         # 8. Interest-based selection (optional)
-        interests_config = self.settings.scoring.interests
         if interests_config.enabled and interests_config.description.strip():
             result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
             result.stats.interest_papers_selected = len(result.interest_works)
@@ -296,6 +308,7 @@ class WatchPipeline:
         ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
         ranked = ranker.rank(candidates)
         result.computed_thresholds = ranker.computed_thresholds
+
 
         # 10. Apply filters
         ranked = filter_recent(ranked, days=self.config.recent_days)

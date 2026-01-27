@@ -101,9 +101,49 @@ def filter_without_abstract(
     return filtered, removed
 
 
+def exclude_by_keywords(
+    candidates: list[CandidateWork],
+    exclude_keywords: list[str],
+) -> tuple[list[CandidateWork], int]:
+    """Remove candidates matching any exclude keyword.
+
+    Searches in title and abstract (case-insensitive).
+
+    Args:
+        candidates: List of candidate works to filter.
+        exclude_keywords: List of keywords to exclude.
+
+    Returns:
+        Tuple of (filtered candidates, number removed).
+    """
+    if not exclude_keywords:
+        return candidates, 0
+
+    exclude_lower = [kw.lower() for kw in exclude_keywords]
+    filtered = []
+
+    for c in candidates:
+        text = f"{c.title} {c.abstract or ''}".lower()
+        if not any(kw in text for kw in exclude_lower):
+            filtered.append(c)
+
+    removed = len(candidates) - len(filtered)
+
+    if removed > 0:
+        logger.info(
+            "Excluded %d candidates matching keywords (from %d keywords)",
+            removed,
+            len(exclude_keywords),
+        )
+
+    return filtered, removed
+
+
 __all__ = [
     "filter_recent",
     "limit_preprints",
     "filter_without_abstract",
+    "exclude_by_keywords",
     "PREPRINT_SOURCES",
 ]
+

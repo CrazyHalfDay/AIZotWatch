@@ -108,6 +108,10 @@ class ScoringConfig(BaseModel):
         description: str = ""  # Natural language interest description
         max_documents: int = 500  # Max documents for FAISS recall (must not exceed rerank API limit)
         top_k_interest: int = 5  # Final interest-based papers count
+        # Static exclude keywords (applied to ALL candidates, not just interest-based selection)
+        # These are used in addition to LLM-generated exclude keywords
+        exclude_keywords: list[str] = []
+
 
     class RerankConfig(BaseModel):
         """Rerank configuration (supports Voyage AI and DashScope).
