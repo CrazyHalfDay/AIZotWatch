@@ -23,6 +23,11 @@ sources:
     mailto: "${CROSSREF_MAILTO}"
     days_back: 2
     max_results: 3000
+  # EarthArXiv preprints (Earth sciences via OSF)
+  eartharxiv:
+    enabled: true  # Enable to get Earth science preprints
+    days_back: 7
+    max_results: 200
   # Abstract scraper (Camoufox + rule-based + LLM fallback)
   scraper:
     enabled: true
@@ -65,11 +70,14 @@ scoring:
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
     # Static exclude keywords (case-insensitive, applied to ALL candidates)
+    # 用于过滤 Nature/Science 等综合性期刊中的非地学文章
     exclude_keywords:
-      # Materials Science & Engineering
+      # ===== Materials Science & Engineering =====
       - "nanomaterial"
       - "nanoparticle"
       - "nanocomposite"
+      - "nanotube"
+      - "graphene"
       - "thin film"
       - "thin-film"
       - "battery"
@@ -90,7 +98,30 @@ scoring:
       - "catalyst"
       - "photocatalyst"
       - "electrocatalyst"
-      # Biomedical & Pharmaceutical
+      - "metamaterial"
+      - "meta-lens"
+      - "metasurface"
+      
+      # ===== Physics (Quantum/Optics/Condensed Matter) =====
+      - "quantum computing"
+      - "quantum bit"
+      - "qubit"
+      - "quantum entanglement"
+      - "superposition"
+      - "quantum spin"
+      - "levitating magnet"
+      - "metal-insulator transition"
+      - "wavefront shaping"
+      - "photonics"
+      - "optical fiber"
+      - "laser"
+      - "plasmon"
+      - "phosphorescence"
+      - "luminescence"
+      - "LED"
+      - "light-emitting"
+      
+      # ===== Biomedical & Pharmaceutical =====
       - "drug delivery"
       - "biosensor"
       - "biomedical"
@@ -98,17 +129,73 @@ scoring:
       - "therapeutic"
       - "nanocarrier"
       - "tissue engineering"
-      # Environmental Engineering (non-geological)
+      - "clinical trial"
+      - "cancer therapy"
+      - "tumor"
+      - "chemotherapy"
+      - "immunotherapy"
+      - "antibody"
+      - "vaccine"
+      - "analgesia"
+      - "pain relief"
+      - "depression"
+      - "nanobody"
+      
+      # ===== Molecular Biology & Genetics =====
+      - "gene expression"
+      - "gene regulation"
+      - "CRISPR"
+      - "genome editing"
+      - "transcription"
+      - "mRNA"
+      - "protein folding"
+      - "enzyme catalysis"
+      - "polysaccharide"
+      - "endocytosis"
+      - "cell signaling"
+      - "neural"
+      - "neuron"
+      - "brain"
+      - "synapse"
+      
+      # ===== Agricultural & Food Science =====
+      - "food science"
+      - "food processing"
+      - "agrochemical"
+      - "transgenic rice"
+      - "crop yield"
+      - "plant breeding"
+      - "pesticide"
+      
+      # ===== Environmental Engineering (non-geological) =====
       - "wastewater"
       - "sewage"
       - "pollutant degradation"
       - "adsorption material"
       - "membrane separation"
-      # Food & Agriculture
-      - "food science"
-      - "food processing"
-      - "agrochemical"
+      - "drinking water treatment"
+      - "air pollution"
+      
+      # ===== Other Non-Geoscience =====
+      - "woven metamaterial"
+      - "3D printing"
+      - "additive manufacturing"
+      - "artificial intelligence"
+      - "machine learning"
+      - "deep learning"
+      - "neural network"
+      - "daily briefing"
+      - "news feature"
 
+
+  # Micro/Macro fusion scoring configuration
+  fusion:
+    micro_weight: 0.65  # α: weight for micro-level score (1-α for macro)
+    knn_neighbors: 5    # Number of neighbors for k-NN scoring
+    # Similarity gate: filter out candidates with low relevance to your library
+    # This is the key setting to filter Nature/Science papers not related to geoscience
+    similarity_gate_enabled: true
+    min_similarity: 0.30  # Minimum similarity threshold (0.0-1.0, higher = stricter)
 
   # Rerank settings (only used when interests.enabled=true)
   # Provider MUST match embedding.provider when interests are enabled

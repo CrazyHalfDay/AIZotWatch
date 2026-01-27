@@ -452,6 +452,22 @@ class ProfileRanker:
                     )
                 )
 
+        # Apply similarity gate: filter out low-relevance candidates early
+        if fusion_config.similarity_gate_enabled:
+            min_sim = fusion_config.min_similarity
+            before_gate = len(scores_data)
+            scores_data = [s for s in scores_data if s[2] >= min_sim]  # s[2] is similarity
+            gated_count = before_gate - len(scores_data)
+            
+            if gated_count > 0:
+                logger.info(
+                    "Similarity gate (min=%.2f) filtered %d/%d candidates (%.1f%% removed)",
+                    min_sim,
+                    gated_count,
+                    before_gate,
+                    100 * gated_count / before_gate if before_gate else 0,
+                )
+
         # Compute thresholds from score distribution
         all_scores = [s[1] for s in scores_data]
         computed_thresholds = self._compute_thresholds(all_scores)

@@ -40,7 +40,7 @@ uv run zotwatch watch --push
 
 1. **Ingest** (`pipeline/ingest.py`): Fetches items from Zotero Web API, stores in SQLite
 2. **Profile Build** (`pipeline/profile.py`): Vectorizes library items using Voyage AI API (voyage-3.5), builds FAISS index, extracts top authors/venues
-3. **Candidate Fetch** (`pipeline/fetch.py`): Pulls recent papers from Crossref and arXiv
+3. **Candidate Fetch** (`pipeline/fetch.py`): Pulls recent papers from Crossref, arXiv, and EarthArXiv
 4. **Deduplication** (`pipeline/dedupe.py`): Filters out papers already in the user's library
 5. **Scoring** (`pipeline/score.py`): Ranks candidates using weighted combination of similarity, recency, citations, journal quality, and whitelist bonuses
 6. **Summarization** (`llm/summarizer.py`): Generates AI summaries via OpenRouter API

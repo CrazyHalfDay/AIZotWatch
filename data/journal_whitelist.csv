@@ -1,16 +1,19 @@
 issn,title,category,impact_factor
-1476-4687,Nature,GEOSCIENCES,50.5
-1095-9203,Science,GEOSCIENCES,44.7
+# 综合性顶刊（需要依赖 exclude_keywords 过滤非地学文章）
+1476-4687,Nature,GENERAL,50.5
+1095-9203,Science,GENERAL,44.7
+2041-1723,Nature Communications,GENERAL,14.7
+2375-2548,Science Advances,GENERAL,11.7
+1091-6490,Proceedings of the National Academy of Sciences (PNAS),GENERAL,9.4
+
+# 专业地球科学期刊（高影响因子）
 2662-138X,Nature Reviews Earth & Environment,GEOSCIENCES,37.2
 1758-6798,Nature Climate Change,GEOSCIENCES,29.6
 1944-9208,Reviews of Geophysics,GEOSCIENCES,25.2
 2095-9281,Science Bulletin,GEOSCIENCES,18.8
 1752-0908,Nature Geoscience,GEOSCIENCES,15.8
-2041-1723,Nature Communications,GEOSCIENCES,14.7
 1545-4495,Annual Review of Earth and Planetary Sciences,GEOSCIENCES,13.0
-2375-2548,Science Advances,GEOSCIENCES,11.7
 1872-6828,Earth-Science Reviews,GEOSCIENCES,10.8
-1091-6490,Proceedings of the National Academy of Sciences (PNAS),GEOSCIENCES,9.4
 2468-6050,Geoscience Frontiers,GEOSCIENCES,8.5
 2328-4277,Earth's Future,GEOSCIENCES,8.2
 2662-4435,Communications Earth & Environment,GEOSCIENCES,8.1

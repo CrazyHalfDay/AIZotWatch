@@ -51,6 +51,14 @@ class ArxivConfig(BaseModel):
     max_results: int = 500
 
 
+class EarthArxivConfig(BaseModel):
+    """EarthArXiv source configuration (Earth sciences preprints via OSF)."""
+
+    enabled: bool = False  # Disabled by default
+    days_back: int = 7
+    max_results: int = 200
+
+
 class ScraperConfig(BaseModel):
     """Abstract scraper configuration with sequential fetching and rule-based extraction."""
 
@@ -69,6 +77,7 @@ class SourcesConfig(BaseModel):
 
     crossref: CrossRefConfig = Field(default_factory=CrossRefConfig)
     arxiv: ArxivConfig = Field(default_factory=ArxivConfig)
+    eartharxiv: EarthArxivConfig = Field(default_factory=EarthArxivConfig)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
 
 
@@ -139,10 +148,16 @@ class ScoringConfig(BaseModel):
         - Micro: recency-weighted k-NN similarity S_micro
         - Macro: cluster-size-weighted similarity S_macro = max_k(sim_k * ln(1 + E_k))
         - Final similarity: similarity = α * S_micro + (1 - α) * S_macro
+        - Similarity gate: filter out candidates with similarity below threshold
         """
 
         micro_weight: float = 0.65  # α: weight for micro-level score
         knn_neighbors: int = 5  # L: neighbor count used for micro-level scoring
+        
+        # Similarity gate: early filtering of low-relevance candidates
+        # Candidates with similarity < min_similarity are filtered BEFORE final scoring
+        similarity_gate_enabled: bool = True
+        min_similarity: float = 0.25  # Minimum similarity to pass the gate (0.0-1.0)
 
     class JournalScoringConfig(BaseModel):
         """Journal impact factor scoring configuration.
