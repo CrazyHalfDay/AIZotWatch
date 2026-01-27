@@ -12,7 +12,7 @@ from zotwatch.utils.datetime import utc_today_start
 logger = logging.getLogger(__name__)
 
 # Preprint sources for ratio limiting
-PREPRINT_SOURCES = frozenset({"arxiv", "biorxiv", "medrxiv"})
+PREPRINT_SOURCES = frozenset({"arxiv", "biorxiv", "medrxiv", "eartharxiv"})
 
 
 def filter_recent(ranked: list[RankedWork], *, days: int = 7) -> list[RankedWork]:
