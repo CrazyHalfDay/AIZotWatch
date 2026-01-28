@@ -118,6 +118,10 @@ class ScoringConfig(BaseModel):
         description: str = ""  # Natural language interest description
         max_documents: int = 500  # Max documents for FAISS recall (must not exceed rerank API limit)
         top_k_interest: int = 5  # Final interest-based papers count
+        # Semantic similarity filter using interest description + embeddings
+        semantic_filter_enabled: bool = False
+        semantic_filter_min_similarity: float = 0.25
+        semantic_filter_max_candidates: int = 500
         # Positive keywords: candidates must match at least one to be kept
         include_keywords: list[str] = []
         include_min_matches: int = 1
