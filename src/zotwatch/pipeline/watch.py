@@ -39,7 +39,13 @@ from zotwatch.llm.factory import create_llm_client
 from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
-from zotwatch.pipeline.filters import exclude_by_keywords, filter_recent, filter_without_abstract, limit_preprints
+from zotwatch.pipeline.filters import (
+    exclude_by_keywords,
+    filter_recent,
+    filter_without_abstract,
+    include_by_keywords,
+    limit_preprints,
+)
 from zotwatch.pipeline.profile_ranker import ComputedThresholds
 from zotwatch.sources.zotero import ZoteroIngestor
 
@@ -297,11 +303,18 @@ class WatchPipeline:
                 candidates, removed = exclude_by_keywords(
                     candidates, interests_config.exclude_keywords
                 )
-                result.stats.candidates_after_keyword_filter = len(candidates)
                 if removed > 0:
-                    progress("filter", f"Excluded {removed} candidates by keywords")
-            else:
-                result.stats.candidates_after_keyword_filter = len(candidates)
+                    progress("filter", f"Excluded {removed} candidates by negative keywords")
+
+            # 6.6 Include by keywords (positive domain filter, if configured)
+            if interests_config.include_keywords:
+                candidates, removed = include_by_keywords(
+                    candidates, interests_config.include_keywords
+                )
+                if removed > 0:
+                    progress("filter", f"Positive filter removed {removed} non-domain candidates")
+
+            result.stats.candidates_after_keyword_filter = len(candidates)
 
             # 7. Filter without abstract (if required)
             if self.config.require_abstract:

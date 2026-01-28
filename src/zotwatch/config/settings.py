@@ -121,6 +121,12 @@ class ScoringConfig(BaseModel):
         # Static exclude keywords (applied to ALL candidates, not just interest-based selection)
         # These are used in addition to LLM-generated exclude keywords
         exclude_keywords: list[str] = []
+        # Positive filter: require at least one keyword in title/abstract (case-insensitive)
+        # Papers NOT matching any include_keyword are excluded (unless include_keywords is empty)
+        include_keywords: list[str] = []
+        # LLM relevance filter: use LLM to verify domain relevance
+        llm_relevance_filter: bool = False  # Enable LLM-based relevance screening
+        llm_relevance_batch_size: int = 20  # Number of papers per LLM relevance check
 
 
     class RerankConfig(BaseModel):

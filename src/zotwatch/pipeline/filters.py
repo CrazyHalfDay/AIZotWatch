@@ -172,10 +172,63 @@ def exclude_by_keywords(
     return filtered, removed
 
 
+def include_by_keywords(
+    candidates: list[CandidateWork],
+    include_keywords: list[str],
+) -> tuple[list[CandidateWork], int]:
+    """Keep only candidates matching at least one include keyword.
+
+    This is a positive filter - papers must contain at least one keyword
+    to be retained. Useful for domain-specific filtering.
+
+    Args:
+        candidates: List of candidate works to filter.
+        include_keywords: List of keywords to require (at least one match).
+
+    Returns:
+        Tuple of (filtered candidates, number removed).
+    """
+    if not include_keywords:
+        return candidates, 0
+
+    # Convert to tuple for hashability (enables lru_cache)
+    keywords_tuple = tuple(include_keywords)
+
+    # Use simple substring matching for short keyword lists
+    # Use regex for longer keyword lists
+    if len(include_keywords) <= 10:
+        include_lower = frozenset(kw.lower() for kw in include_keywords)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}".lower()
+            if any(kw in text for kw in include_lower):
+                filtered.append(c)
+    else:
+        pattern = _compile_keyword_pattern(keywords_tuple)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}"
+            if pattern.search(text):
+                filtered.append(c)
+
+    removed = len(candidates) - len(filtered)
+
+    if removed > 0:
+        logger.info(
+            "Positive filter: kept %d/%d candidates matching domain keywords (from %d keywords)",
+            len(filtered),
+            len(candidates),
+            len(include_keywords),
+        )
+
+    return filtered, removed
+
+
 __all__ = [
     "filter_recent",
     "limit_preprints",
     "filter_without_abstract",
     "exclude_by_keywords",
+    "include_by_keywords",
     "PREPRINT_SOURCES",
 ]
