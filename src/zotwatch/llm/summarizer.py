@@ -186,6 +186,9 @@ class PaperSummarizer:
         Uses ThreadPoolExecutor to parallelize LLM calls, significantly reducing
         total processing time when summarizing many papers.
 
+        When caching is enabled, each worker creates its own ProfileStorage
+        instance to avoid sharing SQLite connections across threads.
+
         Args:
             works: List of ranked works to summarize.
             force: If True, regenerate even if cached.
@@ -207,15 +210,25 @@ class PaperSummarizer:
         # Results indexed by position to preserve order
         results: dict[int, PaperSummary | None] = {}
         failed_ids: list[str] = []
+        storage_path = self.storage.path if self.storage else None
 
         def summarize_one(idx: int, work: RankedWork) -> tuple[int, PaperSummary | None, str | None]:
             """Summarize a single paper. Returns (index, summary, error_id)."""
+            worker_storage = ProfileStorage(storage_path) if storage_path else None
+            summarizer = (
+                self
+                if worker_storage is None
+                else PaperSummarizer(self.llm, storage=worker_storage, model=self.model)
+            )
             try:
-                summary = self.summarize(work, force=force)
+                summary = summarizer.summarize(work, force=force)
                 return (idx, summary, None)
             except Exception as e:
                 logger.error("Failed to summarize %s: %s", work.identifier, e)
                 return (idx, None, work.identifier)
+            finally:
+                if worker_storage is not None:
+                    worker_storage.close()
 
         logger.info("Summarizing %d papers with %d concurrent workers", total, workers)
 
