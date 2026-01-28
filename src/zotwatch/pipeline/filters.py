@@ -8,7 +8,10 @@ import re
 from datetime import timedelta
 from functools import lru_cache
 
+import numpy as np
+
 from zotwatch.core.models import CandidateWork, RankedWork
+from zotwatch.infrastructure.embedding.base import BaseEmbeddingProvider
 from zotwatch.utils.datetime import utc_today_start
 
 logger = logging.getLogger(__name__)
@@ -175,15 +178,19 @@ def exclude_by_keywords(
 def include_by_keywords(
     candidates: list[CandidateWork],
     include_keywords: list[str],
+    *,
+    min_matches: int = 1,
+    fields: tuple[str, ...] = ("title", "abstract"),
 ) -> tuple[list[CandidateWork], int]:
     """Keep only candidates matching at least one include keyword.
 
-    This is a positive filter - papers must contain at least one keyword
-    to be retained. Useful for domain-specific filtering.
+    Uses word boundary matching for larger keyword sets to reduce false positives.
 
     Args:
         candidates: List of candidate works to filter.
-        include_keywords: List of keywords to require (at least one match).
+        include_keywords: List of keywords to require.
+        min_matches: Minimum number of keyword matches to keep a candidate.
+        fields: Fields to check for matches ("title", "abstract").
 
     Returns:
         Tuple of (filtered candidates, number removed).
@@ -191,37 +198,114 @@ def include_by_keywords(
     if not include_keywords:
         return candidates, 0
 
-    # Convert to tuple for hashability (enables lru_cache)
     keywords_tuple = tuple(include_keywords)
+    min_matches = max(1, min_matches)
+    fields = tuple(field for field in fields if field in {"title", "abstract"})
+    if not fields:
+        fields = ("title", "abstract")
 
-    # Use simple substring matching for short keyword lists
-    # Use regex for longer keyword lists
+    def build_text(candidate: CandidateWork) -> str:
+        parts = []
+        if "title" in fields:
+            parts.append(candidate.title or "")
+        if "abstract" in fields:
+            parts.append(candidate.abstract or "")
+        return " ".join(parts)
+
     if len(include_keywords) <= 10:
         include_lower = frozenset(kw.lower() for kw in include_keywords)
         filtered = []
         for c in candidates:
-            text = f"{c.title} {c.abstract or ''}".lower()
-            if any(kw in text for kw in include_lower):
+            text = build_text(c).lower()
+            matches = sum(1 for kw in include_lower if kw in text)
+            if matches >= min_matches:
                 filtered.append(c)
     else:
         pattern = _compile_keyword_pattern(keywords_tuple)
         filtered = []
         for c in candidates:
-            text = f"{c.title} {c.abstract or ''}"
-            if pattern.search(text):
+            text = build_text(c)
+            matches = len(pattern.findall(text))
+            if matches >= min_matches:
                 filtered.append(c)
 
     removed = len(candidates) - len(filtered)
-
     if removed > 0:
         logger.info(
-            "Positive filter: kept %d/%d candidates matching domain keywords (from %d keywords)",
+            "Included %d candidates matching keywords (removed %d)",
             len(filtered),
-            len(candidates),
-            len(include_keywords),
+            removed,
         )
 
     return filtered, removed
+
+
+def filter_by_interest_similarity(
+    candidates: list[CandidateWork],
+    *,
+    query: str,
+    vectorizer: BaseEmbeddingProvider,
+    min_similarity: float = 0.25,
+    max_candidates: int | None = None,
+) -> tuple[list[CandidateWork], int]:
+    """Filter candidates by semantic similarity to interest query.
+
+    Uses embedding cosine similarity between the interest description and
+    candidate content. Candidates below min_similarity are removed.
+
+    Args:
+        candidates: List of candidate works to filter.
+        query: Interest description text used as the semantic anchor.
+        vectorizer: Embedding provider for similarity computation.
+        min_similarity: Minimum cosine similarity to keep a candidate.
+        max_candidates: Optional cap to limit embedding computation.
+
+    Returns:
+        Tuple of (filtered candidates, number removed).
+    """
+    if not candidates or not query.strip():
+        return candidates, 0
+
+    if max_candidates is not None and max_candidates > 0:
+        candidates_to_score = candidates[:max_candidates]
+        remainder = candidates[max_candidates:]
+    else:
+        candidates_to_score = candidates
+        remainder = []
+
+    texts = [c.content_for_embedding() for c in candidates_to_score]
+    if not texts:
+        return candidates, 0
+
+    query_vec = vectorizer.encode_query([query]).astype(np.float32)
+    candidate_vecs = vectorizer.encode(texts).astype(np.float32)
+
+    query_norm = np.linalg.norm(query_vec, axis=1, keepdims=True)
+    candidate_norms = np.linalg.norm(candidate_vecs, axis=1, keepdims=True)
+    query_norm = np.clip(query_norm, 1e-8, None)
+    candidate_norms = np.clip(candidate_norms, 1e-8, None)
+
+    query_unit = query_vec / query_norm
+    candidate_unit = candidate_vecs / candidate_norms
+    similarities = (candidate_unit @ query_unit.T).reshape(-1)
+
+    kept = []
+    for candidate, similarity in zip(candidates_to_score, similarities, strict=True):
+        if float(similarity) >= min_similarity:
+            kept.append(candidate)
+
+    kept.extend(remainder)
+    removed = len(candidates) - len(kept)
+
+    if removed > 0:
+        logger.info(
+            "Semantic interest filter removed %d/%d candidates (min_similarity=%.2f)",
+            removed,
+            len(candidates),
+            min_similarity,
+        )
+
+    return kept, removed
 
 
 __all__ = [
@@ -230,5 +314,6 @@ __all__ = [
     "filter_without_abstract",
     "exclude_by_keywords",
     "include_by_keywords",
+    "filter_by_interest_similarity",
     "PREPRINT_SOURCES",
 ]

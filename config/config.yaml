@@ -69,6 +69,30 @@ scoring:
       - 食品科学、农业化学、电化学电池、光电材料、超导材料、磁性材料
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
+    # Semantic similarity filter (interest description vs candidate title/abstract)
+    semantic_filter_enabled: true
+    semantic_filter_min_similarity: 0.28
+    semantic_filter_max_candidates: 800
+    # Static include keywords: keep only candidates that match at least one keyword
+    include_keywords:
+      - "geochemistry"
+      - "petrology"
+      - "geology"
+      - "volcanology"
+      - "mineralogy"
+      - "mantle"
+      - "subduction"
+      - "arc magma"
+      - "isotope"
+      - "sulfide"
+      - "ore deposit"
+      - "ore-forming"
+    # Require at least N keyword matches in title/abstract to keep
+    include_min_matches: 1
+    # Match fields: ["title"], ["abstract"], or ["title", "abstract"]
+    include_match_fields:
+      - "title"
+      - "abstract"
     # Static exclude keywords (case-insensitive, applied to ALL candidates)
     # 用于过滤 Nature/Science 等综合性期刊中的非地学文章
     exclude_keywords:
@@ -173,6 +197,15 @@ scoring:
       - "pollutant degradation"
       - "adsorption material"
       - "membrane separation"
+      - "gas separation"
+      - "xenon"
+      - "krypton"
+      - "coordination framework"
+      - "metal-organic framework"
+      - "MOF"
+      - "sorbent"
+      - "adsorbent"
+      - "adsorption"
       - "drinking water treatment"
       - "air pollution"
       
@@ -186,6 +219,10 @@ scoring:
       - "neural network"
       - "daily briefing"
       - "news feature"
+    # LLM relevance filter (semantic filtering using title + abstract)
+    llm_relevance_filter_enabled: false
+    llm_relevance_batch_size: 20
+    llm_relevance_max_candidates: 200
 
 
   # Micro/Macro fusion scoring configuration

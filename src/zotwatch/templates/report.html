@@ -707,11 +707,24 @@
             </svg>
             精选推荐总结
           </h3>
-          <div class="text-sm text-text-primary leading-relaxed space-y-2">
+          <div class="text-sm text-text-primary leading-relaxed space-y-3">
             <p>{{ overall_summaries.interest.overview }}</p>
-            {% for topic in overall_summaries.interest.topics %}
-            <p><strong class="text-accent">{{ topic.topic_name }}</strong>：{{ topic.description }}</p>
-            {% endfor %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {% for topic in overall_summaries.interest.topics %}
+              <div class="border border-border-color rounded-lg p-3 bg-bg-hover/50">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-accent font-semibold">{{ topic.topic_name }}</span>
+                  <span class="text-xs text-text-secondary">
+                    {{ topic.paper_count }} 篇
+                    {% if overall_summaries.interest.paper_count %}
+                    · {{ '%.0f'|format((topic.paper_count / overall_summaries.interest.paper_count) * 100) }}%
+                    {% endif %}
+                  </span>
+                </div>
+                <p class="text-sm text-text-primary">{{ topic.description }}</p>
+              </div>
+              {% endfor %}
+            </div>
           </div>
         </div>
         {% endif %}
@@ -724,11 +737,24 @@
             </svg>
             相似度推荐总结
           </h3>
-          <div class="text-sm text-text-primary leading-relaxed space-y-2">
+          <div class="text-sm text-text-primary leading-relaxed space-y-3">
             <p>{{ overall_summaries.similarity.overview }}</p>
-            {% for topic in overall_summaries.similarity.topics %}
-            <p><strong class="text-text-secondary">{{ topic.topic_name }}</strong>：{{ topic.description }}</p>
-            {% endfor %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {% for topic in overall_summaries.similarity.topics %}
+              <div class="border border-border-color rounded-lg p-3 bg-bg-hover/50">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-text-secondary font-semibold">{{ topic.topic_name }}</span>
+                  <span class="text-xs text-text-secondary">
+                    {{ topic.paper_count }} 篇
+                    {% if overall_summaries.similarity.paper_count %}
+                    · {{ '%.0f'|format((topic.paper_count / overall_summaries.similarity.paper_count) * 100) }}%
+                    {% endif %}
+                  </span>
+                </div>
+                <p class="text-sm text-text-primary">{{ topic.description }}</p>
+              </div>
+              {% endfor %}
+            </div>
           </div>
         </div>
         {% endif %}
