@@ -143,6 +143,7 @@ class ArchiveStorage:
         days: int = 90,
         sources: list[str] | None = None,
         labels: list[str] | None = None,
+        dedupe: bool = True,
     ) -> list[RankedWork]:
         """Get all archived works from the specified period.
 
@@ -150,28 +151,44 @@ class ArchiveStorage:
             days: Number of days to include.
             sources: Filter by sources (arXiv, Crossref, etc.).
             labels: Filter by labels (must_read, consider, etc.).
+            dedupe: If True, only return the latest record for each paper.
 
         Returns:
             List of RankedWork ordered by run_date desc, score desc.
         """
         conn = self.connect()
-        query = """
-            SELECT * FROM archive
-            WHERE run_date >= date('now', ?)
-        """
-        params: list = [f"-{days} days"]
+
+        if dedupe:
+            # Use subquery to get only the latest record for each identifier
+            query = """
+                SELECT a.* FROM archive a
+                INNER JOIN (
+                    SELECT identifier, MAX(run_date) as max_date
+                    FROM archive
+                    WHERE run_date >= date('now', ?)
+                    GROUP BY identifier
+                ) latest ON a.identifier = latest.identifier AND a.run_date = latest.max_date
+                WHERE a.run_date >= date('now', ?)
+            """
+            params: list = [f"-{days} days", f"-{days} days"]
+        else:
+            query = """
+                SELECT * FROM archive
+                WHERE run_date >= date('now', ?)
+            """
+            params = [f"-{days} days"]
 
         if sources:
             placeholders = ",".join("?" * len(sources))
-            query += f" AND source IN ({placeholders})"
+            query += f" AND a.source IN ({placeholders})" if dedupe else f" AND source IN ({placeholders})"
             params.extend(sources)
 
         if labels:
             placeholders = ",".join("?" * len(labels))
-            query += f" AND label IN ({placeholders})"
+            query += f" AND a.label IN ({placeholders})" if dedupe else f" AND label IN ({placeholders})"
             params.extend(labels)
 
-        query += " ORDER BY run_date DESC, score DESC"
+        query += " ORDER BY a.run_date DESC, a.score DESC" if dedupe else " ORDER BY run_date DESC, score DESC"
 
         cursor = conn.execute(query, params)
         return [self._row_to_work(row) for row in cursor.fetchall()]
@@ -249,10 +266,20 @@ class ArchiveStorage:
         return grouped
 
     def get_stats(self, days: int = 90) -> dict:
-        """Get archive statistics."""
+        """Get archive statistics (deduplicated by identifier)."""
         conn = self.connect()
         cursor = conn.execute(
             """
+            WITH latest AS (
+                SELECT a.*
+                FROM archive a
+                INNER JOIN (
+                    SELECT identifier, MAX(run_date) as max_date
+                    FROM archive
+                    WHERE run_date >= date('now', ?)
+                    GROUP BY identifier
+                ) m ON a.identifier = m.identifier AND a.run_date = m.max_date
+            )
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN label = 'must_read' THEN 1 ELSE 0 END) as must_read,
@@ -261,8 +288,7 @@ class ArchiveStorage:
                 COUNT(DISTINCT venue) as venue_count,
                 MIN(run_date) as earliest,
                 MAX(run_date) as latest
-            FROM archive
-            WHERE run_date >= date('now', ?)
+            FROM latest
             """,
             (f"-{days} days",),
         )
@@ -278,13 +304,22 @@ class ArchiveStorage:
         }
 
     def get_sources(self, days: int = 90) -> list[dict]:
-        """Get source distribution."""
+        """Get source distribution (deduplicated by identifier)."""
         conn = self.connect()
         cursor = conn.execute(
             """
+            WITH latest AS (
+                SELECT a.*
+                FROM archive a
+                INNER JOIN (
+                    SELECT identifier, MAX(run_date) as max_date
+                    FROM archive
+                    WHERE run_date >= date('now', ?)
+                    GROUP BY identifier
+                ) m ON a.identifier = m.identifier AND a.run_date = m.max_date
+            )
             SELECT source, COUNT(*) as count
-            FROM archive
-            WHERE run_date >= date('now', ?)
+            FROM latest
             GROUP BY source
             ORDER BY count DESC
             """,
