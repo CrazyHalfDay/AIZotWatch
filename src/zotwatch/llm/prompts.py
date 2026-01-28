@@ -63,6 +63,26 @@ Guidelines:
 
 Important: Only return the JSON object, no additional text or markdown formatting."""
 
+RELEVANCE_FILTER_PROMPT = """You are an academic research assistant. Determine whether each paper is relevant to the user's research interests.
+
+User research interests:
+{user_interests}
+
+Papers:
+{papers_list}
+
+Return a JSON object with:
+{{
+  "relevant_ids": ["paper_id_1", "paper_id_2", ...],
+  "irrelevant_ids": ["paper_id_3", "paper_id_4", ...]
+}}
+
+Rules:
+- Use the title and abstract meaning (semantic relevance), not just keyword overlap.
+- If a paper is borderline or uncertain, classify it as irrelevant.
+- Return only JSON (no markdown, no extra text).
+"""
+
 
 OVERALL_SUMMARY_PROMPT = """请根据以下学术论文列表，按研究主题进行分组并撰写总结。
 

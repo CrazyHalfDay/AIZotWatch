@@ -172,10 +172,76 @@ def exclude_by_keywords(
     return filtered, removed
 
 
+def include_by_keywords(
+    candidates: list[CandidateWork],
+    include_keywords: list[str],
+    *,
+    min_matches: int = 1,
+    fields: tuple[str, ...] = ("title", "abstract"),
+) -> tuple[list[CandidateWork], int]:
+    """Keep only candidates matching at least one include keyword.
+
+    Uses word boundary matching for larger keyword sets to reduce false positives.
+
+    Args:
+        candidates: List of candidate works to filter.
+        include_keywords: List of keywords to require.
+        min_matches: Minimum number of keyword matches to keep a candidate.
+        fields: Fields to check for matches ("title", "abstract").
+
+    Returns:
+        Tuple of (filtered candidates, number removed).
+    """
+    if not include_keywords:
+        return candidates, 0
+
+    keywords_tuple = tuple(include_keywords)
+    min_matches = max(1, min_matches)
+    fields = tuple(field for field in fields if field in {"title", "abstract"})
+    if not fields:
+        fields = ("title", "abstract")
+
+    def build_text(candidate: CandidateWork) -> str:
+        parts = []
+        if "title" in fields:
+            parts.append(candidate.title or "")
+        if "abstract" in fields:
+            parts.append(candidate.abstract or "")
+        return " ".join(parts)
+
+    if len(include_keywords) <= 10:
+        include_lower = frozenset(kw.lower() for kw in include_keywords)
+        filtered = []
+        for c in candidates:
+            text = build_text(c).lower()
+            matches = sum(1 for kw in include_lower if kw in text)
+            if matches >= min_matches:
+                filtered.append(c)
+    else:
+        pattern = _compile_keyword_pattern(keywords_tuple)
+        filtered = []
+        for c in candidates:
+            text = build_text(c)
+            matches = len(pattern.findall(text))
+            if matches >= min_matches:
+                filtered.append(c)
+
+    removed = len(candidates) - len(filtered)
+    if removed > 0:
+        logger.info(
+            "Included %d candidates matching keywords (removed %d)",
+            len(filtered),
+            removed,
+        )
+
+    return filtered, removed
+
+
 __all__ = [
     "filter_recent",
     "limit_preprints",
     "filter_without_abstract",
     "exclude_by_keywords",
+    "include_by_keywords",
     "PREPRINT_SOURCES",
 ]

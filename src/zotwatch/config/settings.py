@@ -118,9 +118,17 @@ class ScoringConfig(BaseModel):
         description: str = ""  # Natural language interest description
         max_documents: int = 500  # Max documents for FAISS recall (must not exceed rerank API limit)
         top_k_interest: int = 5  # Final interest-based papers count
+        # Positive keywords: candidates must match at least one to be kept
+        include_keywords: list[str] = []
+        include_min_matches: int = 1
+        include_match_fields: list[str] = ["title", "abstract"]
         # Static exclude keywords (applied to ALL candidates, not just interest-based selection)
         # These are used in addition to LLM-generated exclude keywords
         exclude_keywords: list[str] = []
+        # LLM relevance filter (uses title + abstract semantics)
+        llm_relevance_filter_enabled: bool = False
+        llm_relevance_batch_size: int = 20
+        llm_relevance_max_candidates: int = 200
 
 
     class RerankConfig(BaseModel):

@@ -1,5 +1,6 @@
 """HTML report generation."""
 
+import json
 import logging
 from datetime import datetime
 from importlib import resources
@@ -258,6 +259,29 @@ def render_archive(
             "consider": 0,
         }
 
+    data_filename = f"{Path(output_path).stem}-data.json"
+    data_path = Path(output_path).with_name(data_filename)
+
+    archive_data = {
+        "group_by": group_by,
+        "generated_at": generated_at.isoformat(),
+        "stats": stats,
+        "sources": sources or [],
+        "groups": [
+            {
+                "name": group_name,
+                "count": len(works),
+                "works": [_serialize_ranked_work(work) for work in works],
+            }
+            for group_name, works in grouped_works.items()
+        ],
+    }
+
+    data_path.write_text(
+        json.dumps(archive_data, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     rendered = template.render(
         grouped_works=grouped_works,
         generated_at=generated_at,
@@ -265,6 +289,7 @@ def render_archive(
         group_by=group_by,
         stats=stats,
         sources=sources or [],
+        data_url=data_filename,
     )
 
     path = Path(output_path)
@@ -272,6 +297,19 @@ def render_archive(
     path.write_text(rendered, encoding="utf-8")
     logger.info("Wrote archive page with %d groups to %s", len(grouped_works), path)
     return path
+
+
+def _serialize_ranked_work(work: RankedWork) -> dict:
+    data = work.model_dump(exclude={"summary"})
+    if data.get("published"):
+        data["published"] = data["published"].isoformat()
+    extra = data.get("extra") or {}
+    if isinstance(extra, dict) and extra.get("run_date"):
+        run_date = extra.get("run_date")
+        if hasattr(run_date, "isoformat"):
+            extra["run_date"] = run_date.isoformat()
+    data["extra"] = extra
+    return data
 
 
 __all__ = ["render_html", "render_archive"]

@@ -83,20 +83,20 @@
         <div>
           <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献归档</h1>
           <p class="text-xs md:text-sm text-text-secondary mt-1">
-            共 {{ stats.total }} 篇论文 ·
+            共 <span id="stat-total">{{ stats.total }}</span> 篇论文 ·
             最后更新: {{ generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
           </p>
         </div>
         <!-- Stats badges -->
         <div class="flex flex-wrap gap-2">
           <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-            必读 {{ stats.must_read }}
+            必读 <span id="stat-must-read">{{ stats.must_read }}</span>
           </span>
           <span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-sm font-medium">
-            推荐 {{ stats.consider }}
+            推荐 <span id="stat-consider">{{ stats.consider }}</span>
           </span>
           <span class="px-3 py-1 bg-bg-hover text-text-secondary rounded-full text-sm">
-            参考 {{ stats.total - stats.must_read - stats.consider }}
+            参考 <span id="stat-ignore">{{ stats.total - stats.must_read - stats.consider }}</span>
           </span>
         </div>
       </div>
@@ -125,14 +125,7 @@
       <div class="flex flex-wrap items-center gap-3">
         <span class="text-sm text-text-secondary">筛选:</span>
         <!-- Source Filter -->
-        <div class="flex gap-1">
-          {% for src in sources %}
-          <span class="filter-tag px-2 py-1 bg-bg-hover rounded text-xs" data-filter="source"
-            data-value="{{ src.source }}">
-            {{ src.source }} ({{ src.count }})
-          </span>
-          {% endfor %}
-        </div>
+        <div class="flex gap-1" id="source-filters"></div>
         <!-- Label Filter -->
         <div class="flex gap-1">
           <span class="filter-tag px-2 py-1 bg-green-50 text-green-700 rounded text-xs" data-filter="label"
@@ -147,138 +140,7 @@
   <!-- Main Content -->
   <main class="py-6">
     <div class="content-container">
-      {% for group_name, works in grouped_works.items() %}
-      <section class="mb-8" data-group="{{ group_name }}">
-        <!-- Group Header -->
-        <div class="flex items-center justify-between mb-4 pb-2 border-b border-border-color">
-          <h2 class="text-lg font-bold text-text-primary flex items-center gap-2">
-            {% if group_by == 'label' %}
-            {% if group_name == 'must_read' %}
-            <span class="w-3 h-3 bg-green-500 rounded-full"></span>必读
-            {% elif group_name == 'consider' %}
-            <span class="w-3 h-3 bg-amber-500 rounded-full"></span>推荐
-            {% else %}
-            <span class="w-3 h-3 bg-gray-400 rounded-full"></span>参考
-            {% endif %}
-            {% else %}
-            {{ group_name }}
-            {% endif %}
-          </h2>
-          <span class="text-sm text-text-secondary">{{ works|length }} 篇</span>
-        </div>
-
-        <!-- Works List -->
-        <div class="space-y-4">
-          {% for work in works %}
-          <article
-            class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors"
-            data-source="{{ work.source }}" data-label="{{ work.label }}" data-venue="{{ work.venue or 'Unknown' }}">
-            <div class="p-4 md:p-5">
-              <!-- Header: Label + Source + Date -->
-              <div class="flex items-center gap-2 mb-2 flex-wrap">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium
-                  {% if work.label == 'must_read' %}bg-green-100 text-green-700 border border-green-300
-                  {% elif work.label == 'consider' %}bg-amber-100 text-amber-700 border border-amber-300
-                  {% else %}bg-bg-hover text-text-secondary border border-border-color{% endif %}">
-                  {% if work.label == 'must_read' %}必读{% elif work.label == 'consider' %}推荐{% else %}参考{% endif %}
-                </span>
-                <span class="text-xs text-text-secondary">评分 {{ '%.2f'|format(work.score) }}</span>
-                <span class="text-xs text-text-secondary">·</span>
-                <span class="text-xs text-text-secondary">{{ work.source }}</span>
-                <span class="text-xs text-text-secondary">· {{ work.published.strftime('%Y-%m-%d') if work.published
-                  else work.extra.run_date }}</span>
-              </div>
-
-              <!-- Title -->
-              <div class="mb-2">
-                <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
-                  <a href="{{ work.url or '#' }}" target="_blank" rel="noopener"
-                    class="hover:text-accent transition-colors">
-                    {{ work.title }}
-                  </a>
-                </h3>
-                {% if work.translated_title %}
-                <p class="text-sm text-text-secondary mt-0.5 leading-snug">{{ work.translated_title }}</p>
-                {% endif %}
-              </div>
-
-              <!-- Venue + IF -->
-              <div class="text-xs text-text-secondary mb-2" title="{{ work.venue or '' }}">
-                {{ work.venue or '未知来源' }}
-                {% if work.is_chinese_core %}
-                <span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>
-                {% elif work.impact_factor %}
-                <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
-                {% endif %}
-              </div>
-
-              <!-- Authors -->
-              <p class="text-sm text-text-secondary mb-3">
-                {{ work.authors[:5] | join('，') }}{% if work.authors|length > 5 %} 等{% endif %}
-              </p>
-
-              <!-- DOI -->
-              {% if work.doi %}
-              <div class="text-xs text-text-secondary mb-3">
-                <span class="font-medium mr-1">DOI:</span>
-                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener"
-                  class="text-accent hover:underline">{{ work.doi }}</a>
-              </div>
-              {% endif %}
-
-              <!-- Abstract (Collapsible) -->
-              {% if work.abstract %}
-              <div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
-                <button onclick="toggleSection('abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}')"
-                  class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
-                  <span>原文摘要</span>
-                  <svg class="w-4 h-4 text-text-secondary transform transition-transform"
-                    id="icon-abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" fill="none"
-                    stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                <div id="abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" class="section-expand collapsed">
-                  <p class="text-sm text-text-secondary mt-2 leading-relaxed">{{ work.abstract }}</p>
-                </div>
-              </div>
-              {% endif %}
-
-              <!-- AI Summary -->
-              {% if work.summary %}
-              <div class="bg-accent/10 rounded-lg p-3 mb-3 border border-accent/30">
-                <h4 class="text-sm font-semibold text-accent mb-2 flex items-center">
-                  <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z" />
-                  </svg>
-                  AI 总结
-                </h4>
-                <div class="space-y-1.5 text-sm text-text-primary">
-                  <p><span class="font-medium text-accent">研究问题：</span>{{ work.summary.bullets.research_question }}</p>
-                  <p><span class="font-medium text-accent">研究方法：</span>{{ work.summary.bullets.methodology }}</p>
-                  <p><span class="font-medium text-accent">主要发现：</span>{{ work.summary.bullets.key_findings }}</p>
-                  <p><span class="font-medium text-accent">创新点：</span>{{ work.summary.bullets.innovation }}</p>
-                </div>
-              </div>
-              {% endif %}
-
-              <!-- Scores -->
-              <div class="pt-3 border-t border-border-color">
-                <div class="flex flex-wrap gap-2 text-xs">
-                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 {{ '%.2f'|format(work.similarity)
-                    }}</span>
-                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">
-                    期刊影响力 {{ '%.2f'|format(work.impact_factor_score) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-      </section>
-      {% endfor %}
+      <div id="archive-groups" class="space-y-8"></div>
     </div>
   </main>
 
@@ -306,55 +168,224 @@
       }
     }
 
-    // Filter functionality
-    document.querySelectorAll('.filter-tag').forEach(tag => {
-      tag.addEventListener('click', function () {
-        const filterType = this.dataset.filter;
-        const filterValue = this.dataset.value;
+    const dataUrl = "{{ data_url }}";
+    const pageSize = 30;
+    const activeFilters = {
+      source: new Set(),
+      label: new Set()
+    };
 
-        // Toggle active state
-        this.classList.toggle('active');
+    function normalizeGroupId(name) {
+      return name.toLowerCase().replace(/[^a-z0-9]+/gi, '-');
+    }
 
-        // Get all active filters
-        const activeFilters = {
-          source: [],
-          label: []
-        };
+    function formatDate(value) {
+      if (!value) return '未知';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toISOString().slice(0, 10);
+    }
 
-        document.querySelectorAll('.filter-tag.active').forEach(activeTag => {
-          const type = activeTag.dataset.filter;
-          const value = activeTag.dataset.value;
-          if (!activeFilters[type].includes(value)) {
-            activeFilters[type].push(value);
-          }
-        });
+    function updateStats(stats) {
+      if (!stats) return;
+      const total = stats.total ?? 0;
+      const mustRead = stats.must_read ?? 0;
+      const consider = stats.consider ?? 0;
+      const ignore = Math.max(0, total - mustRead - consider);
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-must-read').textContent = mustRead;
+      document.getElementById('stat-consider').textContent = consider;
+      document.getElementById('stat-ignore').textContent = ignore;
+    }
 
-        // Filter papers
-        document.querySelectorAll('.paper-card').forEach(card => {
-          const cardSource = card.dataset.source;
-          const cardLabel = card.dataset.label;
-
-          let show = true;
-
-          if (activeFilters.source.length > 0 && !activeFilters.source.includes(cardSource)) {
-            show = false;
-          }
-
-          if (activeFilters.label.length > 0 && !activeFilters.label.includes(cardLabel)) {
-            show = false;
-          }
-
-          card.style.display = show ? 'block' : 'none';
-        });
-
-        // Update group counts
-        document.querySelectorAll('section[data-group]').forEach(section => {
-          const visibleCards = section.querySelectorAll('.paper-card:not([style*="display: none"])').length;
-          const countEl = section.querySelector('h2 + span, .text-text-secondary');
-          // Note: This simple approach may not update counts correctly for all layouts
-        });
+    function buildSourceFilters(sources) {
+      const container = document.getElementById('source-filters');
+      container.innerHTML = '';
+      sources.forEach(src => {
+        const tag = document.createElement('span');
+        tag.className = 'filter-tag px-2 py-1 bg-bg-hover rounded text-xs';
+        tag.dataset.filter = 'source';
+        tag.dataset.value = src.source;
+        tag.textContent = `${src.source} (${src.count})`;
+        tag.addEventListener('click', handleFilterClick);
+        container.appendChild(tag);
       });
+    }
+
+    function handleFilterClick(event) {
+      const tag = event.currentTarget;
+      const type = tag.dataset.filter;
+      const value = tag.dataset.value;
+      tag.classList.toggle('active');
+      if (tag.classList.contains('active')) {
+        activeFilters[type].add(value);
+      } else {
+        activeFilters[type].delete(value);
+      }
+      renderGroups(window.archiveData);
+    }
+
+    function matchesFilters(work) {
+      if (activeFilters.source.size > 0 && !activeFilters.source.has(work.source)) {
+        return false;
+      }
+      if (activeFilters.label.size > 0 && !activeFilters.label.has(work.label)) {
+        return false;
+      }
+      return true;
+    }
+
+    function renderGroups(data) {
+      const container = document.getElementById('archive-groups');
+      container.innerHTML = '';
+      if (!data) return;
+
+      data.groups.forEach(group => {
+        const filteredWorks = group.works.filter(matchesFilters);
+        if (filteredWorks.length === 0) return;
+
+        const section = document.createElement('section');
+        section.className = 'mb-8';
+        section.dataset.group = group.name;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-4 pb-2 border-b border-border-color';
+
+        const title = document.createElement('h2');
+        title.className = 'text-lg font-bold text-text-primary flex items-center gap-2';
+        if (data.group_by === 'label') {
+          const dot = document.createElement('span');
+          dot.className = `w-3 h-3 rounded-full ${
+            group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : 'bg-gray-400')
+          }`;
+          title.appendChild(dot);
+          const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : '参考');
+          title.appendChild(document.createTextNode(labelName));
+        } else {
+          title.textContent = group.name;
+        }
+
+        const count = document.createElement('span');
+        count.className = 'text-sm text-text-secondary';
+        count.textContent = `${filteredWorks.length} 篇`;
+
+        header.appendChild(title);
+        header.appendChild(count);
+        section.appendChild(header);
+
+        const list = document.createElement('div');
+        list.className = 'space-y-4';
+        section.appendChild(list);
+
+        const state = { rendered: 0, works: filteredWorks, list };
+        renderChunk(state);
+
+        if (filteredWorks.length > state.rendered) {
+          const button = document.createElement('button');
+          button.className = 'mt-4 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors';
+          button.textContent = '加载更多';
+          button.addEventListener('click', () => {
+            renderChunk(state);
+            if (state.rendered >= filteredWorks.length) {
+              button.remove();
+            }
+          });
+          section.appendChild(button);
+        }
+
+        container.appendChild(section);
+      });
+    }
+
+    function renderChunk(state) {
+      const slice = state.works.slice(state.rendered, state.rendered + pageSize);
+      state.rendered += slice.length;
+      const fragment = document.createDocumentFragment();
+
+      slice.forEach((work, idx) => {
+        const article = document.createElement('article');
+        article.className = 'paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors';
+        article.dataset.source = work.source;
+        article.dataset.label = work.label;
+        article.dataset.venue = work.venue || 'Unknown';
+
+        const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
+        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : '参考');
+        const labelClass = work.label === 'must_read'
+          ? 'bg-green-100 text-green-700 border border-green-300'
+          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-bg-hover text-text-secondary border border-border-color');
+        const abstractId = `abstract-${normalizeGroupId(work.identifier || work.title)}-${state.rendered}-${idx}`;
+
+        article.innerHTML = `
+          <div class="p-4 md:p-5">
+            <div class="flex items-center gap-2 mb-2 flex-wrap">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${labelClass}">
+                ${labelText}
+              </span>
+              <span class="text-xs text-text-secondary">评分 ${work.score.toFixed(2)}</span>
+              <span class="text-xs text-text-secondary">·</span>
+              <span class="text-xs text-text-secondary">${work.source}</span>
+              <span class="text-xs text-text-secondary">· ${published}</span>
+            </div>
+            <div class="mb-2">
+              <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
+                <a href="${work.url || '#'}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">
+                  ${work.title}
+                </a>
+              </h3>
+              ${work.translated_title ? `<p class="text-sm text-text-secondary mt-0.5 leading-snug">${work.translated_title}</p>` : ''}
+            </div>
+            <div class="text-xs text-text-secondary mb-2" title="${work.venue || ''}">
+              ${work.venue || '未知来源'}
+              ${work.is_chinese_core ? '<span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>' : ''}
+              ${!work.is_chinese_core && work.impact_factor ? `<span class="ml-1 text-blue-600">(IF: ${work.impact_factor.toFixed(1)})</span>` : ''}
+            </div>
+            <p class="text-sm text-text-secondary mb-3">
+              ${(work.authors || []).slice(0, 5).join('，')}${(work.authors || []).length > 5 ? ' 等' : ''}
+            </p>
+            ${work.doi ? `<div class="text-xs text-text-secondary mb-3"><span class="font-medium mr-1">DOI:</span><a href="https://doi.org/${work.doi}" target="_blank" rel="noopener" class="text-accent hover:underline">${work.doi}</a></div>` : ''}
+            ${work.abstract ? `
+            <div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
+              <button onclick="toggleSection('${abstractId}')" class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
+                <span>原文摘要</span>
+                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              <div id="${abstractId}" class="section-expand collapsed">
+                <p class="text-sm text-text-secondary mt-2 leading-relaxed">${work.abstract}</p>
+              </div>
+            </div>` : ''}
+            <div class="pt-3 border-t border-border-color">
+              <div class="flex flex-wrap gap-2 text-xs">
+                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 ${work.similarity.toFixed(2)}</span>
+                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">期刊影响力 ${work.impact_factor_score.toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+        `;
+
+        fragment.appendChild(article);
+      });
+
+      state.list.appendChild(fragment);
+    }
+
+    document.querySelectorAll('.filter-tag').forEach(tag => {
+      tag.addEventListener('click', handleFilterClick);
     });
+
+    fetch(dataUrl)
+      .then(response => response.json())
+      .then(data => {
+        window.archiveData = data;
+        updateStats(data.stats);
+        buildSourceFilters(data.sources || []);
+        renderGroups(data);
+      })
+      .catch(err => {
+        console.error('Failed to load archive data:', err);
+      });
   </script>
 </body>
 

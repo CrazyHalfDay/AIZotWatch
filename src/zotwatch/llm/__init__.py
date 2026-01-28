@@ -8,6 +8,7 @@ from .kimi import KimiClient
 from .library_analyzer import LibraryAnalyzer
 from .openrouter import OpenRouterClient
 from .overall_summarizer import OverallSummarizer
+from .relevance_filter import PaperRelevanceFilter
 from .summarizer import PaperSummarizer
 from .translator import TitleTranslator
 
@@ -22,4 +23,5 @@ __all__ = [
     "OverallSummarizer",
     "LibraryAnalyzer",
     "TitleTranslator",
+    "PaperRelevanceFilter",
 ]

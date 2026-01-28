@@ -31,6 +31,7 @@ from zotwatch.llm import (
     InterestRefiner,
     LibraryAnalyzer,
     OverallSummarizer,
+    PaperRelevanceFilter,
     PaperSummarizer,
     TitleTranslator,
 )
@@ -39,7 +40,13 @@ from zotwatch.llm.factory import create_llm_client
 from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
-from zotwatch.pipeline.filters import exclude_by_keywords, filter_recent, filter_without_abstract, limit_preprints
+from zotwatch.pipeline.filters import (
+    exclude_by_keywords,
+    filter_recent,
+    filter_without_abstract,
+    include_by_keywords,
+    limit_preprints,
+)
 from zotwatch.pipeline.profile_ranker import ComputedThresholds
 from zotwatch.sources.zotero import ZoteroIngestor
 
@@ -67,8 +74,10 @@ class WatchStats:
 
     candidates_fetched: int = 0
     candidates_after_dedupe: int = 0
+    candidates_after_include_filter: int = 0
     candidates_after_keyword_filter: int = 0  # After exclude_keywords filtering
     candidates_after_abstract_filter: int = 0
+    candidates_after_llm_filter: int = 0
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
     summaries_generated: int = 0
@@ -293,6 +302,19 @@ class WatchPipeline:
 
             # 6.5 Exclude by keywords (if configured)
             interests_config = self.settings.scoring.interests
+            if interests_config.include_keywords:
+                candidates, removed = include_by_keywords(
+                    candidates,
+                    interests_config.include_keywords,
+                    min_matches=interests_config.include_min_matches,
+                    fields=tuple(interests_config.include_match_fields),
+                )
+                result.stats.candidates_after_include_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates missing include keywords")
+            else:
+                result.stats.candidates_after_include_filter = len(candidates)
+
             if interests_config.exclude_keywords:
                 candidates, removed = exclude_by_keywords(
                     candidates, interests_config.exclude_keywords
@@ -309,6 +331,31 @@ class WatchPipeline:
                 result.stats.candidates_after_abstract_filter = len(candidates)
                 if removed > 0:
                     progress("filter", f"Removed {removed} candidates without abstracts")
+            else:
+                result.stats.candidates_after_abstract_filter = len(candidates)
+
+            # 7.5 LLM relevance filter (optional)
+            if interests_config.llm_relevance_filter_enabled and self.settings.llm.enabled:
+                llm_client = self._get_llm_client()
+                if llm_client:
+                    progress("filter", "Applying LLM relevance filter...")
+                    llm_filter = PaperRelevanceFilter(
+                        llm_client,
+                        model=self.settings.llm.model,
+                        batch_size=interests_config.llm_relevance_batch_size,
+                        max_candidates=interests_config.llm_relevance_max_candidates,
+                    )
+                    candidates, removed = llm_filter.filter_candidates(
+                        candidates,
+                        user_interests=interests_config.description,
+                    )
+                    result.stats.candidates_after_llm_filter = len(candidates)
+                    if removed > 0:
+                        progress("filter", f"Removed {removed} candidates by LLM relevance")
+                else:
+                    result.stats.candidates_after_llm_filter = len(candidates)
+            else:
+                result.stats.candidates_after_llm_filter = len(candidates)
 
             # 8. Interest-based selection (optional)
             if interests_config.enabled and interests_config.description.strip():
