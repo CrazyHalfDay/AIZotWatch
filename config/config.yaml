@@ -69,6 +69,10 @@ scoring:
       - 食品科学、农业化学、电化学电池、光电材料、超导材料、磁性材料
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
+    # Semantic similarity filter (interest description vs candidate title/abstract)
+    semantic_filter_enabled: true
+    semantic_filter_min_similarity: 0.28
+    semantic_filter_max_candidates: 800
     # Static include keywords: keep only candidates that match at least one keyword
     include_keywords:
       - "geochemistry"

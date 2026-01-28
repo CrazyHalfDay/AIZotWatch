@@ -42,6 +42,7 @@ from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
 from zotwatch.pipeline.filters import (
     exclude_by_keywords,
+    filter_by_interest_similarity,
     filter_recent,
     filter_without_abstract,
     include_by_keywords,
@@ -77,6 +78,7 @@ class WatchStats:
     candidates_after_include_filter: int = 0
     candidates_after_keyword_filter: int = 0  # After exclude_keywords filtering
     candidates_after_abstract_filter: int = 0
+    candidates_after_semantic_filter: int = 0
     candidates_after_llm_filter: int = 0
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
@@ -333,6 +335,32 @@ class WatchPipeline:
                     progress("filter", f"Removed {removed} candidates without abstracts")
             else:
                 result.stats.candidates_after_abstract_filter = len(candidates)
+
+            # 7.25 Semantic interest filter (optional)
+            if (
+                interests_config.semantic_filter_enabled
+                and interests_config.description.strip()
+                and candidates
+            ):
+                progress("filter", "Applying semantic interest filter...")
+                semantic_vectorizer = CachingEmbeddingProvider(
+                    provider=create_embedding_provider(self.settings.embedding),
+                    cache=embedding_cache,
+                    source_type="candidate",
+                    ttl_days=self.settings.embedding.candidate_ttl_days,
+                )
+                candidates, removed = filter_by_interest_similarity(
+                    candidates,
+                    query=interests_config.description,
+                    vectorizer=semantic_vectorizer,
+                    min_similarity=interests_config.semantic_filter_min_similarity,
+                    max_candidates=interests_config.semantic_filter_max_candidates,
+                )
+                result.stats.candidates_after_semantic_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates by semantic similarity")
+            else:
+                result.stats.candidates_after_semantic_filter = len(candidates)
 
             # 7.5 LLM relevance filter (optional)
             if interests_config.llm_relevance_filter_enabled and self.settings.llm.enabled:
