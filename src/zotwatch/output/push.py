@@ -3,17 +3,17 @@
 import logging
 from collections.abc import Iterable
 
-import requests
-
 from zotwatch.config.settings import Settings
-from zotwatch.core.constants import ZOTERO_API_PAGE_SIZE
+from zotwatch.core.constants import DEFAULT_HTTP_TIMEOUT, ZOTERO_API_PAGE_SIZE
 from zotwatch.core.exceptions import StorageError
 from zotwatch.core.models import RankedWork
+from zotwatch.infrastructure.http import HTTPClient
 
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.zotero.org"
 COLLECTION_NAME = "AI Suggested"
+RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
 
 class ZoteroPusher:
@@ -21,15 +21,17 @@ class ZoteroPusher:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.session = requests.Session()
         api_key = settings.zotero.api.api_key
-        self.session.headers.update(
-            {
+        self.http = HTTPClient(
+            headers={
                 "Zotero-API-Version": "3",
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "ZotWatch/0.2",
                 "Content-Type": "application/json",
-            }
+            },
+            timeout=DEFAULT_HTTP_TIMEOUT,
+            max_retries=3,
+            retryable_statuses=RETRYABLE_STATUSES,
         )
         self.base_url = f"{API_BASE}/users/{settings.zotero.api.user_id}"
         self._collection_key: str | None = None
@@ -64,7 +66,7 @@ class ZoteroPusher:
 
         url = f"{self.base_url}/items"
         logger.info("Pushing %d recommendation notes to Zotero", len(payload))
-        resp = self.session.post(url, json=payload)
+        resp = self.http.post(url, json=payload)
         resp.raise_for_status()
         logger.info("Successfully pushed notes to Zotero collection %s", collection_key)
 
@@ -74,7 +76,7 @@ class ZoteroPusher:
             return self._collection_key
 
         collections_url = f"{self.base_url}/collections"
-        resp = self.session.get(collections_url, params={"limit": ZOTERO_API_PAGE_SIZE})
+        resp = self.http.get(collections_url, params={"limit": ZOTERO_API_PAGE_SIZE})
         resp.raise_for_status()
 
         for collection in resp.json():
@@ -85,7 +87,7 @@ class ZoteroPusher:
 
         # Create collection
         logger.info("Creating Zotero collection '%s'", COLLECTION_NAME)
-        resp = self.session.post(collections_url, json=[{"name": COLLECTION_NAME}])
+        resp = self.http.post(collections_url, json=[{"name": COLLECTION_NAME}])
         resp.raise_for_status()
         created = resp.json()[0]
         self._collection_key = created.get("successful", {}).get("0", {}).get("data", {}).get("key")
