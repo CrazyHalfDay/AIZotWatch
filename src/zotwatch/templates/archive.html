@@ -154,207 +154,155 @@
   </footer>
 
   <script>
-    function toggleSection(id) {
-      const el = document.getElementById(id);
-      const icon = document.getElementById('icon-' + id);
-      if (el.classList.contains('collapsed')) {
-        el.classList.remove('collapsed');
-        el.classList.add('expanded');
-        if (icon) icon.style.transform = 'rotate(180deg)';
-      } else {
-        el.classList.remove('expanded');
-        el.classList.add('collapsed');
-        if (icon) icon.style.transform = 'rotate(0deg)';
+    // Performance-optimized archive viewer for large datasets (10k+ papers)
+    (function() {
+      'use strict';
+
+      // Configuration
+      const CONFIG = {
+        pageSize: 50,              // Items per chunk
+        scrollThreshold: 300,     // px from bottom to trigger load
+        debounceDelay: 150,       // ms debounce for filters
+        virtualItemHeight: 280,   // Estimated item height for virtual scroll
+        maxVisibleItems: 100,     // Max DOM items per group before recycling
+      };
+
+      const dataUrl = "{{ data_url }}";
+      const activeFilters = { source: new Set(), label: new Set() };
+      let archiveData = null;
+      let groupStates = new Map(); // Track render state per group
+      let intersectionObserver = null;
+
+      // Utility functions
+      function normalizeGroupId(name) {
+        return name.toLowerCase().replace(/[^a-z0-9]+/gi, '-');
       }
-    }
 
-    const dataUrl = "{{ data_url }}";
-    const pageSize = 30;
-    const activeFilters = {
-      source: new Set(),
-      label: new Set()
-    };
-
-    function normalizeGroupId(name) {
-      return name.toLowerCase().replace(/[^a-z0-9]+/gi, '-');
-    }
-
-    function formatDate(value) {
-      if (!value) return '未知';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
-      return date.toISOString().slice(0, 10);
-    }
-
-    function updateStats(stats) {
-      if (!stats) return;
-      const total = stats.total ?? 0;
-      const mustRead = stats.must_read ?? 0;
-      const consider = stats.consider ?? 0;
-      const ignore = Math.max(0, total - mustRead - consider);
-      document.getElementById('stat-total').textContent = total;
-      document.getElementById('stat-must-read').textContent = mustRead;
-      document.getElementById('stat-consider').textContent = consider;
-      document.getElementById('stat-ignore').textContent = ignore;
-    }
-
-    function buildSourceFilters(sources) {
-      const container = document.getElementById('source-filters');
-      container.innerHTML = '';
-      sources.forEach(src => {
-        const tag = document.createElement('span');
-        tag.className = 'filter-tag px-2 py-1 bg-bg-hover rounded text-xs';
-        tag.dataset.filter = 'source';
-        tag.dataset.value = src.source;
-        tag.textContent = `${src.source} (${src.count})`;
-        tag.addEventListener('click', handleFilterClick);
-        container.appendChild(tag);
-      });
-    }
-
-    function handleFilterClick(event) {
-      const tag = event.currentTarget;
-      const type = tag.dataset.filter;
-      const value = tag.dataset.value;
-      tag.classList.toggle('active');
-      if (tag.classList.contains('active')) {
-        activeFilters[type].add(value);
-      } else {
-        activeFilters[type].delete(value);
+      function formatDate(value) {
+        if (!value) return '未知';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toISOString().slice(0, 10);
       }
-      renderGroups(window.archiveData);
-    }
 
-    function matchesFilters(work) {
-      if (activeFilters.source.size > 0 && !activeFilters.source.has(work.source)) {
-        return false;
+      function escapeHtml(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
       }
-      if (activeFilters.label.size > 0 && !activeFilters.label.has(work.label)) {
-        return false;
+
+      function debounce(fn, delay) {
+        let timer = null;
+        return function(...args) {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn.apply(this, args), delay);
+        };
       }
-      return true;
-    }
 
-    function renderGroups(data) {
-      const container = document.getElementById('archive-groups');
-      container.innerHTML = '';
-      if (!data) return;
+      // Toggle section (for abstracts)
+      window.toggleSection = function(id) {
+        const el = document.getElementById(id);
+        const icon = document.getElementById('icon-' + id);
+        if (!el) return;
+        const isCollapsed = el.classList.contains('collapsed');
+        el.classList.toggle('collapsed', !isCollapsed);
+        el.classList.toggle('expanded', isCollapsed);
+        if (icon) icon.style.transform = isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+      };
 
-      data.groups.forEach(group => {
-        const filteredWorks = group.works.filter(matchesFilters);
-        if (filteredWorks.length === 0) return;
+      function updateStats(stats) {
+        if (!stats) return;
+        const total = stats.total ?? 0;
+        const mustRead = stats.must_read ?? 0;
+        const consider = stats.consider ?? 0;
+        document.getElementById('stat-total').textContent = total;
+        document.getElementById('stat-must-read').textContent = mustRead;
+        document.getElementById('stat-consider').textContent = consider;
+        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider);
+      }
 
-        const section = document.createElement('section');
-        section.className = 'mb-8';
-        section.dataset.group = group.name;
+      function buildSourceFilters(sources) {
+        const container = document.getElementById('source-filters');
+        const fragment = document.createDocumentFragment();
+        sources.forEach(src => {
+          const tag = document.createElement('span');
+          tag.className = 'filter-tag px-2 py-1 bg-bg-hover rounded text-xs';
+          tag.dataset.filter = 'source';
+          tag.dataset.value = src.source;
+          tag.textContent = `${src.source} (${src.count})`;
+          tag.addEventListener('click', handleFilterClick);
+          fragment.appendChild(tag);
+        });
+        container.innerHTML = '';
+        container.appendChild(fragment);
+      }
 
-        const header = document.createElement('div');
-        header.className = 'flex items-center justify-between mb-4 pb-2 border-b border-border-color';
-
-        const title = document.createElement('h2');
-        title.className = 'text-lg font-bold text-text-primary flex items-center gap-2';
-        if (data.group_by === 'label') {
-          const dot = document.createElement('span');
-          dot.className = `w-3 h-3 rounded-full ${
-            group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : 'bg-gray-400')
-          }`;
-          title.appendChild(dot);
-          const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : '参考');
-          title.appendChild(document.createTextNode(labelName));
+      function handleFilterClick(event) {
+        const tag = event.currentTarget;
+        const type = tag.dataset.filter;
+        const value = tag.dataset.value;
+        tag.classList.toggle('active');
+        if (tag.classList.contains('active')) {
+          activeFilters[type].add(value);
         } else {
-          title.textContent = group.name;
+          activeFilters[type].delete(value);
         }
+        debouncedRender();
+      }
 
-        const count = document.createElement('span');
-        count.className = 'text-sm text-text-secondary';
-        count.textContent = `${filteredWorks.length} 篇`;
+      function matchesFilters(work) {
+        if (activeFilters.source.size > 0 && !activeFilters.source.has(work.source)) return false;
+        if (activeFilters.label.size > 0 && !activeFilters.label.has(work.label)) return false;
+        return true;
+      }
 
-        header.appendChild(title);
-        header.appendChild(count);
-        section.appendChild(header);
+      // Pre-filter works once and cache results
+      function getFilteredGroups(data) {
+        if (!data) return [];
+        return data.groups.map(group => ({
+          ...group,
+          filteredWorks: group.works.filter(matchesFilters)
+        })).filter(g => g.filteredWorks.length > 0);
+      }
 
-        const list = document.createElement('div');
-        list.className = 'space-y-4';
-        section.appendChild(list);
-
-        const state = { rendered: 0, works: filteredWorks, list };
-        renderChunk(state);
-
-        if (filteredWorks.length > state.rendered) {
-          const button = document.createElement('button');
-          button.className = 'mt-4 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors';
-          button.textContent = '加载更多';
-          button.addEventListener('click', () => {
-            renderChunk(state);
-            if (state.rendered >= filteredWorks.length) {
-              button.remove();
-            }
-          });
-          section.appendChild(button);
-        }
-
-        container.appendChild(section);
-      });
-    }
-
-    function renderChunk(state) {
-      const slice = state.works.slice(state.rendered, state.rendered + pageSize);
-      state.rendered += slice.length;
-      const fragment = document.createDocumentFragment();
-
-      slice.forEach((work, idx) => {
-        const article = document.createElement('article');
-        article.className = 'paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors';
-        article.dataset.source = work.source;
-        article.dataset.label = work.label;
-        article.dataset.venue = work.venue || 'Unknown';
-
+      // Create article HTML using template literals (faster than DOM manipulation)
+      function createArticleHTML(work, groupId, idx) {
         const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
         const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : '参考');
         const labelClass = work.label === 'must_read'
           ? 'bg-green-100 text-green-700 border border-green-300'
           : (work.label === 'consider' ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-bg-hover text-text-secondary border border-border-color');
-        const abstractId = `abstract-${normalizeGroupId(work.identifier || work.title)}-${state.rendered}-${idx}`;
+        const abstractId = `abs-${groupId}-${idx}`;
+        const title = escapeHtml(work.title);
+        const venue = escapeHtml(work.venue || '未知来源');
+        const authors = (work.authors || []).slice(0, 5).map(escapeHtml).join('，');
+        const hasMore = (work.authors || []).length > 5;
 
-        article.innerHTML = `
+        return `<article class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors" data-idx="${idx}">
           <div class="p-4 md:p-5">
             <div class="flex items-center gap-2 mb-2 flex-wrap">
-              <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${labelClass}">
-                ${labelText}
-              </span>
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${labelClass}">${labelText}</span>
               <span class="text-xs text-text-secondary">评分 ${work.score.toFixed(2)}</span>
               <span class="text-xs text-text-secondary">·</span>
-              <span class="text-xs text-text-secondary">${work.source}</span>
+              <span class="text-xs text-text-secondary">${escapeHtml(work.source)}</span>
               <span class="text-xs text-text-secondary">· ${published}</span>
             </div>
             <div class="mb-2">
               <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
-                <a href="${work.url || '#'}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">
-                  ${work.title}
-                </a>
+                <a href="${escapeHtml(work.url || '#')}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">${title}</a>
               </h3>
-              ${work.translated_title ? `<p class="text-sm text-text-secondary mt-0.5 leading-snug">${work.translated_title}</p>` : ''}
+              ${work.translated_title ? `<p class="text-sm text-text-secondary mt-0.5 leading-snug">${escapeHtml(work.translated_title)}</p>` : ''}
             </div>
-            <div class="text-xs text-text-secondary mb-2" title="${work.venue || ''}">
-              ${work.venue || '未知来源'}
-              ${work.is_chinese_core ? '<span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>' : ''}
-              ${!work.is_chinese_core && work.impact_factor ? `<span class="ml-1 text-blue-600">(IF: ${work.impact_factor.toFixed(1)})</span>` : ''}
-            </div>
-            <p class="text-sm text-text-secondary mb-3">
-              ${(work.authors || []).slice(0, 5).join('，')}${(work.authors || []).length > 5 ? ' 等' : ''}
-            </p>
-            ${work.doi ? `<div class="text-xs text-text-secondary mb-3"><span class="font-medium mr-1">DOI:</span><a href="https://doi.org/${work.doi}" target="_blank" rel="noopener" class="text-accent hover:underline">${work.doi}</a></div>` : ''}
-            ${work.abstract ? `
-            <div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
+            <div class="text-xs text-text-secondary mb-2">${venue}${work.is_chinese_core ? '<span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>' : ''}${!work.is_chinese_core && work.impact_factor ? `<span class="ml-1 text-blue-600">(IF: ${work.impact_factor.toFixed(1)})</span>` : ''}</div>
+            <p class="text-sm text-text-secondary mb-3">${authors}${hasMore ? ' 等' : ''}</p>
+            ${work.doi ? `<div class="text-xs text-text-secondary mb-3"><span class="font-medium mr-1">DOI:</span><a href="https://doi.org/${escapeHtml(work.doi)}" target="_blank" rel="noopener" class="text-accent hover:underline">${escapeHtml(work.doi)}</a></div>` : ''}
+            ${work.abstract ? `<div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
               <button onclick="toggleSection('${abstractId}')" class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
                 <span>原文摘要</span>
-                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
+                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
               </button>
-              <div id="${abstractId}" class="section-expand collapsed">
-                <p class="text-sm text-text-secondary mt-2 leading-relaxed">${work.abstract}</p>
-              </div>
+              <div id="${abstractId}" class="section-expand collapsed"><p class="text-sm text-text-secondary mt-2 leading-relaxed">${escapeHtml(work.abstract)}</p></div>
             </div>` : ''}
             <div class="pt-3 border-t border-border-color">
               <div class="flex flex-wrap gap-2 text-xs">
@@ -363,29 +311,175 @@
               </div>
             </div>
           </div>
-        `;
+        </article>`;
+      }
 
-        fragment.appendChild(article);
+      // Render a chunk of items for a group
+      function renderChunk(state, count = CONFIG.pageSize) {
+        const { works, list, groupId } = state;
+        const start = state.rendered;
+        const end = Math.min(start + count, works.length);
+        if (start >= end) return;
+
+        // Use insertAdjacentHTML for better performance than innerHTML
+        const htmlParts = [];
+        for (let i = start; i < end; i++) {
+          htmlParts.push(createArticleHTML(works[i], groupId, i));
+        }
+        list.insertAdjacentHTML('beforeend', htmlParts.join(''));
+        state.rendered = end;
+
+        // Update load more button visibility
+        const btn = state.loadMoreBtn;
+        if (btn) {
+          if (state.rendered >= works.length) {
+            btn.style.display = 'none';
+          } else {
+            btn.textContent = `加载更多 (${works.length - state.rendered} 剩余)`;
+          }
+        }
+      }
+
+      // Setup Intersection Observer for lazy loading
+      function setupLazyLoad(state) {
+        if (!intersectionObserver) {
+          intersectionObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+              if (entry.isIntersecting) {
+                const groupId = entry.target.dataset.groupId;
+                const state = groupStates.get(groupId);
+                if (state && state.rendered < state.works.length) {
+                  renderChunk(state);
+                }
+              }
+            });
+          }, { rootMargin: '200px' });
+        }
+
+        // Create sentinel element for infinite scroll
+        const sentinel = document.createElement('div');
+        sentinel.className = 'load-sentinel h-1';
+        sentinel.dataset.groupId = state.groupId;
+        state.list.parentElement.appendChild(sentinel);
+        intersectionObserver.observe(sentinel);
+        state.sentinel = sentinel;
+      }
+
+      function renderGroups(data) {
+        const container = document.getElementById('archive-groups');
+
+        // Clear previous observers
+        if (intersectionObserver) {
+          intersectionObserver.disconnect();
+        }
+        groupStates.clear();
+
+        const filteredGroups = getFilteredGroups(data);
+
+        // Build all HTML at once for initial render
+        const fragment = document.createDocumentFragment();
+
+        filteredGroups.forEach((group, gIdx) => {
+          const groupId = `g${gIdx}-${normalizeGroupId(group.name)}`;
+          const section = document.createElement('section');
+          section.className = 'mb-8';
+          section.dataset.group = group.name;
+
+          // Header
+          const header = document.createElement('div');
+          header.className = 'flex items-center justify-between mb-4 pb-2 border-b border-border-color';
+
+          let titleContent = '';
+          if (data.group_by === 'label') {
+            const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : 'bg-gray-400');
+            const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : '参考');
+            titleContent = `<span class="w-3 h-3 rounded-full ${dotClass}"></span>${labelName}`;
+          } else {
+            titleContent = escapeHtml(group.name);
+          }
+
+          header.innerHTML = `
+            <h2 class="text-lg font-bold text-text-primary flex items-center gap-2">${titleContent}</h2>
+            <span class="text-sm text-text-secondary">${group.filteredWorks.length} 篇</span>
+          `;
+          section.appendChild(header);
+
+          // List container
+          const list = document.createElement('div');
+          list.className = 'space-y-4';
+          section.appendChild(list);
+
+          // Load more button
+          const loadMoreBtn = document.createElement('button');
+          loadMoreBtn.className = 'mt-4 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors';
+          loadMoreBtn.style.display = group.filteredWorks.length > CONFIG.pageSize ? 'block' : 'none';
+          section.appendChild(loadMoreBtn);
+
+          // Track state
+          const state = {
+            groupId,
+            works: group.filteredWorks,
+            list,
+            rendered: 0,
+            loadMoreBtn,
+            sentinel: null
+          };
+          groupStates.set(groupId, state);
+
+          // Load more click handler
+          loadMoreBtn.addEventListener('click', () => renderChunk(state));
+
+          // Initial render
+          renderChunk(state);
+
+          // Setup lazy loading for remaining items
+          if (state.works.length > state.rendered) {
+            setupLazyLoad(state);
+          }
+
+          fragment.appendChild(section);
+        });
+
+        container.innerHTML = '';
+        container.appendChild(fragment);
+
+        // Update filtered stats
+        const filteredTotal = filteredGroups.reduce((sum, g) => sum + g.filteredWorks.length, 0);
+        const filteredMustRead = filteredGroups.reduce((sum, g) =>
+          sum + g.filteredWorks.filter(w => w.label === 'must_read').length, 0);
+        const filteredConsider = filteredGroups.reduce((sum, g) =>
+          sum + g.filteredWorks.filter(w => w.label === 'consider').length, 0);
+
+        if (activeFilters.source.size > 0 || activeFilters.label.size > 0) {
+          document.getElementById('stat-total').textContent = `${filteredTotal} / ${data.stats.total}`;
+        }
+      }
+
+      // Debounced render for filter changes
+      const debouncedRender = debounce(() => {
+        if (archiveData) renderGroups(archiveData);
+      }, CONFIG.debounceDelay);
+
+      // Initialize filter click handlers
+      document.querySelectorAll('.filter-tag').forEach(tag => {
+        tag.addEventListener('click', handleFilterClick);
       });
 
-      state.list.appendChild(fragment);
-    }
-
-    document.querySelectorAll('.filter-tag').forEach(tag => {
-      tag.addEventListener('click', handleFilterClick);
-    });
-
-    fetch(dataUrl)
-      .then(response => response.json())
-      .then(data => {
-        window.archiveData = data;
-        updateStats(data.stats);
-        buildSourceFilters(data.sources || []);
-        renderGroups(data);
-      })
-      .catch(err => {
-        console.error('Failed to load archive data:', err);
-      });
+      // Load data
+      fetch(dataUrl)
+        .then(response => response.json())
+        .then(data => {
+          archiveData = data;
+          updateStats(data.stats);
+          buildSourceFilters(data.sources || []);
+          renderGroups(data);
+        })
+        .catch(err => {
+          console.error('Failed to load archive data:', err);
+          document.getElementById('archive-groups').innerHTML =
+            '<p class="text-center text-red-500 py-8">加载数据失败，请刷新页面重试</p>';
+        });
+    })();
   </script>
 </body>
 
