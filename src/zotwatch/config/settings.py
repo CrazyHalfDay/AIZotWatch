@@ -60,7 +60,7 @@ class EarthArxivConfig(BaseModel):
 
 
 class ScraperConfig(BaseModel):
-    """Abstract scraper configuration with sequential fetching and rule-based extraction."""
+    """Abstract scraper configuration with concurrent fetching and rule-based extraction."""
 
     enabled: bool = True
     rate_limit_delay: float = 1.0  # Seconds between requests
@@ -70,6 +70,7 @@ class ScraperConfig(BaseModel):
     llm_max_tokens: int = 1024  # Max tokens for LLM response
     llm_temperature: float = 0.1  # LLM temperature for extraction
     use_llm_fallback: bool = True  # Use LLM when rule extraction fails
+    max_workers: int = 3  # Maximum concurrent workers for batch fetching
 
 
 class SourcesConfig(BaseModel):
@@ -316,6 +317,7 @@ class ClusteringConfig(BaseModel):
 
     # K-means algorithm parameters
     kmeans_iterations: int = 20  # Number of k-means iterations
+    kmeans_seed: int = 42  # Random seed for reproducibility
     subsample_threshold: int = 5000  # Subsample above this for silhouette search
     representative_title_count: int = 5  # Number of representative titles per cluster
 
@@ -354,6 +356,8 @@ class WatchPipelineConfig(BaseModel):
     max_preprint_ratio: float = 0.9  # Maximum ratio of preprints in results
     top_k: int = 20  # Default number of recommendations
     require_abstract: bool = True  # Filter out candidates without abstracts
+    dedupe_threshold: float = 0.9  # Fuzzy title matching threshold for deduplication
+    summarizer_max_workers: int = 5  # Max concurrent workers for LLM summarization
 
 
 # Main Settings

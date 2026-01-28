@@ -230,6 +230,10 @@ class WatchPipeline:
         Returns:
             WatchResult containing ranked works, statistics, and optional
             researcher profile, summaries, and interest works.
+
+        Note:
+            Resources are cleaned up in a finally block to ensure cleanup
+            happens even if an exception occurs during pipeline execution.
         """
         result = WatchResult()
         storage = self._get_storage()
@@ -241,113 +245,117 @@ class WatchPipeline:
             if on_progress:
                 on_progress(stage, msg)
 
-        progress("start", "Starting ZotWatch pipeline...")
+        try:
+            progress("start", "Starting ZotWatch pipeline...")
 
-        # 1. Ensure profile exists
-        profile_built = self._ensure_profile_exists(on_progress=progress)
-        if profile_built:
-            progress("profile", "Profile built from Zotero library")
+            # 1. Ensure profile exists
+            profile_built = self._ensure_profile_exists(on_progress=progress)
+            if profile_built:
+                progress("profile", "Profile built from Zotero library")
 
-        ingest_stats = None
+            ingest_stats = None
 
-        # 2. Incremental Zotero sync (skip if we just did a full rebuild)
-        if not profile_built:
-            progress("sync", "Syncing with Zotero...")
-            ingest_stats = self._run_ingest(storage, full=False, on_progress=progress)
+            # 2. Incremental Zotero sync (skip if we just did a full rebuild)
+            if not profile_built:
+                progress("sync", "Syncing with Zotero...")
+                ingest_stats = self._run_ingest(storage, full=False, on_progress=progress)
 
-            # 2.1 Refresh profile artifacts when library changed
-            if ingest_stats and (ingest_stats.fetched > 0 or ingest_stats.removed > 0):
-                progress("profile", "Updating profile embeddings and FAISS index...")
-                self._build_profile_from_storage(full=False)
+                # 2.1 Refresh profile artifacts when library changed
+                if ingest_stats and (ingest_stats.fetched > 0 or ingest_stats.removed > 0):
+                    progress("profile", "Updating profile embeddings and FAISS index...")
+                    self._build_profile_from_storage(full=False)
 
-        # 3. Analyze researcher profile (optional)
-        if self.settings.llm.enabled:
-            result.researcher_profile = self._analyze_profile(storage, progress)
+            # 3. Analyze researcher profile (optional)
+            if self.settings.llm.enabled:
+                result.researcher_profile = self._analyze_profile(storage, progress)
 
-        # 4. Fetch candidates
-        fetch_start = time.time()
-        progress("fetch", "Fetching candidates from configured sources...")
-        fetcher = CandidateFetcher(self.settings, self.base_dir)
-        candidates = fetcher.fetch_all()
-        result.stats.candidates_fetched = len(candidates)
-        fetch_elapsed = time.time() - fetch_start
-        progress("fetch", f"Found {len(candidates)} candidates ({fetch_elapsed:.1f}s)")
+            # 4. Fetch candidates
+            fetch_start = time.time()
+            progress("fetch", "Fetching candidates from configured sources...")
+            fetcher = CandidateFetcher(self.settings, self.base_dir)
+            candidates = fetcher.fetch_all()
+            result.stats.candidates_fetched = len(candidates)
+            fetch_elapsed = time.time() - fetch_start
+            progress("fetch", f"Found {len(candidates)} candidates ({fetch_elapsed:.1f}s)")
 
-        # 5. Enrich abstracts (optional)
-        if self.settings.sources.scraper.enabled:
-            candidates, enrich_stats = self._enrich_abstracts(candidates, progress)
-            result.stats.abstracts_enriched = enrich_stats.enriched
+            # 5. Enrich abstracts (optional)
+            if self.settings.sources.scraper.enabled:
+                candidates, enrich_stats = self._enrich_abstracts(candidates, progress)
+                result.stats.abstracts_enriched = enrich_stats.enriched
 
-        # 6. Deduplicate
-        progress("dedupe", "Filtering duplicates against library...")
-        dedupe = DedupeEngine(storage)
-        before_dedupe = len(candidates)
-        candidates = dedupe.filter(candidates)
-        result.stats.candidates_after_dedupe = len(candidates)
-        progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
+            # 6. Deduplicate
+            progress("dedupe", "Filtering duplicates against library...")
+            dedupe = DedupeEngine(storage, title_threshold=self.settings.watch.dedupe_threshold)
+            before_dedupe = len(candidates)
+            candidates = dedupe.filter(candidates)
+            result.stats.candidates_after_dedupe = len(candidates)
+            progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
 
-        # 6.5 Exclude by keywords (if configured)
-        interests_config = self.settings.scoring.interests
-        if interests_config.exclude_keywords:
-            candidates, removed = exclude_by_keywords(
-                candidates, interests_config.exclude_keywords
-            )
-            result.stats.candidates_after_keyword_filter = len(candidates)
-            if removed > 0:
-                progress("filter", f"Excluded {removed} candidates by keywords")
-        else:
-            result.stats.candidates_after_keyword_filter = len(candidates)
+            # 6.5 Exclude by keywords (if configured)
+            interests_config = self.settings.scoring.interests
+            if interests_config.exclude_keywords:
+                candidates, removed = exclude_by_keywords(
+                    candidates, interests_config.exclude_keywords
+                )
+                result.stats.candidates_after_keyword_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Excluded {removed} candidates by keywords")
+            else:
+                result.stats.candidates_after_keyword_filter = len(candidates)
 
-        # 7. Filter without abstract (if required)
-        if self.config.require_abstract:
-            candidates, removed = filter_without_abstract(candidates)
-            result.stats.candidates_after_abstract_filter = len(candidates)
-            if removed > 0:
-                progress("filter", f"Removed {removed} candidates without abstracts")
+            # 7. Filter without abstract (if required)
+            if self.config.require_abstract:
+                candidates, removed = filter_without_abstract(candidates)
+                result.stats.candidates_after_abstract_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates without abstracts")
 
-        # 8. Interest-based selection (optional)
-        if interests_config.enabled and interests_config.description.strip():
-            result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
-            result.stats.interest_papers_selected = len(result.interest_works)
+            # 8. Interest-based selection (optional)
+            if interests_config.enabled and interests_config.description.strip():
+                result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
+                result.stats.interest_papers_selected = len(result.interest_works)
 
-        # 9. Rank by profile similarity
-        rank_start = time.time()
-        progress("rank", "Computing relevance scores...")
-        ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
-        ranked = ranker.rank(candidates)
-        result.computed_thresholds = ranker.computed_thresholds
-        rank_elapsed = time.time() - rank_start
-        progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
+            # 9. Rank by profile similarity
+            rank_start = time.time()
+            progress("rank", "Computing relevance scores...")
+            ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
+            ranked = ranker.rank(candidates)
+            result.computed_thresholds = ranker.computed_thresholds
+            rank_elapsed = time.time() - rank_start
+            progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
 
+            # 10. Apply filters
+            ranked = filter_recent(ranked, days=self.config.recent_days)
+            result.stats.candidates_after_recent_filter = len(ranked)
+            ranked = limit_preprints(ranked, max_ratio=self.config.max_preprint_ratio)
 
-        # 10. Apply filters
-        ranked = filter_recent(ranked, days=self.config.recent_days)
-        result.stats.candidates_after_recent_filter = len(ranked)
-        ranked = limit_preprints(ranked, max_ratio=self.config.max_preprint_ratio)
+            # 11. Apply top_k limit
+            if self.config.top_k and len(ranked) > self.config.top_k:
+                ranked = ranked[: self.config.top_k]
 
-        # 11. Apply top_k limit
-        if self.config.top_k and len(ranked) > self.config.top_k:
-            ranked = ranked[: self.config.top_k]
+            result.ranked_works = ranked
+            progress("rank", f"Final: {len(ranked)} recommendations")
 
-        result.ranked_works = ranked
-        progress("rank", f"Final: {len(ranked)} recommendations")
+            # 12. Generate AI summaries (optional)
+            if self.config.generate_summaries and self.settings.llm.enabled and ranked:
+                self._generate_summaries(result, storage, progress)
 
-        # 12. Generate AI summaries (optional)
-        if self.config.generate_summaries and self.settings.llm.enabled and ranked:
-            self._generate_summaries(result, storage, progress)
+            # 13. Translate titles (optional)
+            if self.config.translate_titles and self.settings.llm.enabled:
+                self._translate_titles(result, storage, progress)
 
-        # 13. Translate titles (optional)
-        if self.config.translate_titles and self.settings.llm.enabled:
-            self._translate_titles(result, storage, progress)
+            # Report total elapsed time
+            total_elapsed = time.time() - pipeline_start
+            progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
 
-        # 14. Cleanup caches
-        self._cleanup_caches(embedding_cache, progress)
+            return result
 
-        # Report total elapsed time
-        total_elapsed = time.time() - pipeline_start
-        progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
-
-        return result
+        finally:
+            # Always cleanup caches, even if an exception occurred
+            try:
+                self._cleanup_caches(embedding_cache, progress)
+            except Exception as e:
+                logger.warning("Cache cleanup failed: %s", e)
 
     def _analyze_profile(
         self,
@@ -554,7 +562,8 @@ class WatchPipeline:
         est_time = len(result.ranked_works) * 2
         progress("summary", f"Generating summaries for {len(result.ranked_works)} papers (est. ~{est_time}s)...")
         summarizer = PaperSummarizer(llm_client, storage, model=self.settings.llm.model)
-        summary_result = summarizer.summarize_batch(result.ranked_works)
+        max_workers = self.settings.watch.summarizer_max_workers
+        summary_result = summarizer.summarize_batch(result.ranked_works, max_workers=max_workers)
         result.stats.summaries_generated = summary_result.success_count
 
         if summary_result.failed_ids:
@@ -573,7 +582,7 @@ class WatchPipeline:
         # Summarize interest works
         if result.interest_works:
             progress("summary", f"Generating summaries for {len(result.interest_works)} interest papers...")
-            interest_result = summarizer.summarize_batch(result.interest_works)
+            interest_result = summarizer.summarize_batch(result.interest_works, max_workers=max_workers)
             result.stats.summaries_generated += interest_result.success_count
 
             if interest_result.failed_ids:
