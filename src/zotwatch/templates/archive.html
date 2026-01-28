@@ -30,7 +30,7 @@
     }
 
     .content-container {
-      max-width: 64rem;
+      max-width: 72rem;
       margin: 0 auto;
       padding: 0 1rem;
     }
@@ -62,6 +62,7 @@
     .filter-tag {
       cursor: pointer;
       transition: all 0.2s;
+      user-select: none;
     }
 
     .filter-tag:hover {
@@ -72,30 +73,110 @@
       background-color: #2563eb;
       color: white;
     }
+
+    .group-header {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-header:hover {
+      background-color: #f8fafc;
+    }
+
+    .group-content {
+      transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
+    }
+
+    .group-content.collapsed {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+
+    .rotate-icon {
+      transition: transform 0.2s ease-out;
+    }
+
+    .rotate-icon.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    /* Compact view styles */
+    .compact-view .paper-card {
+      padding: 0.75rem !important;
+    }
+
+    .compact-view .paper-card h3 {
+      font-size: 0.875rem !important;
+    }
+
+    .compact-view .paper-abstract {
+      display: none;
+    }
+
+    .compact-view .paper-details {
+      display: none;
+    }
+
+    /* Loading spinner */
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #2563eb;
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Back to top button */
+    #back-to-top {
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s, visibility 0.3s;
+    }
+
+    #back-to-top.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* Search highlight */
+    .search-highlight {
+      background-color: #fef08a;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
   </style>
 </head>
 
 <body class="bg-bg-primary min-h-screen text-text-primary">
   <!-- Header -->
-  <header class="bg-bg-card border-b border-border-color sticky top-0 z-10">
-    <div class="content-container py-4 md:py-6">
-      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献归档</h1>
-          <p class="text-xs md:text-sm text-text-secondary mt-1">
-            共 <span id="stat-total">{{ stats.total }}</span> 篇论文 ·
-            最后更新: {{ generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
-          </p>
+  <header class="bg-bg-card border-b border-border-color sticky top-0 z-20">
+    <div class="content-container py-4">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div class="flex items-center gap-4">
+          <div>
+            <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献归档</h1>
+            <p class="text-xs md:text-sm text-text-secondary mt-1">
+              共 <span id="stat-total">{{ stats.total }}</span> 篇 ·
+              更新: {{ generated_at.strftime('%Y-%m-%d %H:%M') }}
+            </p>
+          </div>
         </div>
         <!-- Stats badges -->
-        <div class="flex flex-wrap gap-2">
-          <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="filter-tag px-3 py-1.5 bg-green-100 text-green-700 rounded-full text-sm font-medium" data-filter="label" data-value="must_read">
             必读 <span id="stat-must-read">{{ stats.must_read }}</span>
           </span>
-          <span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-sm font-medium">
+          <span class="filter-tag px-3 py-1.5 bg-amber-100 text-amber-700 rounded-full text-sm font-medium" data-filter="label" data-value="consider">
             推荐 <span id="stat-consider">{{ stats.consider }}</span>
           </span>
-          <span class="px-3 py-1 bg-bg-hover text-text-secondary rounded-full text-sm">
+          <span class="px-3 py-1.5 bg-bg-hover text-text-secondary rounded-full text-sm">
             参考 <span id="stat-ignore">{{ stats.total - stats.must_read - stats.consider }}</span>
           </span>
         </div>
@@ -103,75 +184,127 @@
     </div>
   </header>
 
-  <!-- Filter Bar -->
-  <nav class="bg-bg-card border-b border-border-color py-3">
+  <!-- Search & Filter Bar -->
+  <nav class="bg-bg-card border-b border-border-color py-3 sticky top-[72px] z-10">
     <div class="content-container">
-      <!-- View Switcher -->
-      <div class="flex flex-wrap items-center gap-3 mb-3">
-        <span class="text-sm text-text-secondary">分组方式:</span>
-        <div class="flex gap-1">
-          <a href="archive.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'date' }}">按日期</a>
-          <a href="archive-venue.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'venue' }}">按期刊</a>
-          <a href="archive-source.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}">按来源</a>
-          <a href="archive-label.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}">按标签</a>
+      <!-- Search Box -->
+      <div class="flex flex-col md:flex-row gap-3 mb-3">
+        <div class="relative flex-1">
+          <input type="text" id="search-input" placeholder="搜索标题、作者、摘要..."
+            class="w-full pl-10 pr-4 py-2 border border-border-color rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+          <svg class="w-5 h-5 text-text-secondary absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <button id="clear-search" class="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary hidden">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <!-- View Controls -->
+        <div class="flex items-center gap-2">
+          <button id="toggle-view" class="px-3 py-2 border border-border-color rounded-lg text-sm hover:bg-bg-hover flex items-center gap-2" title="切换视图">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+            </svg>
+            <span id="view-label">完整</span>
+          </button>
+          <button id="expand-all" class="px-3 py-2 border border-border-color rounded-lg text-sm hover:bg-bg-hover" title="展开/折叠全部">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+            </svg>
+          </button>
         </div>
       </div>
 
-      <!-- Filters -->
+      <!-- View Switcher & Filters -->
       <div class="flex flex-wrap items-center gap-3">
-        <span class="text-sm text-text-secondary">筛选:</span>
-        <!-- Source Filter -->
-        <div class="flex gap-1" id="source-filters"></div>
-        <!-- Label Filter -->
-        <div class="flex gap-1">
-          <span class="filter-tag px-2 py-1 bg-green-50 text-green-700 rounded text-xs" data-filter="label"
-            data-value="must_read">必读</span>
-          <span class="filter-tag px-2 py-1 bg-amber-50 text-amber-700 rounded text-xs" data-filter="label"
-            data-value="consider">推荐</span>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-text-secondary">分组:</span>
+          <div class="flex gap-1">
+            <a href="archive.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'date' }}">日期</a>
+            <a href="archive-venue.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'venue' }}">期刊</a>
+            <a href="archive-source.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}">来源</a>
+            <a href="archive-label.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}">标签</a>
+          </div>
         </div>
+
+        <div class="h-4 w-px bg-border-color hidden md:block"></div>
+
+        <!-- Source Filter -->
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-text-secondary">来源:</span>
+          <div class="flex flex-wrap gap-1" id="source-filters"></div>
+        </div>
+
+        <!-- Clear Filters -->
+        <button id="clear-filters" class="text-xs text-accent hover:text-accent-hover hidden">清除筛选</button>
       </div>
     </div>
   </nav>
 
+  <!-- Loading Indicator -->
+  <div id="loading" class="flex flex-col items-center justify-center py-20">
+    <div class="spinner mb-4"></div>
+    <p class="text-text-secondary">加载中...</p>
+  </div>
+
   <!-- Main Content -->
-  <main class="py-6">
+  <main class="py-6 hidden" id="main-content">
     <div class="content-container">
-      <div id="archive-groups" class="space-y-8"></div>
+      <!-- Search Results Info -->
+      <div id="search-info" class="mb-4 text-sm text-text-secondary hidden"></div>
+      <!-- Archive Groups -->
+      <div id="archive-groups" class="space-y-6"></div>
+      <!-- No Results -->
+      <div id="no-results" class="text-center py-12 hidden">
+        <svg class="w-16 h-16 mx-auto text-text-secondary/50 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <p class="text-text-secondary">没有找到匹配的文献</p>
+        <button id="reset-search" class="mt-4 text-accent hover:text-accent-hover text-sm">重置搜索</button>
+      </div>
     </div>
   </main>
+
+  <!-- Back to Top Button -->
+  <button id="back-to-top" class="fixed bottom-6 right-6 w-12 h-12 bg-accent text-white rounded-full shadow-lg hover:bg-accent-hover flex items-center justify-center z-30" title="返回顶部">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
+    </svg>
+  </button>
 
   <!-- Footer -->
   <footer class="bg-bg-card border-t border-border-color mt-12">
     <div class="content-container py-6 text-center text-sm text-text-secondary">
-      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch"
-        class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
+      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch" class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
       · 数据来源: arXiv, Crossref, EarthArXiv
     </div>
   </footer>
 
   <script>
-    // Performance-optimized archive viewer for large datasets (10k+ papers)
+    // Performance-optimized archive viewer with search and improved UX
     (function() {
       'use strict';
 
       // Configuration
       const CONFIG = {
-        pageSize: 50,              // Items per chunk
-        scrollThreshold: 300,     // px from bottom to trigger load
-        debounceDelay: 150,       // ms debounce for filters
-        virtualItemHeight: 280,   // Estimated item height for virtual scroll
-        maxVisibleItems: 100,     // Max DOM items per group before recycling
+        pageSize: 30,
+        debounceDelay: 200,
+        searchMinLength: 2,
       };
 
       const dataUrl = "{{ data_url }}";
       const activeFilters = { source: new Set(), label: new Set() };
       let archiveData = null;
-      let groupStates = new Map(); // Track render state per group
+      let groupStates = new Map();
       let intersectionObserver = null;
+      let searchQuery = '';
+      let isCompactView = false;
+      let allGroupsExpanded = true;
+
+      // Priority order for label groups
+      const LABEL_ORDER = { 'must_read': 0, 'consider': 1, 'ignore': 2 };
 
       // Utility functions
       function normalizeGroupId(name) {
@@ -192,6 +325,13 @@
         return div.innerHTML;
       }
 
+      function highlightText(text, query) {
+        if (!query || !text) return escapeHtml(text);
+        const escaped = escapeHtml(text);
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return escaped.replace(regex, '<span class="search-highlight">$1</span>');
+      }
+
       function debounce(fn, delay) {
         let timer = null;
         return function(...args) {
@@ -200,7 +340,7 @@
         };
       }
 
-      // Toggle section (for abstracts)
+      // Toggle abstract section
       window.toggleSection = function(id) {
         const el = document.getElementById(id);
         const icon = document.getElementById('icon-' + id);
@@ -209,6 +349,16 @@
         el.classList.toggle('collapsed', !isCollapsed);
         el.classList.toggle('expanded', isCollapsed);
         if (icon) icon.style.transform = isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+      };
+
+      // Toggle group collapse
+      window.toggleGroup = function(groupId) {
+        const content = document.getElementById(`content-${groupId}`);
+        const icon = document.getElementById(`icon-group-${groupId}`);
+        if (!content) return;
+        const isCollapsed = content.classList.contains('collapsed');
+        content.classList.toggle('collapsed', !isCollapsed);
+        if (icon) icon.classList.toggle('collapsed', !isCollapsed);
       };
 
       function updateStats(stats) {
@@ -248,6 +398,24 @@
         } else {
           activeFilters[type].delete(value);
         }
+        updateClearFiltersButton();
+        debouncedRender();
+      }
+
+      function updateClearFiltersButton() {
+        const btn = document.getElementById('clear-filters');
+        const hasFilters = activeFilters.source.size > 0 || activeFilters.label.size > 0 || searchQuery;
+        btn.classList.toggle('hidden', !hasFilters);
+      }
+
+      function clearAllFilters() {
+        activeFilters.source.clear();
+        activeFilters.label.clear();
+        searchQuery = '';
+        document.getElementById('search-input').value = '';
+        document.getElementById('clear-search').classList.add('hidden');
+        document.querySelectorAll('.filter-tag.active').forEach(tag => tag.classList.remove('active'));
+        updateClearFiltersButton();
         debouncedRender();
       }
 
@@ -257,71 +425,86 @@
         return true;
       }
 
-      // Pre-filter works once and cache results
-      function getFilteredGroups(data) {
-        if (!data) return [];
-        return data.groups.map(group => ({
-          ...group,
-          filteredWorks: group.works.filter(matchesFilters)
-        })).filter(g => g.filteredWorks.length > 0);
+      function matchesSearch(work) {
+        if (!searchQuery || searchQuery.length < CONFIG.searchMinLength) return true;
+        const query = searchQuery.toLowerCase();
+        const title = (work.title || '').toLowerCase();
+        const abstract = (work.abstract || '').toLowerCase();
+        const authors = (work.authors || []).join(' ').toLowerCase();
+        const venue = (work.venue || '').toLowerCase();
+        return title.includes(query) || abstract.includes(query) || authors.includes(query) || venue.includes(query);
       }
 
-      // Create article HTML using template literals (faster than DOM manipulation)
+      function getFilteredGroups(data) {
+        if (!data) return [];
+        let groups = data.groups.map(group => ({
+          ...group,
+          filteredWorks: group.works.filter(w => matchesFilters(w) && matchesSearch(w))
+        })).filter(g => g.filteredWorks.length > 0);
+
+        // Sort groups by label priority if grouping by label
+        if (data.group_by === 'label') {
+          groups.sort((a, b) => (LABEL_ORDER[a.name] ?? 99) - (LABEL_ORDER[b.name] ?? 99));
+        }
+
+        return groups;
+      }
+
       function createArticleHTML(work, groupId, idx) {
         const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
         const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : '参考');
         const labelClass = work.label === 'must_read'
-          ? 'bg-green-100 text-green-700 border border-green-300'
-          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-bg-hover text-text-secondary border border-border-color');
+          ? 'bg-green-100 text-green-700'
+          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600');
         const abstractId = `abs-${groupId}-${idx}`;
-        const title = escapeHtml(work.title);
+
+        const title = searchQuery ? highlightText(work.title, searchQuery) : escapeHtml(work.title);
         const venue = escapeHtml(work.venue || '未知来源');
-        const authors = (work.authors || []).slice(0, 5).map(escapeHtml).join('，');
+        const authorsRaw = (work.authors || []).slice(0, 5);
+        const authors = searchQuery
+          ? authorsRaw.map(a => highlightText(a, searchQuery)).join('，')
+          : authorsRaw.map(escapeHtml).join('，');
         const hasMore = (work.authors || []).length > 5;
 
-        return `<article class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors" data-idx="${idx}">
-          <div class="p-4 md:p-5">
-            <div class="flex items-center gap-2 mb-2 flex-wrap">
-              <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${labelClass}">${labelText}</span>
-              <span class="text-xs text-text-secondary">评分 ${work.score.toFixed(2)}</span>
-              <span class="text-xs text-text-secondary">·</span>
-              <span class="text-xs text-text-secondary">${escapeHtml(work.source)}</span>
-              <span class="text-xs text-text-secondary">· ${published}</span>
-            </div>
-            <div class="mb-2">
-              <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
+        return `<article class="paper-card bg-bg-card rounded-lg border border-border-color p-4 hover:border-accent/30 transition-colors" data-idx="${idx}">
+          <div class="flex items-start gap-3">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${labelClass} shrink-0">${labelText}</span>
+            <div class="flex-1 min-w-0">
+              <h3 class="text-sm md:text-base font-semibold text-text-primary leading-snug mb-1">
                 <a href="${escapeHtml(work.url || '#')}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">${title}</a>
               </h3>
-              ${work.translated_title ? `<p class="text-sm text-text-secondary mt-0.5 leading-snug">${escapeHtml(work.translated_title)}</p>` : ''}
-            </div>
-            <div class="text-xs text-text-secondary mb-2">${venue}${work.is_chinese_core ? '<span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>' : ''}${!work.is_chinese_core && work.impact_factor ? `<span class="ml-1 text-blue-600">(IF: ${work.impact_factor.toFixed(1)})</span>` : ''}</div>
-            <p class="text-sm text-text-secondary mb-3">${authors}${hasMore ? ' 等' : ''}</p>
-            ${work.doi ? `<div class="text-xs text-text-secondary mb-3"><span class="font-medium mr-1">DOI:</span><a href="https://doi.org/${escapeHtml(work.doi)}" target="_blank" rel="noopener" class="text-accent hover:underline">${escapeHtml(work.doi)}</a></div>` : ''}
-            ${work.abstract ? `<div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
-              <button onclick="toggleSection('${abstractId}')" class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
-                <span>原文摘要</span>
-                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-              </button>
-              <div id="${abstractId}" class="section-expand collapsed"><p class="text-sm text-text-secondary mt-2 leading-relaxed">${escapeHtml(work.abstract)}</p></div>
-            </div>` : ''}
-            <div class="pt-3 border-t border-border-color">
-              <div class="flex flex-wrap gap-2 text-xs">
-                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 ${work.similarity.toFixed(2)}</span>
-                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">期刊影响力 ${work.impact_factor_score.toFixed(2)}</span>
+              ${work.translated_title ? `<p class="text-xs text-text-secondary mb-1">${escapeHtml(work.translated_title)}</p>` : ''}
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
+                <span>${venue}</span>
+                ${work.impact_factor ? `<span class="text-blue-600">IF: ${work.impact_factor.toFixed(1)}</span>` : ''}
+                <span>· ${published}</span>
+                <span>· 评分 ${work.score.toFixed(2)}</span>
+              </div>
+              <p class="text-xs text-text-secondary mt-1">${authors}${hasMore ? ' 等' : ''}</p>
+              ${work.abstract ? `<div class="paper-abstract mt-2">
+                <button onclick="toggleSection('${abstractId}')" class="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
+                  <span>查看摘要</span>
+                  <svg class="w-3 h-3 transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div id="${abstractId}" class="section-expand collapsed">
+                  <p class="text-xs text-text-secondary mt-2 leading-relaxed bg-bg-hover/50 p-3 rounded">${searchQuery ? highlightText(work.abstract, searchQuery) : escapeHtml(work.abstract)}</p>
+                </div>
+              </div>` : ''}
+              <div class="paper-details flex flex-wrap gap-2 mt-2 text-xs">
+                ${work.doi ? `<a href="https://doi.org/${escapeHtml(work.doi)}" target="_blank" rel="noopener" class="text-accent hover:underline">DOI</a>` : ''}
+                <span class="text-text-secondary">相似度 ${work.similarity.toFixed(2)}</span>
               </div>
             </div>
           </div>
         </article>`;
       }
 
-      // Render a chunk of items for a group
       function renderChunk(state, count = CONFIG.pageSize) {
         const { works, list, groupId } = state;
         const start = state.rendered;
         const end = Math.min(start + count, works.length);
         if (start >= end) return;
 
-        // Use insertAdjacentHTML for better performance than innerHTML
         const htmlParts = [];
         for (let i = start; i < end; i++) {
           htmlParts.push(createArticleHTML(works[i], groupId, i));
@@ -329,34 +512,32 @@
         list.insertAdjacentHTML('beforeend', htmlParts.join(''));
         state.rendered = end;
 
-        // Update load more button visibility
         const btn = state.loadMoreBtn;
         if (btn) {
           if (state.rendered >= works.length) {
             btn.style.display = 'none';
           } else {
             btn.textContent = `加载更多 (${works.length - state.rendered} 剩余)`;
+            btn.style.display = 'block';
           }
         }
       }
 
-      // Setup Intersection Observer for lazy loading
       function setupLazyLoad(state) {
         if (!intersectionObserver) {
           intersectionObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
               if (entry.isIntersecting) {
                 const groupId = entry.target.dataset.groupId;
-                const state = groupStates.get(groupId);
-                if (state && state.rendered < state.works.length) {
-                  renderChunk(state);
+                const s = groupStates.get(groupId);
+                if (s && s.rendered < s.works.length) {
+                  renderChunk(s);
                 }
               }
             });
           }, { rootMargin: '200px' });
         }
 
-        // Create sentinel element for infinite scroll
         const sentinel = document.createElement('div');
         sentinel.className = 'load-sentinel h-1';
         sentinel.dataset.groupId = state.groupId;
@@ -367,55 +548,85 @@
 
       function renderGroups(data) {
         const container = document.getElementById('archive-groups');
+        const noResults = document.getElementById('no-results');
+        const searchInfo = document.getElementById('search-info');
 
-        // Clear previous observers
         if (intersectionObserver) {
           intersectionObserver.disconnect();
         }
         groupStates.clear();
 
         const filteredGroups = getFilteredGroups(data);
+        const totalFiltered = filteredGroups.reduce((sum, g) => sum + g.filteredWorks.length, 0);
 
-        // Build all HTML at once for initial render
+        // Update search info
+        if (searchQuery && searchQuery.length >= CONFIG.searchMinLength) {
+          searchInfo.textContent = `找到 ${totalFiltered} 篇匹配 "${searchQuery}" 的文献`;
+          searchInfo.classList.remove('hidden');
+        } else if (activeFilters.source.size > 0 || activeFilters.label.size > 0) {
+          searchInfo.textContent = `筛选结果: ${totalFiltered} 篇`;
+          searchInfo.classList.remove('hidden');
+        } else {
+          searchInfo.classList.add('hidden');
+        }
+
+        if (filteredGroups.length === 0) {
+          container.innerHTML = '';
+          noResults.classList.remove('hidden');
+          return;
+        }
+
+        noResults.classList.add('hidden');
         const fragment = document.createDocumentFragment();
 
         filteredGroups.forEach((group, gIdx) => {
           const groupId = `g${gIdx}-${normalizeGroupId(group.name)}`;
           const section = document.createElement('section');
-          section.className = 'mb-8';
+          section.className = 'group-section';
           section.dataset.group = group.name;
 
-          // Header
+          // Group Header (clickable to collapse)
           const header = document.createElement('div');
-          header.className = 'flex items-center justify-between mb-4 pb-2 border-b border-border-color';
+          header.className = 'group-header flex items-center justify-between p-3 bg-bg-card rounded-lg border border-border-color mb-3 cursor-pointer';
+          header.onclick = () => toggleGroup(groupId);
 
           let titleContent = '';
           if (data.group_by === 'label') {
             const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : 'bg-gray-400');
             const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : '参考');
-            titleContent = `<span class="w-3 h-3 rounded-full ${dotClass}"></span>${labelName}`;
+            titleContent = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${labelName}`;
           } else {
             titleContent = escapeHtml(group.name);
           }
 
           header.innerHTML = `
-            <h2 class="text-lg font-bold text-text-primary flex items-center gap-2">${titleContent}</h2>
+            <div class="flex items-center">
+              <svg class="w-4 h-4 mr-2 text-text-secondary rotate-icon" id="icon-group-${groupId}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+              <h2 class="text-base font-semibold text-text-primary flex items-center">${titleContent}</h2>
+            </div>
             <span class="text-sm text-text-secondary">${group.filteredWorks.length} 篇</span>
           `;
           section.appendChild(header);
 
-          // List container
+          // Group Content (collapsible)
+          const contentWrapper = document.createElement('div');
+          contentWrapper.id = `content-${groupId}`;
+          contentWrapper.className = 'group-content';
+
           const list = document.createElement('div');
-          list.className = 'space-y-4';
-          section.appendChild(list);
+          list.className = 'space-y-3';
+          contentWrapper.appendChild(list);
 
           // Load more button
           const loadMoreBtn = document.createElement('button');
-          loadMoreBtn.className = 'mt-4 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors';
+          loadMoreBtn.className = 'mt-3 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded-lg hover:bg-accent/10 transition-colors';
           loadMoreBtn.style.display = group.filteredWorks.length > CONFIG.pageSize ? 'block' : 'none';
-          section.appendChild(loadMoreBtn);
+          contentWrapper.appendChild(loadMoreBtn);
 
-          // Track state
+          section.appendChild(contentWrapper);
+
           const state = {
             groupId,
             works: group.filteredWorks,
@@ -426,13 +637,13 @@
           };
           groupStates.set(groupId, state);
 
-          // Load more click handler
-          loadMoreBtn.addEventListener('click', () => renderChunk(state));
+          loadMoreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            renderChunk(state);
+          });
 
-          // Initial render
           renderChunk(state);
 
-          // Setup lazy loading for remaining items
           if (state.works.length > state.rendered) {
             setupLazyLoad(state);
           }
@@ -443,22 +654,67 @@
         container.innerHTML = '';
         container.appendChild(fragment);
 
-        // Update filtered stats
-        const filteredTotal = filteredGroups.reduce((sum, g) => sum + g.filteredWorks.length, 0);
-        const filteredMustRead = filteredGroups.reduce((sum, g) =>
-          sum + g.filteredWorks.filter(w => w.label === 'must_read').length, 0);
-        const filteredConsider = filteredGroups.reduce((sum, g) =>
-          sum + g.filteredWorks.filter(w => w.label === 'consider').length, 0);
-
+        // Update filtered stats display
         if (activeFilters.source.size > 0 || activeFilters.label.size > 0) {
-          document.getElementById('stat-total').textContent = `${filteredTotal} / ${data.stats.total}`;
+          document.getElementById('stat-total').textContent = `${totalFiltered} / ${data.stats.total}`;
+        } else {
+          document.getElementById('stat-total').textContent = data.stats.total;
         }
       }
 
-      // Debounced render for filter changes
       const debouncedRender = debounce(() => {
         if (archiveData) renderGroups(archiveData);
       }, CONFIG.debounceDelay);
+
+      // Search functionality
+      const searchInput = document.getElementById('search-input');
+      const clearSearch = document.getElementById('clear-search');
+
+      searchInput.addEventListener('input', debounce((e) => {
+        searchQuery = e.target.value.trim();
+        clearSearch.classList.toggle('hidden', !searchQuery);
+        updateClearFiltersButton();
+        debouncedRender();
+      }, CONFIG.debounceDelay));
+
+      clearSearch.addEventListener('click', () => {
+        searchInput.value = '';
+        searchQuery = '';
+        clearSearch.classList.add('hidden');
+        updateClearFiltersButton();
+        debouncedRender();
+      });
+
+      // View toggle
+      document.getElementById('toggle-view').addEventListener('click', () => {
+        isCompactView = !isCompactView;
+        document.getElementById('main-content').classList.toggle('compact-view', isCompactView);
+        document.getElementById('view-label').textContent = isCompactView ? '紧凑' : '完整';
+      });
+
+      // Expand/collapse all
+      document.getElementById('expand-all').addEventListener('click', () => {
+        allGroupsExpanded = !allGroupsExpanded;
+        document.querySelectorAll('.group-content').forEach(content => {
+          content.classList.toggle('collapsed', !allGroupsExpanded);
+        });
+        document.querySelectorAll('.rotate-icon').forEach(icon => {
+          icon.classList.toggle('collapsed', !allGroupsExpanded);
+        });
+      });
+
+      // Clear filters
+      document.getElementById('clear-filters').addEventListener('click', clearAllFilters);
+      document.getElementById('reset-search').addEventListener('click', clearAllFilters);
+
+      // Back to top
+      const backToTop = document.getElementById('back-to-top');
+      window.addEventListener('scroll', () => {
+        backToTop.classList.toggle('visible', window.scrollY > 300);
+      });
+      backToTop.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
 
       // Initialize filter click handlers
       document.querySelectorAll('.filter-tag').forEach(tag => {
@@ -470,15 +726,31 @@
         .then(response => response.json())
         .then(data => {
           archiveData = data;
+          document.getElementById('loading').classList.add('hidden');
+          document.getElementById('main-content').classList.remove('hidden');
           updateStats(data.stats);
           buildSourceFilters(data.sources || []);
           renderGroups(data);
         })
         .catch(err => {
           console.error('Failed to load archive data:', err);
-          document.getElementById('archive-groups').innerHTML =
-            '<p class="text-center text-red-500 py-8">加载数据失败，请刷新页面重试</p>';
+          document.getElementById('loading').innerHTML =
+            '<p class="text-center text-red-500">加载数据失败，请刷新页面重试</p>';
         });
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        // Ctrl/Cmd + F to focus search
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+          e.preventDefault();
+          searchInput.focus();
+        }
+        // Escape to clear search
+        if (e.key === 'Escape' && document.activeElement === searchInput) {
+          clearAllFilters();
+          searchInput.blur();
+        }
+      });
     })();
   </script>
 </body>
