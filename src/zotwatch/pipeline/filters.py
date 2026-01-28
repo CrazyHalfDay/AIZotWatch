@@ -172,10 +172,57 @@ def exclude_by_keywords(
     return filtered, removed
 
 
+def include_by_keywords(
+    candidates: list[CandidateWork],
+    include_keywords: list[str],
+) -> tuple[list[CandidateWork], int]:
+    """Keep only candidates matching at least one include keyword.
+
+    Uses word boundary matching for larger keyword sets to reduce false positives.
+
+    Args:
+        candidates: List of candidate works to filter.
+        include_keywords: List of keywords to require.
+
+    Returns:
+        Tuple of (filtered candidates, number removed).
+    """
+    if not include_keywords:
+        return candidates, 0
+
+    keywords_tuple = tuple(include_keywords)
+
+    if len(include_keywords) <= 10:
+        include_lower = frozenset(kw.lower() for kw in include_keywords)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}".lower()
+            if any(kw in text for kw in include_lower):
+                filtered.append(c)
+    else:
+        pattern = _compile_keyword_pattern(keywords_tuple)
+        filtered = []
+        for c in candidates:
+            text = f"{c.title} {c.abstract or ''}"
+            if pattern.search(text):
+                filtered.append(c)
+
+    removed = len(candidates) - len(filtered)
+    if removed > 0:
+        logger.info(
+            "Included %d candidates matching keywords (removed %d)",
+            len(filtered),
+            removed,
+        )
+
+    return filtered, removed
+
+
 __all__ = [
     "filter_recent",
     "limit_preprints",
     "filter_without_abstract",
     "exclude_by_keywords",
+    "include_by_keywords",
     "PREPRINT_SOURCES",
 ]
