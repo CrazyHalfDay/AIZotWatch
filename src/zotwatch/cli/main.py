@@ -301,9 +301,9 @@ if __name__ == "__main__":
 @click.option("--days", default=90, help="Number of days to include")
 @click.option(
     "--group-by",
-    type=click.Choice(["date", "venue", "source", "label"]),
-    default="date",
-    help="Grouping dimension",
+    type=click.Choice(["date", "venue", "source", "label", "all"]),
+    default="all",
+    help="Grouping dimension ('all' generates all views)",
 )
 @click.pass_context
 def archive(ctx: click.Context, days: int, group_by: str) -> None:
@@ -317,37 +317,49 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
             "No archive found. Run 'zotwatch watch' first to build the archive."
         )
 
-    with ArchiveStorage(archive_db) as storage:
-        # Get grouped works based on dimension
-        if group_by == "date":
-            grouped = storage.get_grouped_by_date(days=days)
-        elif group_by == "venue":
-            grouped = storage.get_grouped_by_venue(days=days)
-        elif group_by == "source":
-            grouped = storage.get_grouped_by_source(days=days)
-        elif group_by == "label":
-            grouped = storage.get_grouped_by_label(days=days)
-        else:
-            grouped = storage.get_grouped_by_date(days=days)
+    template_dir = base_dir / "templates"
+    reports_dir = base_dir / "reports"
 
+    # Determine which views to generate
+    views = ["date", "venue", "source", "label"] if group_by == "all" else [group_by]
+
+    with ArchiveStorage(archive_db) as storage:
         stats = storage.get_stats(days=days)
         sources = storage.get_sources(days=days)
 
-    if not grouped:
-        click.echo("No archived works found")
-        return
+        for view in views:
+            # Get grouped works based on dimension
+            if view == "date":
+                grouped = storage.get_grouped_by_date(days=days)
+            elif view == "venue":
+                grouped = storage.get_grouped_by_venue(days=days)
+            elif view == "source":
+                grouped = storage.get_grouped_by_source(days=days)
+            elif view == "label":
+                grouped = storage.get_grouped_by_label(days=days)
+            else:
+                grouped = storage.get_grouped_by_date(days=days)
 
-    # Render archive page
-    archive_path = base_dir / "reports" / "archive.html"
-    template_dir = base_dir / "templates"
-    render_archive(
-        grouped,
-        archive_path,
-        group_by=group_by,
-        stats=stats,
-        sources=sources,
-        template_dir=template_dir if template_dir.exists() else None,
-        timezone_name=settings.output.timezone,
-    )
-    click.echo(f"Archive page: {archive_path}")
+            if not grouped:
+                click.echo(f"No archived works found for view: {view}")
+                continue
+
+            # Render archive page
+            if view == "date":
+                archive_path = reports_dir / "archive.html"  # Default page
+            else:
+                archive_path = reports_dir / f"archive-{view}.html"
+
+            render_archive(
+                grouped,
+                archive_path,
+                group_by=view,
+                stats=stats,
+                sources=sources,
+                template_dir=template_dir if template_dir.exists() else None,
+                timezone_name=settings.output.timezone,
+            )
+            click.echo(f"Archive page ({view}): {archive_path}")
+
     click.echo(f"  Total: {stats['total']} papers, Must-read: {stats['must_read']}, Consider: {stats['consider']}")
+

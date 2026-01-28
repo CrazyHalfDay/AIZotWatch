@@ -120,8 +120,8 @@ jobs:
           # Overwrite feed.xml with latest version
           cp ../public/feed.xml ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
 
-          # Copy archive.html
-          cp ../public/archive.html ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
+          # Copy all archive pages
+          cp ../public/archive*.html ${{ env.DEPLOY_SUBDIR }}/ 2>/dev/null || true
 
           # Copy latest report as index.html
           LATEST=$(ls -t ${{ env.DEPLOY_SUBDIR }}/report-*.html 2>/dev/null | head -1 || echo "")

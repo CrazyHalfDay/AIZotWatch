@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,18 +25,56 @@
     }
   </script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
-    .content-container { max-width: 64rem; margin: 0 auto; padding: 0 1rem; }
-    @media (min-width: 768px) { .content-container { padding: 0 2rem; } }
-    .section-expand { transition: max-height 0.3s ease-out; overflow: hidden; }
-    .section-expand.collapsed { max-height: 0; }
-    .section-expand.expanded { max-height: none; }
-    .view-btn.active { background-color: #2563eb; color: white; }
-    .filter-tag { cursor: pointer; transition: all 0.2s; }
-    .filter-tag:hover { background-color: #dbeafe; }
-    .filter-tag.active { background-color: #2563eb; color: white; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .content-container {
+      max-width: 64rem;
+      margin: 0 auto;
+      padding: 0 1rem;
+    }
+
+    @media (min-width: 768px) {
+      .content-container {
+        padding: 0 2rem;
+      }
+    }
+
+    .section-expand {
+      transition: max-height 0.3s ease-out;
+      overflow: hidden;
+    }
+
+    .section-expand.collapsed {
+      max-height: 0;
+    }
+
+    .section-expand.expanded {
+      max-height: none;
+    }
+
+    .view-btn.active {
+      background-color: #2563eb;
+      color: white;
+    }
+
+    .filter-tag {
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .filter-tag:hover {
+      background-color: #dbeafe;
+    }
+
+    .filter-tag.active {
+      background-color: #2563eb;
+      color: white;
+    }
   </style>
 </head>
+
 <body class="bg-bg-primary min-h-screen text-text-primary">
   <!-- Header -->
   <header class="bg-bg-card border-b border-border-color sticky top-0 z-10">
@@ -71,14 +110,14 @@
       <div class="flex flex-wrap items-center gap-3 mb-3">
         <span class="text-sm text-text-secondary">分组方式:</span>
         <div class="flex gap-1">
-          <button class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'date' }}"
-                  onclick="location.href='?group_by=date'">按日期</button>
-          <button class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'venue' }}"
-                  onclick="location.href='?group_by=venue'">按期刊</button>
-          <button class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}"
-                  onclick="location.href='?group_by=source'">按来源</button>
-          <button class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}"
-                  onclick="location.href='?group_by=label'">按标签</button>
+          <a href="archive.html"
+            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'date' }}">按日期</a>
+          <a href="archive-venue.html"
+            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'venue' }}">按期刊</a>
+          <a href="archive-source.html"
+            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}">按来源</a>
+          <a href="archive-label.html"
+            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}">按标签</a>
         </div>
       </div>
 
@@ -88,15 +127,18 @@
         <!-- Source Filter -->
         <div class="flex gap-1">
           {% for src in sources %}
-          <span class="filter-tag px-2 py-1 bg-bg-hover rounded text-xs" data-filter="source" data-value="{{ src.source }}">
+          <span class="filter-tag px-2 py-1 bg-bg-hover rounded text-xs" data-filter="source"
+            data-value="{{ src.source }}">
             {{ src.source }} ({{ src.count }})
           </span>
           {% endfor %}
         </div>
         <!-- Label Filter -->
         <div class="flex gap-1">
-          <span class="filter-tag px-2 py-1 bg-green-50 text-green-700 rounded text-xs" data-filter="label" data-value="must_read">必读</span>
-          <span class="filter-tag px-2 py-1 bg-amber-50 text-amber-700 rounded text-xs" data-filter="label" data-value="consider">推荐</span>
+          <span class="filter-tag px-2 py-1 bg-green-50 text-green-700 rounded text-xs" data-filter="label"
+            data-value="must_read">必读</span>
+          <span class="filter-tag px-2 py-1 bg-amber-50 text-amber-700 rounded text-xs" data-filter="label"
+            data-value="consider">推荐</span>
         </div>
       </div>
     </div>
@@ -111,15 +153,15 @@
         <div class="flex items-center justify-between mb-4 pb-2 border-b border-border-color">
           <h2 class="text-lg font-bold text-text-primary flex items-center gap-2">
             {% if group_by == 'label' %}
-              {% if group_name == 'must_read' %}
-              <span class="w-3 h-3 bg-green-500 rounded-full"></span>必读
-              {% elif group_name == 'consider' %}
-              <span class="w-3 h-3 bg-amber-500 rounded-full"></span>推荐
-              {% else %}
-              <span class="w-3 h-3 bg-gray-400 rounded-full"></span>参考
-              {% endif %}
+            {% if group_name == 'must_read' %}
+            <span class="w-3 h-3 bg-green-500 rounded-full"></span>必读
+            {% elif group_name == 'consider' %}
+            <span class="w-3 h-3 bg-amber-500 rounded-full"></span>推荐
             {% else %}
-              {{ group_name }}
+            <span class="w-3 h-3 bg-gray-400 rounded-full"></span>参考
+            {% endif %}
+            {% else %}
+            {{ group_name }}
             {% endif %}
           </h2>
           <span class="text-sm text-text-secondary">{{ works|length }} 篇</span>
@@ -128,10 +170,9 @@
         <!-- Works List -->
         <div class="space-y-4">
           {% for work in works %}
-          <article class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors"
-                   data-source="{{ work.source }}"
-                   data-label="{{ work.label }}"
-                   data-venue="{{ work.venue or 'Unknown' }}">
+          <article
+            class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors"
+            data-source="{{ work.source }}" data-label="{{ work.label }}" data-venue="{{ work.venue or 'Unknown' }}">
             <div class="p-4 md:p-5">
               <!-- Header: Label + Source + Date -->
               <div class="flex items-center gap-2 mb-2 flex-wrap">
@@ -144,13 +185,15 @@
                 <span class="text-xs text-text-secondary">评分 {{ '%.2f'|format(work.score) }}</span>
                 <span class="text-xs text-text-secondary">·</span>
                 <span class="text-xs text-text-secondary">{{ work.source }}</span>
-                <span class="text-xs text-text-secondary">· {{ work.published.strftime('%Y-%m-%d') if work.published else work.extra.run_date }}</span>
+                <span class="text-xs text-text-secondary">· {{ work.published.strftime('%Y-%m-%d') if work.published
+                  else work.extra.run_date }}</span>
               </div>
 
               <!-- Title -->
               <div class="mb-2">
                 <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
-                  <a href="{{ work.url or '#' }}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">
+                  <a href="{{ work.url or '#' }}" target="_blank" rel="noopener"
+                    class="hover:text-accent transition-colors">
                     {{ work.title }}
                   </a>
                 </h3>
@@ -163,9 +206,9 @@
               <div class="text-xs text-text-secondary mb-2" title="{{ work.venue or '' }}">
                 {{ work.venue or '未知来源' }}
                 {% if work.is_chinese_core %}
-                  <span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>
+                <span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>
                 {% elif work.impact_factor %}
-                  <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
+                <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
                 {% endif %}
               </div>
 
@@ -178,7 +221,8 @@
               {% if work.doi %}
               <div class="text-xs text-text-secondary mb-3">
                 <span class="font-medium mr-1">DOI:</span>
-                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener" class="text-accent hover:underline">{{ work.doi }}</a>
+                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener"
+                  class="text-accent hover:underline">{{ work.doi }}</a>
               </div>
               {% endif %}
 
@@ -186,10 +230,12 @@
               {% if work.abstract %}
               <div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
                 <button onclick="toggleSection('abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}')"
-                        class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
+                  class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
                   <span>原文摘要</span>
-                  <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  <svg class="w-4 h-4 text-text-secondary transform transition-transform"
+                    id="icon-abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" fill="none"
+                    stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 <div id="abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" class="section-expand collapsed">
@@ -203,7 +249,8 @@
               <div class="bg-accent/10 rounded-lg p-3 mb-3 border border-accent/30">
                 <h4 class="text-sm font-semibold text-accent mb-2 flex items-center">
                   <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
+                    <path
+                      d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z" />
                   </svg>
                   AI 总结
                 </h4>
@@ -219,7 +266,8 @@
               <!-- Scores -->
               <div class="pt-3 border-t border-border-color">
                 <div class="flex flex-wrap gap-2 text-xs">
-                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 {{ '%.2f'|format(work.similarity) }}</span>
+                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 {{ '%.2f'|format(work.similarity)
+                    }}</span>
                   <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">
                     期刊影响力 {{ '%.2f'|format(work.impact_factor_score) }}
                   </span>
@@ -237,7 +285,8 @@
   <!-- Footer -->
   <footer class="bg-bg-card border-t border-border-color mt-12">
     <div class="content-container py-6 text-center text-sm text-text-secondary">
-      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch" class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
+      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch"
+        class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
       · 数据来源: arXiv, Crossref, EarthArXiv
     </div>
   </footer>
@@ -259,7 +308,7 @@
 
     // Filter functionality
     document.querySelectorAll('.filter-tag').forEach(tag => {
-      tag.addEventListener('click', function() {
+      tag.addEventListener('click', function () {
         const filterType = this.dataset.filter;
         const filterValue = this.dataset.value;
 
@@ -308,4 +357,5 @@
     });
   </script>
 </body>
+
 </html>
