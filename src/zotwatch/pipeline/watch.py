@@ -304,7 +304,10 @@ class WatchPipeline:
             interests_config = self.settings.scoring.interests
             if interests_config.include_keywords:
                 candidates, removed = include_by_keywords(
-                    candidates, interests_config.include_keywords
+                    candidates,
+                    interests_config.include_keywords,
+                    min_matches=interests_config.include_min_matches,
+                    fields=tuple(interests_config.include_match_fields),
                 )
                 result.stats.candidates_after_include_filter = len(candidates)
                 if removed > 0:

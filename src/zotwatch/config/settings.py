@@ -120,6 +120,8 @@ class ScoringConfig(BaseModel):
         top_k_interest: int = 5  # Final interest-based papers count
         # Positive keywords: candidates must match at least one to be kept
         include_keywords: list[str] = []
+        include_min_matches: int = 1
+        include_match_fields: list[str] = ["title", "abstract"]
         # Static exclude keywords (applied to ALL candidates, not just interest-based selection)
         # These are used in addition to LLM-generated exclude keywords
         exclude_keywords: list[str] = []

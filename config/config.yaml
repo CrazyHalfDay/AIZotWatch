@@ -83,6 +83,12 @@ scoring:
       - "sulfide"
       - "ore deposit"
       - "ore-forming"
+    # Require at least N keyword matches in title/abstract to keep
+    include_min_matches: 1
+    # Match fields: ["title"], ["abstract"], or ["title", "abstract"]
+    include_match_fields:
+      - "title"
+      - "abstract"
     # Static exclude keywords (case-insensitive, applied to ALL candidates)
     # 用于过滤 Nature/Science 等综合性期刊中的非地学文章
     exclude_keywords:
@@ -187,6 +193,15 @@ scoring:
       - "pollutant degradation"
       - "adsorption material"
       - "membrane separation"
+      - "gas separation"
+      - "xenon"
+      - "krypton"
+      - "coordination framework"
+      - "metal-organic framework"
+      - "MOF"
+      - "sorbent"
+      - "adsorbent"
+      - "adsorption"
       - "drinking water treatment"
       - "air pollution"
       
