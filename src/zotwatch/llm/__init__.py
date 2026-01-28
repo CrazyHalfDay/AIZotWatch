@@ -2,6 +2,7 @@
 
 from .cluster_labeler import ClusterLabeler
 from .deepseek import DeepSeekClient
+from .domain_classifier import DEFAULT_DOMAINS, PaperDomainClassifier
 from .factory import create_llm_client
 from .interest_refiner import InterestRefiner
 from .kimi import KimiClient
@@ -24,4 +25,6 @@ __all__ = [
     "LibraryAnalyzer",
     "TitleTranslator",
     "PaperRelevanceFilter",
+    "PaperDomainClassifier",
+    "DEFAULT_DOMAINS",
 ]

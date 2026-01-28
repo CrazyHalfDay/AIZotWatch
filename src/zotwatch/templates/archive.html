@@ -237,6 +237,15 @@
           <div class="flex flex-wrap gap-1" id="source-filters"></div>
         </div>
 
+        <!-- Domain Filter -->
+        <div class="flex items-center gap-2" id="domain-filter-container" style="display: none;">
+          <div class="h-4 w-px bg-border-color hidden md:block"></div>
+          <span class="text-sm text-text-secondary">领域:</span>
+          <select id="domain-filter" class="px-2 py-1 text-xs border border-border-color rounded bg-bg-card focus:outline-none focus:ring-1 focus:ring-accent">
+            <option value="">全部领域</option>
+          </select>
+        </div>
+
         <!-- Clear Filters -->
         <button id="clear-filters" class="text-xs text-accent hover:text-accent-hover hidden">清除筛选</button>
       </div>
@@ -295,7 +304,7 @@
       };
 
       const dataUrl = "{{ data_url }}";
-      const activeFilters = { source: new Set(), label: new Set() };
+      const activeFilters = { source: new Set(), label: new Set(), domain: '' };
       let archiveData = null;
       let groupStates = new Map();
       let intersectionObserver = null;
@@ -388,6 +397,48 @@
         container.appendChild(fragment);
       }
 
+      function buildDomainFilters(data) {
+        const container = document.getElementById('domain-filter-container');
+        const select = document.getElementById('domain-filter');
+
+        // Collect unique domains from all works
+        const domainCounts = new Map();
+        data.groups.forEach(group => {
+          group.works.forEach(work => {
+            if (work.domain) {
+              domainCounts.set(work.domain, (domainCounts.get(work.domain) || 0) + 1);
+            }
+          });
+        });
+
+        // Hide container if no domains
+        if (domainCounts.size === 0) {
+          container.style.display = 'none';
+          return;
+        }
+
+        // Sort domains by count (descending)
+        const sortedDomains = [...domainCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+        // Build options
+        select.innerHTML = '<option value="">全部领域</option>';
+        sortedDomains.forEach(([domain, count]) => {
+          const option = document.createElement('option');
+          option.value = domain;
+          option.textContent = `${domain} (${count})`;
+          select.appendChild(option);
+        });
+
+        container.style.display = 'flex';
+
+        // Add event listener
+        select.addEventListener('change', (e) => {
+          activeFilters.domain = e.target.value;
+          updateClearFiltersButton();
+          debouncedRender();
+        });
+      }
+
       function handleFilterClick(event) {
         const tag = event.currentTarget;
         const type = tag.dataset.filter;
@@ -404,16 +455,18 @@
 
       function updateClearFiltersButton() {
         const btn = document.getElementById('clear-filters');
-        const hasFilters = activeFilters.source.size > 0 || activeFilters.label.size > 0 || searchQuery;
+        const hasFilters = activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain || searchQuery;
         btn.classList.toggle('hidden', !hasFilters);
       }
 
       function clearAllFilters() {
         activeFilters.source.clear();
         activeFilters.label.clear();
+        activeFilters.domain = '';
         searchQuery = '';
         document.getElementById('search-input').value = '';
         document.getElementById('clear-search').classList.add('hidden');
+        document.getElementById('domain-filter').value = '';
         document.querySelectorAll('.filter-tag.active').forEach(tag => tag.classList.remove('active'));
         updateClearFiltersButton();
         debouncedRender();
@@ -422,6 +475,7 @@
       function matchesFilters(work) {
         if (activeFilters.source.size > 0 && !activeFilters.source.has(work.source)) return false;
         if (activeFilters.label.size > 0 && !activeFilters.label.has(work.label)) return false;
+        if (activeFilters.domain && work.domain !== activeFilters.domain) return false;
         return true;
       }
 
@@ -477,6 +531,7 @@
               <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
                 <span>${venue}</span>
                 ${work.impact_factor ? `<span class="text-blue-600">IF: ${work.impact_factor.toFixed(1)}</span>` : ''}
+                ${work.domain ? `<span class="text-purple-600">${escapeHtml(work.domain)}</span>` : ''}
                 <span>· ${published}</span>
                 <span>· 评分 ${work.score.toFixed(2)}</span>
               </div>
@@ -563,8 +618,12 @@
         if (searchQuery && searchQuery.length >= CONFIG.searchMinLength) {
           searchInfo.textContent = `找到 ${totalFiltered} 篇匹配 "${searchQuery}" 的文献`;
           searchInfo.classList.remove('hidden');
-        } else if (activeFilters.source.size > 0 || activeFilters.label.size > 0) {
-          searchInfo.textContent = `筛选结果: ${totalFiltered} 篇`;
+        } else if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain) {
+          let filterParts = [];
+          if (activeFilters.domain) filterParts.push(`领域: ${activeFilters.domain}`);
+          if (activeFilters.source.size > 0) filterParts.push(`来源: ${[...activeFilters.source].join(', ')}`);
+          if (activeFilters.label.size > 0) filterParts.push(`标签: ${[...activeFilters.label].join(', ')}`);
+          searchInfo.textContent = `筛选结果: ${totalFiltered} 篇 (${filterParts.join('; ')})`;
           searchInfo.classList.remove('hidden');
         } else {
           searchInfo.classList.add('hidden');
@@ -655,7 +714,7 @@
         container.appendChild(fragment);
 
         // Update filtered stats display
-        if (activeFilters.source.size > 0 || activeFilters.label.size > 0) {
+        if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain) {
           document.getElementById('stat-total').textContent = `${totalFiltered} / ${data.stats.total}`;
         } else {
           document.getElementById('stat-total').textContent = data.stats.total;
@@ -730,6 +789,7 @@
           document.getElementById('main-content').classList.remove('hidden');
           updateStats(data.stats);
           buildSourceFilters(data.sources || []);
+          buildDomainFilters(data);
           renderGroups(data);
         })
         .catch(err => {

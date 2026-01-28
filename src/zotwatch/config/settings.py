@@ -255,6 +255,14 @@ class LLMConfig(BaseModel):
 
         enabled: bool = False
 
+    class DomainClassificationConfig(BaseModel):
+        """Domain classification configuration for categorizing papers."""
+
+        enabled: bool = False  # Enable domain classification
+        batch_size: int = 20  # Papers per LLM call
+        max_workers: int = 3  # Concurrent LLM calls
+        domains: list[str] = Field(default_factory=list)  # Custom domains (uses defaults if empty)
+
     enabled: bool = True
     provider: str = "openrouter"
     api_key: str = ""
@@ -263,6 +271,7 @@ class LLMConfig(BaseModel):
     temperature: float = 0.3
     retry: RetryConfig = Field(default_factory=RetryConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
+    domain_classification: DomainClassificationConfig = Field(default_factory=DomainClassificationConfig)
 
 
 # Output Configuration

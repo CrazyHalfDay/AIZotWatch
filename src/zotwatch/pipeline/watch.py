@@ -31,6 +31,7 @@ from zotwatch.llm import (
     InterestRefiner,
     LibraryAnalyzer,
     OverallSummarizer,
+    PaperDomainClassifier,
     PaperRelevanceFilter,
     PaperSummarizer,
     TitleTranslator,
@@ -419,6 +420,10 @@ class WatchPipeline:
             if self.config.translate_titles and self.settings.llm.enabled:
                 self._translate_titles(result, storage, progress)
 
+            # 14. Classify domains (optional)
+            if self.settings.llm.domain_classification.enabled and self.settings.llm.enabled:
+                self._classify_domains(result, progress)
+
             # Report total elapsed time
             total_elapsed = time.time() - pipeline_start
             progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
@@ -719,6 +724,47 @@ class WatchPipeline:
 
         translate_elapsed = time.time() - translate_start
         progress("translate", f"Translated {len(translations)} titles ({translate_elapsed:.1f}s)")
+
+    def _classify_domains(
+        self,
+        result: WatchResult,
+        progress: Callable[[str, str], None],
+    ) -> None:
+        """Classify papers into research domains using LLM."""
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            return
+
+        all_works = result.ranked_works + (result.interest_works or [])
+        if not all_works:
+            return
+
+        classify_start = time.time()
+        progress("classify", f"Classifying {len(all_works)} papers into domains...")
+
+        domain_config = self.settings.llm.domain_classification
+        classifier = PaperDomainClassifier(
+            llm_client,
+            model=self.settings.llm.model,
+            domains=domain_config.domains if domain_config.domains else None,
+            batch_size=domain_config.batch_size,
+            max_workers=domain_config.max_workers,
+        )
+
+        # Classify all papers
+        classifications = classifier.classify_papers(all_works)
+
+        # Apply classifications to works
+        for work in result.ranked_works:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
+        for work in result.interest_works or []:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
+        classify_elapsed = time.time() - classify_start
+        progress("classify", f"Classified {len(classifications)} papers ({classify_elapsed:.1f}s)")
 
     def _cleanup_caches(
         self,
