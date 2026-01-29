@@ -151,6 +151,17 @@
       padding: 0 2px;
       border-radius: 2px;
     }
+
+    /* Author group header accent */
+    .group-header-author {
+      border-left: 3px solid #3b82f6;
+      background: linear-gradient(to right, #eff6ff, #ffffff);
+    }
+
+    .group-header-ai {
+      border-left: 3px solid #f59e0b;
+      background: linear-gradient(to right, #fffbeb, #ffffff);
+    }
   </style>
 </head>
 
@@ -176,7 +187,7 @@
           <span class="filter-tag px-3 py-1.5 bg-amber-100 text-amber-700 rounded-full text-sm font-medium" data-filter="label" data-value="consider">
             推荐 <span id="stat-consider">{{ stats.consider }}</span>
           </span>
-          <span class="filter-tag px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-sm font-medium" data-filter="label" data-value="followed">
+          <span class="filter-tag px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-sm font-medium" data-filter="label" data-value="followed" title="" id="followed-badge">
             关注 <span id="stat-followed">0</span>
           </span>
           <span class="px-3 py-1.5 bg-bg-hover text-text-secondary rounded-full text-sm">
@@ -230,6 +241,7 @@
             <a href="archive-source.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}">来源</a>
             <a href="archive-label.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}">标签</a>
             <a href="archive-domain.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'domain' }}">领域</a>
+            <a href="archive-author.html" class="view-btn px-2.5 py-1 rounded text-xs transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'author' }}">作者</a>
           </div>
         </div>
 
@@ -247,6 +259,15 @@
           <span class="text-sm text-text-secondary">领域:</span>
           <select id="domain-filter" class="px-2 py-1 text-xs border border-border-color rounded bg-bg-card focus:outline-none focus:ring-1 focus:ring-accent">
             <option value="">全部领域</option>
+          </select>
+        </div>
+
+        <!-- Followed Author Filter -->
+        <div class="flex items-center gap-2" id="author-filter-container" style="display: none;">
+          <div class="h-4 w-px bg-border-color hidden md:block"></div>
+          <span class="text-sm text-text-secondary">关注:</span>
+          <select id="author-filter" class="px-2 py-1 text-xs border border-border-color rounded bg-bg-card focus:outline-none focus:ring-1 focus:ring-accent">
+            <option value="">全部作者</option>
           </select>
         </div>
 
@@ -308,7 +329,7 @@
       };
 
       const dataUrl = "{{ data_url }}";
-      const activeFilters = { source: new Set(), label: new Set(), domain: '' };
+      const activeFilters = { source: new Set(), label: new Set(), domain: '', author: '' };
       let archiveData = null;
       let groupStates = new Map();
       let intersectionObserver = null;
@@ -385,6 +406,13 @@
         document.getElementById('stat-consider').textContent = consider;
         document.getElementById('stat-followed').textContent = followed;
         document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider - followed);
+
+        // Set tooltip with per-author breakdown
+        const followedAuthors = stats.followed_authors || [];
+        if (followedAuthors.length > 0) {
+          const tooltip = followedAuthors.map(a => `${a.name}: ${a.count} 篇`).join('\n');
+          document.getElementById('followed-badge').title = tooltip;
+        }
       }
 
       function buildSourceFilters(sources) {
@@ -445,6 +473,47 @@
         });
       }
 
+      function buildAuthorFilters(data) {
+        const container = document.getElementById('author-filter-container');
+        const select = document.getElementById('author-filter');
+
+        // Collect unique followed authors from all works
+        const authorCounts = new Map();
+        data.groups.forEach(group => {
+          group.works.forEach(work => {
+            const author = work.extra && work.extra.followed_author;
+            if (author) {
+              authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+            }
+          });
+        });
+
+        // Hide container if no followed authors
+        if (authorCounts.size === 0) {
+          container.style.display = 'none';
+          return;
+        }
+
+        // Sort by count descending
+        const sorted = [...authorCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+        select.innerHTML = '<option value="">全部作者</option>';
+        sorted.forEach(([author, count]) => {
+          const option = document.createElement('option');
+          option.value = author;
+          option.textContent = `${author} (${count})`;
+          select.appendChild(option);
+        });
+
+        container.style.display = 'flex';
+
+        select.addEventListener('change', (e) => {
+          activeFilters.author = e.target.value;
+          updateClearFiltersButton();
+          debouncedRender();
+        });
+      }
+
       function handleFilterClick(event) {
         const tag = event.currentTarget;
         const type = tag.dataset.filter;
@@ -461,7 +530,7 @@
 
       function updateClearFiltersButton() {
         const btn = document.getElementById('clear-filters');
-        const hasFilters = activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain || searchQuery;
+        const hasFilters = activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain || activeFilters.author || searchQuery;
         btn.classList.toggle('hidden', !hasFilters);
       }
 
@@ -469,10 +538,12 @@
         activeFilters.source.clear();
         activeFilters.label.clear();
         activeFilters.domain = '';
+        activeFilters.author = '';
         searchQuery = '';
         document.getElementById('search-input').value = '';
         document.getElementById('clear-search').classList.add('hidden');
         document.getElementById('domain-filter').value = '';
+        document.getElementById('author-filter').value = '';
         document.querySelectorAll('.filter-tag.active').forEach(tag => tag.classList.remove('active'));
         updateClearFiltersButton();
         debouncedRender();
@@ -482,6 +553,10 @@
         if (activeFilters.source.size > 0 && !activeFilters.source.has(work.source)) return false;
         if (activeFilters.label.size > 0 && !activeFilters.label.has(work.label)) return false;
         if (activeFilters.domain && work.domain !== activeFilters.domain) return false;
+        if (activeFilters.author) {
+          const followedAuthor = (work.extra && work.extra.followed_author) || '';
+          if (followedAuthor !== activeFilters.author) return false;
+        }
         return true;
       }
 
@@ -505,6 +580,23 @@
         // Sort groups by label priority if grouping by label
         if (data.group_by === 'label') {
           groups.sort((a, b) => (LABEL_ORDER[a.name] ?? 99) - (LABEL_ORDER[b.name] ?? 99));
+        }
+
+        // Author view: sort works within each group by published date (newest first)
+        if (data.group_by === 'author') {
+          groups.forEach(g => {
+            g.filteredWorks.sort((a, b) => {
+              const dateA = a.published || '';
+              const dateB = b.published || '';
+              return dateB.localeCompare(dateA);
+            });
+          });
+          // Keep "AI 推荐" at the end
+          groups.sort((a, b) => {
+            if (a.name === 'AI 推荐') return 1;
+            if (b.name === 'AI 推荐') return -1;
+            return b.filteredWorks.length - a.filteredWorks.length;
+          });
         }
 
         return groups;
@@ -558,7 +650,9 @@
                 ${work.domain ? `<span class="text-purple-600">${escapeHtml(work.domain)}</span>` : ''}
                 <span>· ${published}</span>
                 ${work.label === 'followed' && work.extra?.followed_author
-                  ? `<span class="text-blue-600">· 关注: ${escapeHtml(work.extra.followed_author)}</span>`
+                  ? (archiveData && archiveData.group_by === 'author'
+                    ? ''
+                    : `<span class="text-blue-600">· 关注: ${escapeHtml(work.extra.followed_author)}</span>`)
                   : `<span>· 评分 ${work.score.toFixed(2)}</span>`}
               </div>
               <p class="text-xs text-text-secondary mt-1">${authors}${hasMore ? ' 等' : ''}</p>
@@ -655,8 +749,9 @@
         if (searchQuery && searchQuery.length >= CONFIG.searchMinLength) {
           searchInfo.textContent = `找到 ${totalFiltered} 篇匹配 "${searchQuery}" 的文献`;
           searchInfo.classList.remove('hidden');
-        } else if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain) {
+        } else if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain || activeFilters.author) {
           let filterParts = [];
+          if (activeFilters.author) filterParts.push(`作者: ${activeFilters.author}`);
           if (activeFilters.domain) filterParts.push(`领域: ${activeFilters.domain}`);
           if (activeFilters.source.size > 0) filterParts.push(`来源: ${[...activeFilters.source].join(', ')}`);
           if (activeFilters.label.size > 0) filterParts.push(`标签: ${[...activeFilters.label].join(', ')}`);
@@ -683,7 +778,11 @@
 
           // Group Header (clickable to collapse)
           const header = document.createElement('div');
-          header.className = 'group-header flex items-center justify-between p-3 bg-bg-card rounded-lg border border-border-color mb-3 cursor-pointer';
+          let headerExtra = '';
+          if (data.group_by === 'author') {
+            headerExtra = group.name === 'AI 推荐' ? ' group-header-ai' : ' group-header-author';
+          }
+          header.className = 'group-header flex items-center justify-between p-3 bg-bg-card rounded-lg border border-border-color mb-3 cursor-pointer' + headerExtra;
           header.onclick = () => toggleGroup(groupId);
 
           let titleContent = '';
@@ -691,6 +790,12 @@
             const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : (group.name === 'followed' ? 'bg-blue-500' : 'bg-gray-400'));
             const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : (group.name === 'followed' ? '关注' : '参考'));
             titleContent = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${labelName}`;
+          } else if (data.group_by === 'author') {
+            const isAI = group.name === 'AI 推荐';
+            const iconSvg = isAI
+              ? '<svg class="w-4 h-4 mr-2 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>'
+              : '<svg class="w-4 h-4 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>';
+            titleContent = `${iconSvg}<span class="${isAI ? 'text-amber-700' : 'text-blue-700'}">${escapeHtml(group.name)}</span>`;
           } else {
             titleContent = escapeHtml(group.name);
           }
@@ -751,7 +856,7 @@
         container.appendChild(fragment);
 
         // Update filtered stats display
-        if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain) {
+        if (activeFilters.source.size > 0 || activeFilters.label.size > 0 || activeFilters.domain || activeFilters.author) {
           document.getElementById('stat-total').textContent = `${totalFiltered} / ${data.stats.total}`;
         } else {
           document.getElementById('stat-total').textContent = data.stats.total;
@@ -827,6 +932,7 @@
           updateStats(data.stats);
           buildSourceFilters(data.sources || []);
           buildDomainFilters(data);
+          buildAuthorFilters(data);
           renderGroups(data);
         })
         .catch(err => {

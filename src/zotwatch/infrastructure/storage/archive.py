@@ -322,6 +322,42 @@ class ArchiveStorage:
             grouped[label].append(work)
         return grouped
 
+    def get_grouped_by_author(
+        self,
+        days: int = 90,
+        sources: list[str] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, list[RankedWork]]:
+        """Get works grouped by followed author.
+
+        Followed-author papers are grouped by author name.
+        Non-followed papers are grouped into "AI 推荐" bucket.
+        Groups are ordered: followed authors (by count desc), then "AI 推荐".
+        """
+        works = self.get_all(days=days, sources=sources, labels=labels)
+        author_groups: dict[str, list[RankedWork]] = {}
+        recommended: list[RankedWork] = []
+
+        for work in works:
+            followed_author = work.extra.get("followed_author") if work.extra else None
+            if followed_author:
+                if followed_author not in author_groups:
+                    author_groups[followed_author] = []
+                author_groups[followed_author].append(work)
+            else:
+                recommended.append(work)
+
+        # Sort author groups by paper count (descending)
+        sorted_groups: dict[str, list[RankedWork]] = {}
+        for name in sorted(author_groups, key=lambda n: len(author_groups[n]), reverse=True):
+            sorted_groups[name] = author_groups[name]
+
+        # Append non-followed papers at the end
+        if recommended:
+            sorted_groups["AI 推荐"] = recommended
+
+        return sorted_groups
+
     def get_stats(self, days: int = 90) -> dict:
         """Get archive statistics (deduplicated by identifier)."""
         conn = self.connect()
@@ -351,11 +387,39 @@ class ArchiveStorage:
             (f"-{days} days",),
         )
         row = cursor.fetchone()
+
+        # Get per-author breakdown for followed papers
+        author_cursor = conn.execute(
+            """
+            WITH latest AS (
+                SELECT a.*
+                FROM archive a
+                INNER JOIN (
+                    SELECT identifier, MAX(run_date) as max_date
+                    FROM archive
+                    WHERE run_date >= date('now', ?)
+                    GROUP BY identifier
+                ) m ON a.identifier = m.identifier AND a.run_date = m.max_date
+            )
+            SELECT followed_author, COUNT(*) as count
+            FROM latest
+            WHERE followed_author IS NOT NULL
+            GROUP BY followed_author
+            ORDER BY count DESC
+            """,
+            (f"-{days} days",),
+        )
+        followed_authors = [
+            {"name": r["followed_author"], "count": r["count"]}
+            for r in author_cursor.fetchall()
+        ]
+
         return {
             "total": row["total"] or 0,
             "must_read": row["must_read"] or 0,
             "consider": row["consider"] or 0,
             "followed": row["followed"] or 0,
+            "followed_authors": followed_authors,
             "source_count": row["source_count"] or 0,
             "venue_count": row["venue_count"] or 0,
             "earliest": row["earliest"],
