@@ -93,6 +93,7 @@ class WatchResult:
 
     ranked_works: list[RankedWork] = field(default_factory=list)
     interest_works: list[InterestWork] = field(default_factory=list)
+    followed_works: list[RankedWork] = field(default_factory=list)
     researcher_profile: ResearcherProfile | None = None
     overall_summaries: dict[str, OverallSummary] = field(default_factory=dict)
     stats: WatchStats = field(default_factory=WatchStats)
@@ -280,6 +281,11 @@ class WatchPipeline:
             # 3. Analyze researcher profile (optional)
             if self.settings.llm.enabled:
                 result.researcher_profile = self._analyze_profile(storage, progress)
+
+            # 3.5 Fetch followed authors (skip scoring, only dedupe)
+            followed_cfg = self.settings.sources.followed_authors
+            if followed_cfg.enabled and followed_cfg.authors:
+                result.followed_works = self._fetch_followed_authors(storage, progress)
 
             # 4. Fetch candidates
             fetch_start = time.time()
@@ -677,6 +683,17 @@ class WatchPipeline:
                 if work.identifier in interest_map:
                     work.summary = interest_map[work.identifier]
 
+        # Summarize followed works
+        if result.followed_works:
+            progress("summary", f"Generating summaries for {len(result.followed_works)} followed author papers...")
+            followed_result = summarizer.summarize_batch(result.followed_works, max_workers=max_workers)
+            result.stats.summaries_generated += followed_result.success_count
+
+            followed_map = {s.paper_id: s for s in followed_result.summaries}
+            for work in result.followed_works:
+                if work.identifier in followed_map:
+                    work.summary = followed_map[work.identifier]
+
         # Generate overall summaries
         progress("summary", "Generating overall summaries...")
         overall_summarizer = OverallSummarizer(llm_client, model=self.settings.llm.model)
@@ -705,7 +722,7 @@ class WatchPipeline:
         if not llm_client:
             return
 
-        all_works = result.ranked_works + (result.interest_works or [])
+        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
         if not all_works:
             return
 
@@ -722,6 +739,10 @@ class WatchPipeline:
             if work.identifier in translations:
                 work.translated_title = translations[work.identifier]
 
+        for work in result.followed_works or []:
+            if work.identifier in translations:
+                work.translated_title = translations[work.identifier]
+
         translate_elapsed = time.time() - translate_start
         progress("translate", f"Translated {len(translations)} titles ({translate_elapsed:.1f}s)")
 
@@ -735,7 +756,7 @@ class WatchPipeline:
         if not llm_client:
             return
 
-        all_works = result.ranked_works + (result.interest_works or [])
+        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
         if not all_works:
             return
 
@@ -763,8 +784,135 @@ class WatchPipeline:
             if work.identifier in classifications:
                 work.domain = classifications[work.identifier]
 
+        for work in result.followed_works or []:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
         classify_elapsed = time.time() - classify_start
         progress("classify", f"Classified {len(classifications)} papers ({classify_elapsed:.1f}s)")
+
+    def _fetch_followed_authors(
+        self,
+        storage: ProfileStorage,
+        progress: Callable[[str, str], None],
+    ) -> list[RankedWork]:
+        """Fetch papers by followed authors from OpenAlex.
+
+        Papers skip scoring/ranking/TopK. Only deduplication is applied.
+        First run does a full pull; subsequent runs use incremental fetching.
+        """
+        from zotwatch.infrastructure.storage import ArchiveStorage
+        from zotwatch.sources.openalex import OpenAlexAuthorFetcher
+
+        followed_cfg = self.settings.sources.followed_authors
+        progress("followed", f"Fetching papers for {len(followed_cfg.authors)} followed authors...")
+
+        fetch_start = time.time()
+
+        # Initialize archive for state tracking
+        archive_db = self.base_dir / "data" / "archive.sqlite"
+        archive = ArchiveStorage(archive_db)
+        archive.initialize()
+
+        try:
+            # Get last fetch dates for incremental fetching
+            last_dates = archive.get_all_followed_author_states()
+
+            # Get known identifiers for deduplication
+            known_identifiers = archive.get_known_identifiers()
+
+            # Also get identifiers from the user's Zotero library for dedup
+            library_dois: set[str] = set()
+            library_titles: set[str] = set()
+            for item in storage.iter_items():
+                if item.doi:
+                    library_dois.add(item.doi.lower().strip())
+                library_titles.add(item.title.lower().strip())
+
+            # Fetch from OpenAlex
+            fetcher = OpenAlexAuthorFetcher(
+                polite_email=followed_cfg.polite_email,
+            )
+
+            author_dicts = [
+                {"id": a.id, "name": a.name} for a in followed_cfg.authors
+            ]
+            candidates = fetcher.fetch_all_authors(
+                author_dicts,
+                last_dates=last_dates,
+                max_results_per_author=followed_cfg.max_results_per_author,
+            )
+
+            progress("followed", f"Fetched {len(candidates)} papers from OpenAlex")
+
+            # Deduplicate against archive and library
+            new_works: list[RankedWork] = []
+            seen: set[str] = set()
+            for candidate in candidates:
+                # Skip if already in archive
+                if candidate.identifier in known_identifiers:
+                    continue
+                # Skip if already seen in this batch
+                if candidate.identifier in seen:
+                    continue
+                # Skip if DOI already in library
+                if candidate.doi and candidate.doi.lower().strip() in library_dois:
+                    continue
+                # Skip if title already in library (exact match)
+                if candidate.title.lower().strip() in library_titles:
+                    continue
+
+                seen.add(candidate.identifier)
+
+                # Convert to RankedWork with label="followed", no scoring
+                followed_author = candidate.extra.get("followed_author", "")
+                work = RankedWork(
+                    source=candidate.source,
+                    identifier=candidate.identifier,
+                    title=candidate.title,
+                    abstract=candidate.abstract,
+                    authors=candidate.authors,
+                    doi=candidate.doi,
+                    url=candidate.url,
+                    published=candidate.published,
+                    venue=candidate.venue,
+                    metrics=candidate.metrics,
+                    extra={
+                        **candidate.extra,
+                        "followed_author": followed_author,
+                    },
+                    score=0.0,
+                    similarity=0.0,
+                    label="followed",
+                )
+                new_works.append(work)
+
+            # Update state for each author
+            today = time.strftime("%Y-%m-%d")
+            for author in followed_cfg.authors:
+                author_works = [
+                    w for w in new_works
+                    if w.extra.get("followed_author") == author.name
+                ]
+                existing_state = archive.get_followed_author_state(author.id)
+                prev_total = existing_state["total_works"] if existing_state else 0
+                archive.update_followed_author_state(
+                    author_id=author.id,
+                    author_name=author.name,
+                    last_fetch_date=today,
+                    total_works=prev_total + len(author_works),
+                )
+
+            fetch_elapsed = time.time() - fetch_start
+            progress(
+                "followed",
+                f"Found {len(new_works)} new papers from followed authors ({fetch_elapsed:.1f}s)",
+            )
+
+            return new_works
+
+        finally:
+            archive.close()
 
     def _cleanup_caches(
         self,

@@ -73,6 +73,27 @@ class ScraperConfig(BaseModel):
     max_workers: int = 3  # Maximum concurrent workers for batch fetching
 
 
+class FollowedAuthorEntry(BaseModel):
+    """Single followed author entry."""
+
+    name: str
+    id: str  # OpenAlex Author ID (e.g., "A5023888391") or ORCID
+
+
+class FollowedAuthorsConfig(BaseModel):
+    """Followed authors source configuration (OpenAlex API).
+
+    Fetches all papers by specified authors. First run does a full pull,
+    subsequent runs fetch incrementally from the last fetch date.
+    Papers skip scoring/ranking/TopK - only deduplication is applied.
+    """
+
+    enabled: bool = False
+    polite_email: str = ""  # Email for OpenAlex polite pool
+    authors: list[FollowedAuthorEntry] = Field(default_factory=list)
+    max_results_per_author: int = 10000
+
+
 class SourcesConfig(BaseModel):
     """Data sources configuration."""
 
@@ -80,6 +101,7 @@ class SourcesConfig(BaseModel):
     arxiv: ArxivConfig = Field(default_factory=ArxivConfig)
     eartharxiv: EarthArxivConfig = Field(default_factory=EarthArxivConfig)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
+    followed_authors: FollowedAuthorsConfig = Field(default_factory=FollowedAuthorsConfig)
 
 
 # Scoring Configuration
@@ -449,6 +471,8 @@ __all__ = [
     "CrossRefConfig",
     "ArxivConfig",
     "ScraperConfig",
+    "FollowedAuthorEntry",
+    "FollowedAuthorsConfig",
     "ScoringConfig",
     "Thresholds",
     "EmbeddingConfig",

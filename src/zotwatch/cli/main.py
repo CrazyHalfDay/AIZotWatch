@@ -224,7 +224,10 @@ def watch(
     result = pipeline.run(on_progress=on_progress)
 
     # Handle empty results
-    if not result.ranked_works:
+    has_ranked = bool(result.ranked_works)
+    has_followed = bool(result.followed_works)
+
+    if not has_ranked and not has_followed:
         click.echo("No recommendations found")
         if rss:
             write_rss([], base_dir / "reports" / "feed.xml")
@@ -238,9 +241,17 @@ def watch(
         click.echo(f"\nThresholds ({t.mode}): must_read >= {t.must_read:.3f}, consider >= {t.consider:.3f}")
 
     # Display top recommendations
-    click.echo(f"\nTop {min(10, len(result.ranked_works))} recommendations:")
-    for idx, work in enumerate(result.ranked_works[:10], start=1):
-        click.echo(f"  {idx:02d} | {work.score:.3f} | {work.label} | {work.title[:60]}...")
+    if has_ranked:
+        click.echo(f"\nTop {min(10, len(result.ranked_works))} recommendations:")
+        for idx, work in enumerate(result.ranked_works[:10], start=1):
+            click.echo(f"  {idx:02d} | {work.score:.3f} | {work.label} | {work.title[:60]}...")
+
+    # Display followed author papers
+    if has_followed:
+        click.echo(f"\nFollowed authors: {len(result.followed_works)} new papers")
+        for idx, work in enumerate(result.followed_works[:5], start=1):
+            author = work.extra.get("followed_author", "")
+            click.echo(f"  {idx:02d} | {author} | {work.title[:60]}...")
 
     # Generate outputs
     _output_results(result, base_dir, settings, rss, report, push)
@@ -249,7 +260,10 @@ def watch(
     archive_db = base_dir / "data" / "archive.sqlite"
     with ArchiveStorage(archive_db) as archive:
         saved = archive.save_batch(result.ranked_works)
-        click.echo(f"Saved {saved} works to archive")
+        click.echo(f"Saved {saved} ranked works to archive")
+        if result.followed_works:
+            saved_followed = archive.save_batch(result.followed_works)
+            click.echo(f"Saved {saved_followed} followed author works to archive")
 
 
 def _output_results(
@@ -282,6 +296,7 @@ def _output_results(
             template_dir=template_dir if template_dir.exists() else None,
             timezone_name=settings.output.timezone,
             interest_works=result.interest_works if result.interest_works else None,
+            followed_works=result.followed_works if result.followed_works else None,
             overall_summaries=result.overall_summaries if result.overall_summaries else None,
             researcher_profile=result.researcher_profile,
         )

@@ -176,6 +176,9 @@
           <span class="filter-tag px-3 py-1.5 bg-amber-100 text-amber-700 rounded-full text-sm font-medium" data-filter="label" data-value="consider">
             推荐 <span id="stat-consider">{{ stats.consider }}</span>
           </span>
+          <span class="filter-tag px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-sm font-medium" data-filter="label" data-value="followed">
+            关注 <span id="stat-followed">0</span>
+          </span>
           <span class="px-3 py-1.5 bg-bg-hover text-text-secondary rounded-full text-sm">
             参考 <span id="stat-ignore">{{ stats.total - stats.must_read - stats.consider }}</span>
           </span>
@@ -314,7 +317,7 @@
       let allGroupsExpanded = true;
 
       // Priority order for label groups
-      const LABEL_ORDER = { 'must_read': 0, 'consider': 1, 'ignore': 2 };
+      const LABEL_ORDER = { 'must_read': 0, 'consider': 1, 'followed': 2, 'ignore': 3 };
 
       // Utility functions
       function normalizeGroupId(name) {
@@ -376,10 +379,12 @@
         const total = stats.total ?? 0;
         const mustRead = stats.must_read ?? 0;
         const consider = stats.consider ?? 0;
+        const followed = stats.followed ?? 0;
         document.getElementById('stat-total').textContent = total;
         document.getElementById('stat-must-read').textContent = mustRead;
         document.getElementById('stat-consider').textContent = consider;
-        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider);
+        document.getElementById('stat-followed').textContent = followed;
+        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider - followed);
       }
 
       function buildSourceFilters(sources) {
@@ -523,10 +528,10 @@
 
       function createArticleHTML(work, groupId, idx) {
         const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
-        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : '参考');
+        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : (work.label === 'followed' ? '关注' : '参考'));
         const labelClass = work.label === 'must_read'
           ? 'bg-green-100 text-green-700'
-          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600');
+          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : (work.label === 'followed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'));
         const abstractId = `abs-${groupId}-${idx}`;
         const summaryId = `sum-${groupId}-${idx}`;
 
@@ -552,7 +557,9 @@
                 ${work.impact_factor ? `<span class="text-blue-600">IF: ${work.impact_factor.toFixed(1)}</span>` : ''}
                 ${work.domain ? `<span class="text-purple-600">${escapeHtml(work.domain)}</span>` : ''}
                 <span>· ${published}</span>
-                <span>· 评分 ${work.score.toFixed(2)}</span>
+                ${work.label === 'followed' && work.extra?.followed_author
+                  ? `<span class="text-blue-600">· 关注: ${escapeHtml(work.extra.followed_author)}</span>`
+                  : `<span>· 评分 ${work.score.toFixed(2)}</span>`}
               </div>
               <p class="text-xs text-text-secondary mt-1">${authors}${hasMore ? ' 等' : ''}</p>
               ${hasSummary ? `<div class="paper-summary mt-2">
@@ -681,8 +688,8 @@
 
           let titleContent = '';
           if (data.group_by === 'label') {
-            const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : 'bg-gray-400');
-            const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : '参考');
+            const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : (group.name === 'followed' ? 'bg-blue-500' : 'bg-gray-400'));
+            const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : (group.name === 'followed' ? '关注' : '参考'));
             titleContent = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${labelName}`;
           } else {
             titleContent = escapeHtml(group.name);

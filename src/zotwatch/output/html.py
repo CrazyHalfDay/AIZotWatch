@@ -138,6 +138,7 @@ def render_html(
     template_name: str = "report.html",
     timezone_name: str = "UTC",
     interest_works: list[InterestWork] | None = None,
+    followed_works: list[RankedWork] | None = None,
     overall_summaries: dict[str, OverallSummary] | None = None,
     researcher_profile: ResearcherProfile | None = None,
 ) -> Path:
@@ -150,6 +151,7 @@ def render_html(
         template_name: Name of template file.
         timezone_name: IANA timezone name (e.g., "Asia/Shanghai"). Defaults to "UTC".
         interest_works: Optional list of interest-based works.
+        followed_works: Optional list of followed author works.
         overall_summaries: Optional dict with "interest" and/or "similarity" OverallSummary.
         researcher_profile: Optional researcher profile analysis.
 
@@ -193,6 +195,7 @@ def render_html(
         generated_at=generated_at,
         timezone_name=timezone_name,
         interest_works=interest_works or [],
+        followed_works=followed_works or [],
         overall_summaries=overall_summaries or {},
         researcher_profile=researcher_profile,
         profile_generated_at=profile_generated_at,
