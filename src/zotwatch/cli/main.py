@@ -108,9 +108,7 @@ def _build_profile(
             "No items found in your Zotero library. Please add some papers to Zotero before running ZotWatch."
         )
 
-    click.echo(f"Building profile from {total_items} items...")
-
-    # Build profile with unified cache
+    # Build profile with unified cache (incremental: skips if nothing changed)
     vectorizer = create_embedding_provider(settings.embedding)
     builder = ProfileBuilder(
         base_dir,
@@ -121,9 +119,7 @@ def _build_profile(
     )
     artifacts = builder.run(full=full)
 
-    click.echo("Profile built successfully:")
-    click.echo(f"  SQLite: {artifacts.sqlite_path}")
-    click.echo(f"  FAISS: {artifacts.faiss_path}")
+    click.echo(f"Profile ready: {artifacts.faiss_path}")
 
 
 @cli.command()
@@ -151,17 +147,6 @@ def profile(ctx: click.Context, full: bool) -> None:
     stats = ingestor.run(full=full, on_progress=on_ingest_progress)
     click.echo(f"  Fetched: {stats.fetched}, Updated: {stats.updated}, Removed: {stats.removed}")
 
-    # Count items
-    total_items = storage.count_items()
-    cached_profile = embedding_cache.count(source_type="profile", model=settings.embedding.model)
-
-    if full:
-        click.echo("Building profile (full rebuild)...")
-    elif cached_profile < total_items:
-        click.echo(f"Building profile ({total_items - cached_profile}/{total_items} items need embedding)...")
-    else:
-        click.echo(f"Building profile (all {total_items} embeddings cached)...")
-
     # Build profile with unified cache
     vectorizer = create_embedding_provider(settings.embedding)
     builder = ProfileBuilder(
@@ -171,9 +156,23 @@ def profile(ctx: click.Context, full: bool) -> None:
         vectorizer=vectorizer,
         embedding_cache=embedding_cache,
     )
+
+    # Check if rebuild is needed before logging
+    if full:
+        click.echo("Building profile (full rebuild)...")
+    elif not builder._can_skip_rebuild():
+        total_items = storage.count_items()
+        cached_profile = embedding_cache.count(source_type="profile", model=settings.embedding.model)
+        if cached_profile < total_items:
+            click.echo(f"Building profile ({total_items - cached_profile}/{total_items} items need embedding)...")
+        else:
+            click.echo(f"Building profile (all {total_items} embeddings cached, rebuilding FAISS index)...")
+    else:
+        click.echo("Profile is up to date, no rebuild needed.")
+
     artifacts = builder.run(full=full)
 
-    click.echo("Profile built successfully:")
+    click.echo(f"Profile ready:")
     click.echo(f"  SQLite: {artifacts.sqlite_path}")
     click.echo(f"  FAISS: {artifacts.faiss_path}")
 
