@@ -41,13 +41,6 @@ CREATE INDEX IF NOT EXISTS idx_archive_source ON archive(source);
 CREATE INDEX IF NOT EXISTS idx_archive_venue ON archive(venue);
 CREATE INDEX IF NOT EXISTS idx_archive_label ON archive(label);
 CREATE INDEX IF NOT EXISTS idx_archive_identifier ON archive(identifier);
-CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain);
-"""
-
-# Migration for existing databases without domain column
-ARCHIVE_MIGRATION_V2 = """
-ALTER TABLE archive ADD COLUMN domain TEXT;
-CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain);
 """
 
 
@@ -69,9 +62,14 @@ class ArchiveStorage:
     def initialize(self) -> None:
         """Initialize database schema and apply migrations."""
         conn = self.connect()
+        # Create table and base indexes first
         conn.executescript(ARCHIVE_SCHEMA)
         conn.commit()
+        # Apply migrations (may add columns to existing tables)
         self._migrate(conn)
+        # Create indexes that depend on migrated columns
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain)")
+        conn.commit()
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Apply schema migrations for existing databases."""
@@ -80,7 +78,7 @@ class ArchiveStorage:
 
         # V2: Add domain column
         if "domain" not in columns:
-            conn.executescript(ARCHIVE_MIGRATION_V2)
+            conn.execute("ALTER TABLE archive ADD COLUMN domain TEXT")
             conn.commit()
 
     def close(self) -> None:
