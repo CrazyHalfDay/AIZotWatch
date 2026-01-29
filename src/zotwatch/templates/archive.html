@@ -505,6 +505,22 @@
         return groups;
       }
 
+      function buildSummaryHTML(bullets) {
+        if (!bullets) return '';
+        const items = [
+          { label: '研究问题', text: bullets.research_question },
+          { label: '方法', text: bullets.methodology },
+          { label: '关键发现', text: bullets.key_findings },
+          { label: '创新点', text: bullets.innovation },
+        ];
+        if (bullets.relevance_note) {
+          items.push({ label: '相关性', text: bullets.relevance_note });
+        }
+        return items.map(item =>
+          `<div class="flex gap-2"><span class="text-accent font-medium shrink-0">${item.label}:</span><span>${escapeHtml(item.text)}</span></div>`
+        ).join('');
+      }
+
       function createArticleHTML(work, groupId, idx) {
         const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
         const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : '参考');
@@ -512,6 +528,7 @@
           ? 'bg-green-100 text-green-700'
           : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600');
         const abstractId = `abs-${groupId}-${idx}`;
+        const summaryId = `sum-${groupId}-${idx}`;
 
         const title = searchQuery ? highlightText(work.title, searchQuery) : escapeHtml(work.title);
         const venue = escapeHtml(work.venue || '未知来源');
@@ -520,6 +537,7 @@
           ? authorsRaw.map(a => highlightText(a, searchQuery)).join('，')
           : authorsRaw.map(escapeHtml).join('，');
         const hasMore = (work.authors || []).length > 5;
+        const hasSummary = work.summary_bullets && work.summary_bullets.research_question;
 
         return `<article class="paper-card bg-bg-card rounded-lg border border-border-color p-4 hover:border-accent/30 transition-colors" data-idx="${idx}">
           <div class="flex items-start gap-3">
@@ -537,6 +555,17 @@
                 <span>· 评分 ${work.score.toFixed(2)}</span>
               </div>
               <p class="text-xs text-text-secondary mt-1">${authors}${hasMore ? ' 等' : ''}</p>
+              ${hasSummary ? `<div class="paper-summary mt-2">
+                <button onclick="toggleSection('${summaryId}')" class="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
+                  <span>AI 总结</span>
+                  <svg class="w-3 h-3 transform transition-transform" id="icon-${summaryId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div id="${summaryId}" class="section-expand collapsed">
+                  <div class="text-xs text-text-secondary mt-2 leading-relaxed bg-blue-50/50 p-3 rounded space-y-1.5">
+                    ${buildSummaryHTML(work.summary_bullets)}
+                  </div>
+                </div>
+              </div>` : ''}
               ${work.abstract ? `<div class="paper-abstract mt-2">
                 <button onclick="toggleSection('${abstractId}')" class="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
                   <span>查看摘要</span>

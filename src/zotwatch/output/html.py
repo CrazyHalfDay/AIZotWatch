@@ -309,6 +309,17 @@ def _serialize_ranked_work(work: RankedWork) -> dict:
         if hasattr(run_date, "isoformat"):
             extra["run_date"] = run_date.isoformat()
     data["extra"] = extra
+
+    # Include bullet summary for archive display
+    if work.summary and work.summary.bullets:
+        b = work.summary.bullets
+        data["summary_bullets"] = {
+            "research_question": b.research_question,
+            "methodology": b.methodology,
+            "key_findings": b.key_findings,
+            "innovation": b.innovation,
+            "relevance_note": b.relevance_note,
+        }
     return data
 
 

@@ -274,6 +274,27 @@ llm:
     initial_delay: 1.0
   translation:
     enabled: true  # Translate English titles to Chinese
+  domain_classification:
+    enabled: true  # Classify papers into research domains
+    batch_size: 20
+    max_workers: 3
+    domains:  # Custom domains for geoscience (empty = use defaults)
+      - "地球化学"
+      - "岩石学"
+      - "矿物学"
+      - "火山学"
+      - "构造地质学"
+      - "地震学"
+      - "大地测量学"
+      - "地球物理学"
+      - "海洋地质"
+      - "古气候与古环境"
+      - "遥感与GIS"
+      - "水文地质学"
+      - "矿床学与成矿"
+      - "环境地球化学"
+      - "行星科学"
+      - "其他"
 
 # Output Configuration
 output:
