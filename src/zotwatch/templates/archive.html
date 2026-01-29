@@ -294,7 +294,9 @@
       <!-- 月份 -->
       <div class="flex flex-wrap items-center gap-2" id="month-row" style="display:none">
         <span class="text-sm font-medium text-text-secondary w-20 shrink-0">📅 月份:</span>
-        <div class="flex flex-wrap gap-1.5" id="month-pills"></div>
+        <select id="month-select" class="pill" style="padding-right:2rem;appearance:auto;">
+          <option value="">全部月份</option>
+        </select>
       </div>
 
       <!-- 标签 -->
@@ -684,16 +686,31 @@
       }
 
       function buildAllFilters(data) {
-        // Month pills
+        // Month dropdown
         const monthCounts = new Map();
         data.groups.forEach(g => g.works.forEach(w => {
           const m = getWorkMonth(w);
           if (m) monthCounts.set(m, (monthCounts.get(m) || 0) + 1);
         }));
-        const months = [...monthCounts.entries()]
-          .sort((a, b) => b[0].localeCompare(a[0]))
-          .map(([m, c]) => ({ value: m, label: m, count: c }));
-        buildPillRow('month-pills', 'month-row', months, 'month');
+        const monthRow = document.getElementById('month-row');
+        const monthSelect = document.getElementById('month-select');
+        if (monthCounts.size > 0) {
+          monthRow.style.display = 'flex';
+          const total = [...monthCounts.values()].reduce((a, b) => a + b, 0);
+          monthSelect.innerHTML = `<option value="">全部月份 (${total})</option>`;
+          [...monthCounts.entries()]
+            .sort((a, b) => b[0].localeCompare(a[0]))
+            .forEach(([m, c]) => {
+              const opt = document.createElement('option');
+              opt.value = m;
+              opt.textContent = `${m} (${c})`;
+              monthSelect.appendChild(opt);
+            });
+          monthSelect.addEventListener('change', (e) => {
+            filters.month = e.target.value;
+            debouncedRender();
+          });
+        }
 
         // Domain pills
         const domainCounts = new Map();
