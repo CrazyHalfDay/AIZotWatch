@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS archive (
     label TEXT NOT NULL,
     translated_title TEXT,
     summary_json TEXT,
+    domain TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(identifier, run_date)
 );
@@ -40,6 +41,13 @@ CREATE INDEX IF NOT EXISTS idx_archive_source ON archive(source);
 CREATE INDEX IF NOT EXISTS idx_archive_venue ON archive(venue);
 CREATE INDEX IF NOT EXISTS idx_archive_label ON archive(label);
 CREATE INDEX IF NOT EXISTS idx_archive_identifier ON archive(identifier);
+CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain);
+"""
+
+# Migration for existing databases without domain column
+ARCHIVE_MIGRATION_V2 = """
+ALTER TABLE archive ADD COLUMN domain TEXT;
+CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain);
 """
 
 
@@ -59,10 +67,21 @@ class ArchiveStorage:
         return self._conn
 
     def initialize(self) -> None:
-        """Initialize database schema."""
+        """Initialize database schema and apply migrations."""
         conn = self.connect()
         conn.executescript(ARCHIVE_SCHEMA)
         conn.commit()
+        self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Apply schema migrations for existing databases."""
+        cursor = conn.execute("PRAGMA table_info(archive)")
+        columns = {row["name"] for row in cursor.fetchall()}
+
+        # V2: Add domain column
+        if "domain" not in columns:
+            conn.executescript(ARCHIVE_MIGRATION_V2)
+            conn.commit()
 
     def close(self) -> None:
         """Close database connection."""
@@ -122,6 +141,7 @@ class ArchiveStorage:
                 work.label,
                 work.translated_title,
                 summary_json,
+                work.domain,
             ))
 
         conn.executemany(
@@ -130,8 +150,9 @@ class ArchiveStorage:
                 identifier, run_date, source, title, abstract,
                 authors_json, doi, url, published, venue,
                 score, similarity, impact_factor_score, impact_factor,
-                is_chinese_core, label, translated_title, summary_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_chinese_core, label, translated_title, summary_json,
+                domain
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -250,6 +271,22 @@ class ArchiveStorage:
             grouped[source].append(work)
         return grouped
 
+    def get_grouped_by_domain(
+        self,
+        days: int = 90,
+        sources: list[str] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, list[RankedWork]]:
+        """Get works grouped by domain."""
+        works = self.get_all(days=days, sources=sources, labels=labels)
+        grouped: dict[str, list[RankedWork]] = {}
+        for work in works:
+            domain = work.domain or "未分类"
+            if domain not in grouped:
+                grouped[domain] = []
+            grouped[domain].append(work)
+        return grouped
+
     def get_grouped_by_label(
         self,
         days: int = 90,
@@ -363,6 +400,7 @@ class ArchiveStorage:
             label=row["label"],
             translated_title=row["translated_title"],
             summary=summary,
+            domain=row["domain"],
             extra={"run_date": row["run_date"]},
         )
 
