@@ -45,7 +45,7 @@
     <div class="content-container py-6 md:py-8">
       <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献推荐</h1>
       <p class="text-xs md:text-sm text-text-secondary mt-1">
-        共 {{ works|length + (interest_works|length if interest_works else 0) }} 篇论文 ·
+        共 {{ works|length + (interest_works|length if interest_works else 0) + (followed_works|length if followed_works else 0) }} 篇论文 ·
         生成于 {{ generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
       </p>
     </div>
@@ -707,11 +707,24 @@
             </svg>
             精选推荐总结
           </h3>
-          <div class="text-sm text-text-primary leading-relaxed space-y-2">
+          <div class="text-sm text-text-primary leading-relaxed space-y-3">
             <p>{{ overall_summaries.interest.overview }}</p>
-            {% for topic in overall_summaries.interest.topics %}
-            <p><strong class="text-accent">{{ topic.topic_name }}</strong>：{{ topic.description }}</p>
-            {% endfor %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {% for topic in overall_summaries.interest.topics %}
+              <div class="border border-border-color rounded-lg p-3 bg-bg-hover/50">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-accent font-semibold">{{ topic.topic_name }}</span>
+                  <span class="text-xs text-text-secondary">
+                    {{ topic.paper_count }} 篇
+                    {% if overall_summaries.interest.paper_count %}
+                    · {{ '%.0f'|format((topic.paper_count / overall_summaries.interest.paper_count) * 100) }}%
+                    {% endif %}
+                  </span>
+                </div>
+                <p class="text-sm text-text-primary">{{ topic.description }}</p>
+              </div>
+              {% endfor %}
+            </div>
           </div>
         </div>
         {% endif %}
@@ -724,11 +737,24 @@
             </svg>
             相似度推荐总结
           </h3>
-          <div class="text-sm text-text-primary leading-relaxed space-y-2">
+          <div class="text-sm text-text-primary leading-relaxed space-y-3">
             <p>{{ overall_summaries.similarity.overview }}</p>
-            {% for topic in overall_summaries.similarity.topics %}
-            <p><strong class="text-text-secondary">{{ topic.topic_name }}</strong>：{{ topic.description }}</p>
-            {% endfor %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {% for topic in overall_summaries.similarity.topics %}
+              <div class="border border-border-color rounded-lg p-3 bg-bg-hover/50">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-text-secondary font-semibold">{{ topic.topic_name }}</span>
+                  <span class="text-xs text-text-secondary">
+                    {{ topic.paper_count }} 篇
+                    {% if overall_summaries.similarity.paper_count %}
+                    · {{ '%.0f'|format((topic.paper_count / overall_summaries.similarity.paper_count) * 100) }}%
+                    {% endif %}
+                  </span>
+                </div>
+                <p class="text-sm text-text-primary">{{ topic.description }}</p>
+              </div>
+              {% endfor %}
+            </div>
           </div>
         </div>
         {% endif %}
@@ -892,6 +918,131 @@
                 </span>
               </div>
             </div>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if followed_works %}
+  <section class="py-5 md:py-8 border-b border-border-color">
+    <div class="content-container">
+      <div class="mb-3 md:mb-4">
+        <button id="btn-followed-works" onclick="toggleSection('followed-works')"
+                class="w-full text-left text-lg md:text-xl font-bold text-text-primary flex items-center justify-between group hover:text-accent transition-colors">
+          <span class="flex items-center gap-2 flex-1 min-w-0">
+            <svg class="w-5 h-5 flex-shrink-0 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/>
+            </svg>
+            <span class="truncate">关注作者</span>
+          </span>
+          <span class="flex items-center gap-1 md:gap-2 flex-shrink-0 ml-2">
+            <span class="hidden md:inline text-xs font-normal text-text-secondary">关注作者的最新论文，共 {{ followed_works|length }} 篇</span>
+            <span class="hidden md:inline text-sm font-normal text-text-secondary group-hover:text-accent" id="hint-followed-works">点击收起</span>
+            <svg class="w-5 h-5 md:w-4 md:h-4 text-text-secondary group-hover:text-accent transform transition-transform rotate-180" id="icon-followed-works" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </span>
+        </button>
+        <p class="text-xs text-text-secondary mt-1 ml-7 md:hidden">关注作者的最新论文，共 {{ followed_works|length }} 篇</p>
+      </div>
+
+      <div id="followed-works" class="section-expand expanded">
+      <div class="space-y-4 md:space-y-5">
+        {% for work in followed_works %}
+        <article class="bg-bg-card rounded-lg border border-blue-200 overflow-hidden hover:border-blue-400 transition-colors">
+          <div class="p-4 md:p-5">
+            <div class="mb-3">
+              <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 border border-blue-300">
+                  关注
+                </span>
+                {% if work.extra.followed_author %}
+                <span class="text-xs text-blue-600 font-medium">{{ work.extra.followed_author }}</span>
+                {% endif %}
+                <span class="text-xs text-text-secondary">{{ work.source }}</span>
+                <span class="text-xs text-text-secondary md:hidden">· {{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</span>
+              </div>
+              <div class="flex items-start justify-between gap-3 md:gap-4">
+                <div class="flex-1">
+                  <h2 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
+                    <a href="{{ work.url or '#' }}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">
+                      {{ work.title }}
+                    </a>
+                  </h2>
+                  {% if work.translated_title %}
+                  <p class="text-sm text-text-secondary mt-0.5 leading-snug">{{ work.translated_title }}</p>
+                  {% endif %}
+                </div>
+                <div class="hidden md:block text-right text-sm text-text-secondary flex-shrink-0">
+                  <div class="font-medium">{{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</div>
+                </div>
+              </div>
+              <div class="mt-1 text-xs text-text-secondary" title="{{ work.venue or '' }}">
+                {{ work.venue or '未知来源' }}
+                {% if work.impact_factor %}
+                  <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
+                {% endif %}
+                {% if work.domain %}
+                  <span class="ml-1 text-purple-600">{{ work.domain }}</span>
+                {% endif %}
+              </div>
+            </div>
+
+            <p class="text-sm text-text-secondary mb-3">
+              {{ work.authors[:5] | join('，') }}{% if work.authors|length > 5 %} 等{% endif %}
+            </p>
+
+            {% if work.doi %}
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary mb-4">
+              <span class="flex items-center">
+                <span class="font-medium mr-1">DOI:</span>
+                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener" class="text-accent hover:text-accent-hover hover:underline">{{ work.doi }}</a>
+              </span>
+            </div>
+            {% endif %}
+
+            {% if work.abstract %}
+            <div class="bg-bg-hover/50 rounded-lg p-4 mb-4 border border-border-color">
+              <button id="btn-followed-abstract-{{ loop.index }}" onclick="toggleSection('followed-abstract-{{ loop.index }}')"
+                      class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
+                <span class="flex items-center">
+                  <svg class="w-4 h-4 mr-1.5 text-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                  </svg>
+                  原文摘要
+                </span>
+                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-followed-abstract-{{ loop.index }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </button>
+              <div id="followed-abstract-{{ loop.index }}" class="section-expand collapsed">
+                <p class="text-sm text-text-secondary mt-3 leading-relaxed">{{ work.abstract }}</p>
+              </div>
+            </div>
+            {% endif %}
+
+            {% if work.summary %}
+            <div class="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
+              <h3 class="text-sm font-semibold text-blue-700 mb-3 flex items-center">
+                <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
+                </svg>
+                AI 总结
+              </h3>
+              <div class="space-y-2 text-sm text-text-primary">
+                <p><span class="font-medium text-blue-700">研究问题：</span>{{ work.summary.bullets.research_question }}</p>
+                <p><span class="font-medium text-blue-700">研究方法：</span>{{ work.summary.bullets.methodology }}</p>
+                <p><span class="font-medium text-blue-700">主要发现：</span>{{ work.summary.bullets.key_findings }}</p>
+                <p><span class="font-medium text-blue-700">创新点：</span>{{ work.summary.bullets.innovation }}</p>
+                {% if work.summary.bullets.relevance_note %}
+                <p><span class="font-medium text-blue-700">相关性：</span>{{ work.summary.bullets.relevance_note }}</p>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
           </div>
         </article>
         {% endfor %}

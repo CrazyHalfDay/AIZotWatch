@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS archive (
     label TEXT NOT NULL,
     translated_title TEXT,
     summary_json TEXT,
+    domain TEXT,
+    followed_author TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(identifier, run_date)
 );
@@ -40,6 +42,14 @@ CREATE INDEX IF NOT EXISTS idx_archive_source ON archive(source);
 CREATE INDEX IF NOT EXISTS idx_archive_venue ON archive(venue);
 CREATE INDEX IF NOT EXISTS idx_archive_label ON archive(label);
 CREATE INDEX IF NOT EXISTS idx_archive_identifier ON archive(identifier);
+
+CREATE TABLE IF NOT EXISTS followed_author_state (
+    author_id TEXT PRIMARY KEY,
+    author_name TEXT NOT NULL,
+    last_fetch_date TEXT,
+    total_works INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -59,10 +69,33 @@ class ArchiveStorage:
         return self._conn
 
     def initialize(self) -> None:
-        """Initialize database schema."""
+        """Initialize database schema and apply migrations."""
         conn = self.connect()
+        # Create table and base indexes first
         conn.executescript(ARCHIVE_SCHEMA)
         conn.commit()
+        # Apply migrations (may add columns to existing tables)
+        self._migrate(conn)
+        # Create indexes that depend on migrated columns
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_domain ON archive(domain)")
+        conn.commit()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Apply schema migrations for existing databases."""
+        cursor = conn.execute("PRAGMA table_info(archive)")
+        columns = {row["name"] for row in cursor.fetchall()}
+
+        # V2: Add domain column
+        if "domain" not in columns:
+            conn.execute("ALTER TABLE archive ADD COLUMN domain TEXT")
+            conn.commit()
+
+        # V3: Add followed_author column
+        if "followed_author" not in columns:
+            conn.execute("ALTER TABLE archive ADD COLUMN followed_author TEXT")
+            conn.commit()
+
+        # V4: followed_author_state table is created in ARCHIVE_SCHEMA via executescript
 
     def close(self) -> None:
         """Close database connection."""
@@ -103,6 +136,11 @@ class ArchiveStorage:
             if work.summary:
                 summary_json = work.summary.model_dump_json()
 
+            # Extract followed_author from extra dict
+            followed_author = None
+            if isinstance(work.extra, dict):
+                followed_author = work.extra.get("followed_author")
+
             rows.append((
                 work.identifier,
                 run_date.isoformat(),
@@ -122,6 +160,8 @@ class ArchiveStorage:
                 work.label,
                 work.translated_title,
                 summary_json,
+                work.domain,
+                followed_author,
             ))
 
         conn.executemany(
@@ -130,8 +170,9 @@ class ArchiveStorage:
                 identifier, run_date, source, title, abstract,
                 authors_json, doi, url, published, venue,
                 score, similarity, impact_factor_score, impact_factor,
-                is_chinese_core, label, translated_title, summary_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_chinese_core, label, translated_title, summary_json,
+                domain, followed_author
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -250,6 +291,22 @@ class ArchiveStorage:
             grouped[source].append(work)
         return grouped
 
+    def get_grouped_by_domain(
+        self,
+        days: int = 90,
+        sources: list[str] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, list[RankedWork]]:
+        """Get works grouped by domain."""
+        works = self.get_all(days=days, sources=sources, labels=labels)
+        grouped: dict[str, list[RankedWork]] = {}
+        for work in works:
+            domain = work.domain or "未分类"
+            if domain not in grouped:
+                grouped[domain] = []
+            grouped[domain].append(work)
+        return grouped
+
     def get_grouped_by_label(
         self,
         days: int = 90,
@@ -264,6 +321,42 @@ class ArchiveStorage:
                 grouped[label] = []
             grouped[label].append(work)
         return grouped
+
+    def get_grouped_by_author(
+        self,
+        days: int = 90,
+        sources: list[str] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, list[RankedWork]]:
+        """Get works grouped by followed author.
+
+        Followed-author papers are grouped by author name.
+        Non-followed papers are grouped into "AI 推荐" bucket.
+        Groups are ordered: followed authors (by count desc), then "AI 推荐".
+        """
+        works = self.get_all(days=days, sources=sources, labels=labels)
+        author_groups: dict[str, list[RankedWork]] = {}
+        recommended: list[RankedWork] = []
+
+        for work in works:
+            followed_author = work.extra.get("followed_author") if work.extra else None
+            if followed_author:
+                if followed_author not in author_groups:
+                    author_groups[followed_author] = []
+                author_groups[followed_author].append(work)
+            else:
+                recommended.append(work)
+
+        # Sort author groups by paper count (descending)
+        sorted_groups: dict[str, list[RankedWork]] = {}
+        for name in sorted(author_groups, key=lambda n: len(author_groups[n]), reverse=True):
+            sorted_groups[name] = author_groups[name]
+
+        # Append non-followed papers at the end
+        if recommended:
+            sorted_groups["AI 推荐"] = recommended
+
+        return sorted_groups
 
     def get_stats(self, days: int = 90) -> dict:
         """Get archive statistics (deduplicated by identifier)."""
@@ -284,6 +377,7 @@ class ArchiveStorage:
                 COUNT(*) as total,
                 SUM(CASE WHEN label = 'must_read' THEN 1 ELSE 0 END) as must_read,
                 SUM(CASE WHEN label = 'consider' THEN 1 ELSE 0 END) as consider,
+                SUM(CASE WHEN label = 'followed' THEN 1 ELSE 0 END) as followed,
                 COUNT(DISTINCT source) as source_count,
                 COUNT(DISTINCT venue) as venue_count,
                 MIN(run_date) as earliest,
@@ -293,10 +387,39 @@ class ArchiveStorage:
             (f"-{days} days",),
         )
         row = cursor.fetchone()
+
+        # Get per-author breakdown for followed papers
+        author_cursor = conn.execute(
+            """
+            WITH latest AS (
+                SELECT a.*
+                FROM archive a
+                INNER JOIN (
+                    SELECT identifier, MAX(run_date) as max_date
+                    FROM archive
+                    WHERE run_date >= date('now', ?)
+                    GROUP BY identifier
+                ) m ON a.identifier = m.identifier AND a.run_date = m.max_date
+            )
+            SELECT followed_author, COUNT(*) as count
+            FROM latest
+            WHERE followed_author IS NOT NULL
+            GROUP BY followed_author
+            ORDER BY count DESC
+            """,
+            (f"-{days} days",),
+        )
+        followed_authors = [
+            {"name": r["followed_author"], "count": r["count"]}
+            for r in author_cursor.fetchall()
+        ]
+
         return {
             "total": row["total"] or 0,
             "must_read": row["must_read"] or 0,
             "consider": row["consider"] or 0,
+            "followed": row["followed"] or 0,
+            "followed_authors": followed_authors,
             "source_count": row["source_count"] or 0,
             "venue_count": row["venue_count"] or 0,
             "earliest": row["earliest"],
@@ -327,6 +450,82 @@ class ArchiveStorage:
         )
         return [{"source": row["source"], "count": row["count"]} for row in cursor.fetchall()]
 
+    def get_followed_author_state(self, author_id: str) -> dict | None:
+        """Get state for a followed author.
+
+        Returns:
+            Dict with author_id, author_name, last_fetch_date, total_works,
+            or None if not found.
+        """
+        conn = self.connect()
+        cursor = conn.execute(
+            "SELECT * FROM followed_author_state WHERE author_id = ?",
+            (author_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "author_id": row["author_id"],
+            "author_name": row["author_name"],
+            "last_fetch_date": row["last_fetch_date"],
+            "total_works": row["total_works"],
+        }
+
+    def get_all_followed_author_states(self) -> dict[str, str]:
+        """Get last fetch dates for all followed authors.
+
+        Returns:
+            Dict mapping author_id to last_fetch_date (YYYY-MM-DD).
+        """
+        conn = self.connect()
+        cursor = conn.execute(
+            "SELECT author_id, last_fetch_date FROM followed_author_state WHERE last_fetch_date IS NOT NULL"
+        )
+        return {row["author_id"]: row["last_fetch_date"] for row in cursor.fetchall()}
+
+    def update_followed_author_state(
+        self,
+        author_id: str,
+        author_name: str,
+        last_fetch_date: str,
+        total_works: int,
+    ) -> None:
+        """Update state for a followed author."""
+        conn = self.connect()
+        conn.execute(
+            """
+            INSERT INTO followed_author_state (author_id, author_name, last_fetch_date, total_works, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(author_id) DO UPDATE SET
+                author_name = excluded.author_name,
+                last_fetch_date = excluded.last_fetch_date,
+                total_works = excluded.total_works,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (author_id, author_name, last_fetch_date, total_works),
+        )
+        conn.commit()
+
+    def get_known_identifiers(self, source: str | None = None) -> set[str]:
+        """Get all known identifiers in archive (for deduplication).
+
+        Args:
+            source: Optional source filter (e.g., "openalex").
+
+        Returns:
+            Set of identifier strings.
+        """
+        conn = self.connect()
+        if source:
+            cursor = conn.execute(
+                "SELECT DISTINCT identifier FROM archive WHERE source = ?",
+                (source,),
+            )
+        else:
+            cursor = conn.execute("SELECT DISTINCT identifier FROM archive")
+        return {row["identifier"] for row in cursor.fetchall()}
+
     def _row_to_work(self, row: sqlite3.Row) -> RankedWork:
         """Convert database row to RankedWork."""
         authors = json.loads(row["authors_json"]) if row["authors_json"] else []
@@ -344,6 +543,12 @@ class ArchiveStorage:
                 summary = PaperSummary.model_validate_json(row["summary_json"])
             except Exception:
                 pass
+
+        # Build extra dict
+        extra: dict[str, object] = {"run_date": row["run_date"]}
+        followed_author = row["followed_author"] if "followed_author" in row.keys() else None
+        if followed_author:
+            extra["followed_author"] = followed_author
 
         return RankedWork(
             source=row["source"],
@@ -363,7 +568,8 @@ class ArchiveStorage:
             label=row["label"],
             translated_title=row["translated_title"],
             summary=summary,
-            extra={"run_date": row["run_date"]},
+            domain=row["domain"],
+            extra=extra,
         )
 
 

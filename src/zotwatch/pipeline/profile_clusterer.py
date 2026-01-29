@@ -124,7 +124,7 @@ class ProfileClusterer:
             verbose=False,
             gpu=False,
             spherical=True,  # Normalize centroids after each iteration
-            seed=42,  # Reproducibility
+            seed=self.config.kmeans_seed,  # Reproducibility
             min_points_per_centroid=1,  # Allow small clusters without FAISS warnings
         )
         kmeans.train(vectors)
@@ -290,7 +290,7 @@ class ProfileClusterer:
                     verbose=False,
                     gpu=False,
                     spherical=True,
-                    seed=42,
+                    seed=self.config.kmeans_seed,
                     min_points_per_centroid=1,  # Allow evaluation of small clusters
                 )
                 kmeans.train(sample_vectors)

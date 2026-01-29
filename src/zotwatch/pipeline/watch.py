@@ -31,6 +31,8 @@ from zotwatch.llm import (
     InterestRefiner,
     LibraryAnalyzer,
     OverallSummarizer,
+    PaperDomainClassifier,
+    PaperRelevanceFilter,
     PaperSummarizer,
     TitleTranslator,
 )
@@ -39,7 +41,14 @@ from zotwatch.llm.factory import create_llm_client
 from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
-from zotwatch.pipeline.filters import exclude_by_keywords, filter_recent, filter_without_abstract, limit_preprints
+from zotwatch.pipeline.filters import (
+    exclude_by_keywords,
+    filter_by_interest_similarity,
+    filter_recent,
+    filter_without_abstract,
+    include_by_keywords,
+    limit_preprints,
+)
 from zotwatch.pipeline.profile_ranker import ComputedThresholds
 from zotwatch.sources.zotero import ZoteroIngestor
 
@@ -67,8 +76,11 @@ class WatchStats:
 
     candidates_fetched: int = 0
     candidates_after_dedupe: int = 0
+    candidates_after_include_filter: int = 0
     candidates_after_keyword_filter: int = 0  # After exclude_keywords filtering
     candidates_after_abstract_filter: int = 0
+    candidates_after_semantic_filter: int = 0
+    candidates_after_llm_filter: int = 0
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
     summaries_generated: int = 0
@@ -81,6 +93,7 @@ class WatchResult:
 
     ranked_works: list[RankedWork] = field(default_factory=list)
     interest_works: list[InterestWork] = field(default_factory=list)
+    followed_works: list[RankedWork] = field(default_factory=list)
     researcher_profile: ResearcherProfile | None = None
     overall_summaries: dict[str, OverallSummary] = field(default_factory=dict)
     stats: WatchStats = field(default_factory=WatchStats)
@@ -230,6 +243,10 @@ class WatchPipeline:
         Returns:
             WatchResult containing ranked works, statistics, and optional
             researcher profile, summaries, and interest works.
+
+        Note:
+            Resources are cleaned up in a finally block to ensure cleanup
+            happens even if an exception occurs during pipeline execution.
         """
         result = WatchResult()
         storage = self._get_storage()
@@ -241,113 +258,190 @@ class WatchPipeline:
             if on_progress:
                 on_progress(stage, msg)
 
-        progress("start", "Starting ZotWatch pipeline...")
+        try:
+            progress("start", "Starting ZotWatch pipeline...")
 
-        # 1. Ensure profile exists
-        profile_built = self._ensure_profile_exists(on_progress=progress)
-        if profile_built:
-            progress("profile", "Profile built from Zotero library")
+            # 1. Ensure profile exists
+            profile_built = self._ensure_profile_exists(on_progress=progress)
+            if profile_built:
+                progress("profile", "Profile built from Zotero library")
 
-        ingest_stats = None
+            ingest_stats = None
 
-        # 2. Incremental Zotero sync (skip if we just did a full rebuild)
-        if not profile_built:
-            progress("sync", "Syncing with Zotero...")
-            ingest_stats = self._run_ingest(storage, full=False, on_progress=progress)
+            # 2. Incremental Zotero sync (skip if we just did a full rebuild)
+            if not profile_built:
+                progress("sync", "Syncing with Zotero...")
+                ingest_stats = self._run_ingest(storage, full=False, on_progress=progress)
 
-            # 2.1 Refresh profile artifacts when library changed
-            if ingest_stats and (ingest_stats.fetched > 0 or ingest_stats.removed > 0):
-                progress("profile", "Updating profile embeddings and FAISS index...")
-                self._build_profile_from_storage(full=False)
+                # 2.1 Refresh profile artifacts when library changed
+                if ingest_stats and (ingest_stats.fetched > 0 or ingest_stats.removed > 0):
+                    progress("profile", "Updating profile embeddings and FAISS index...")
+                    self._build_profile_from_storage(full=False)
 
-        # 3. Analyze researcher profile (optional)
-        if self.settings.llm.enabled:
-            result.researcher_profile = self._analyze_profile(storage, progress)
+            # 3. Analyze researcher profile (optional)
+            if self.settings.llm.enabled:
+                result.researcher_profile = self._analyze_profile(storage, progress)
 
-        # 4. Fetch candidates
-        fetch_start = time.time()
-        progress("fetch", "Fetching candidates from configured sources...")
-        fetcher = CandidateFetcher(self.settings, self.base_dir)
-        candidates = fetcher.fetch_all()
-        result.stats.candidates_fetched = len(candidates)
-        fetch_elapsed = time.time() - fetch_start
-        progress("fetch", f"Found {len(candidates)} candidates ({fetch_elapsed:.1f}s)")
+            # 3.5 Fetch followed authors (skip scoring, only dedupe)
+            followed_cfg = self.settings.sources.followed_authors
+            if followed_cfg.enabled and followed_cfg.authors:
+                result.followed_works = self._fetch_followed_authors(storage, progress)
 
-        # 5. Enrich abstracts (optional)
-        if self.settings.sources.scraper.enabled:
-            candidates, enrich_stats = self._enrich_abstracts(candidates, progress)
-            result.stats.abstracts_enriched = enrich_stats.enriched
+            # 4. Fetch candidates
+            fetch_start = time.time()
+            progress("fetch", "Fetching candidates from configured sources...")
+            fetcher = CandidateFetcher(self.settings, self.base_dir)
+            candidates = fetcher.fetch_all()
+            result.stats.candidates_fetched = len(candidates)
+            fetch_elapsed = time.time() - fetch_start
+            progress("fetch", f"Found {len(candidates)} candidates ({fetch_elapsed:.1f}s)")
 
-        # 6. Deduplicate
-        progress("dedupe", "Filtering duplicates against library...")
-        dedupe = DedupeEngine(storage)
-        before_dedupe = len(candidates)
-        candidates = dedupe.filter(candidates)
-        result.stats.candidates_after_dedupe = len(candidates)
-        progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
+            # 5. Enrich abstracts (optional)
+            if self.settings.sources.scraper.enabled:
+                candidates, enrich_stats = self._enrich_abstracts(candidates, progress)
+                result.stats.abstracts_enriched = enrich_stats.enriched
 
-        # 6.5 Exclude by keywords (if configured)
-        interests_config = self.settings.scoring.interests
-        if interests_config.exclude_keywords:
-            candidates, removed = exclude_by_keywords(
-                candidates, interests_config.exclude_keywords
-            )
-            result.stats.candidates_after_keyword_filter = len(candidates)
-            if removed > 0:
-                progress("filter", f"Excluded {removed} candidates by keywords")
-        else:
-            result.stats.candidates_after_keyword_filter = len(candidates)
+            # 6. Deduplicate
+            progress("dedupe", "Filtering duplicates against library...")
+            dedupe = DedupeEngine(storage, title_threshold=self.settings.watch.dedupe_threshold)
+            before_dedupe = len(candidates)
+            candidates = dedupe.filter(candidates)
+            result.stats.candidates_after_dedupe = len(candidates)
+            progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
 
-        # 7. Filter without abstract (if required)
-        if self.config.require_abstract:
-            candidates, removed = filter_without_abstract(candidates)
-            result.stats.candidates_after_abstract_filter = len(candidates)
-            if removed > 0:
-                progress("filter", f"Removed {removed} candidates without abstracts")
+            # 6.5 Exclude by keywords (if configured)
+            interests_config = self.settings.scoring.interests
+            if interests_config.include_keywords:
+                candidates, removed = include_by_keywords(
+                    candidates,
+                    interests_config.include_keywords,
+                    min_matches=interests_config.include_min_matches,
+                    fields=tuple(interests_config.include_match_fields),
+                )
+                result.stats.candidates_after_include_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates missing include keywords")
+            else:
+                result.stats.candidates_after_include_filter = len(candidates)
 
-        # 8. Interest-based selection (optional)
-        if interests_config.enabled and interests_config.description.strip():
-            result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
-            result.stats.interest_papers_selected = len(result.interest_works)
+            if interests_config.exclude_keywords:
+                candidates, removed = exclude_by_keywords(
+                    candidates, interests_config.exclude_keywords
+                )
+                result.stats.candidates_after_keyword_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Excluded {removed} candidates by keywords")
+            else:
+                result.stats.candidates_after_keyword_filter = len(candidates)
 
-        # 9. Rank by profile similarity
-        rank_start = time.time()
-        progress("rank", "Computing relevance scores...")
-        ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
-        ranked = ranker.rank(candidates)
-        result.computed_thresholds = ranker.computed_thresholds
-        rank_elapsed = time.time() - rank_start
-        progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
+            # 7. Filter without abstract (if required)
+            if self.config.require_abstract:
+                candidates, removed = filter_without_abstract(candidates)
+                result.stats.candidates_after_abstract_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates without abstracts")
+            else:
+                result.stats.candidates_after_abstract_filter = len(candidates)
 
+            # 7.25 Semantic interest filter (optional)
+            if (
+                interests_config.semantic_filter_enabled
+                and interests_config.description.strip()
+                and candidates
+            ):
+                progress("filter", "Applying semantic interest filter...")
+                semantic_vectorizer = CachingEmbeddingProvider(
+                    provider=create_embedding_provider(self.settings.embedding),
+                    cache=embedding_cache,
+                    source_type="candidate",
+                    ttl_days=self.settings.embedding.candidate_ttl_days,
+                )
+                candidates, removed = filter_by_interest_similarity(
+                    candidates,
+                    query=interests_config.description,
+                    vectorizer=semantic_vectorizer,
+                    min_similarity=interests_config.semantic_filter_min_similarity,
+                    max_candidates=interests_config.semantic_filter_max_candidates,
+                )
+                result.stats.candidates_after_semantic_filter = len(candidates)
+                if removed > 0:
+                    progress("filter", f"Removed {removed} candidates by semantic similarity")
+            else:
+                result.stats.candidates_after_semantic_filter = len(candidates)
 
-        # 10. Apply filters
-        ranked = filter_recent(ranked, days=self.config.recent_days)
-        result.stats.candidates_after_recent_filter = len(ranked)
-        ranked = limit_preprints(ranked, max_ratio=self.config.max_preprint_ratio)
+            # 7.5 LLM relevance filter (optional)
+            if interests_config.llm_relevance_filter_enabled and self.settings.llm.enabled:
+                llm_client = self._get_llm_client()
+                if llm_client:
+                    progress("filter", "Applying LLM relevance filter...")
+                    llm_filter = PaperRelevanceFilter(
+                        llm_client,
+                        model=self.settings.llm.model,
+                        batch_size=interests_config.llm_relevance_batch_size,
+                        max_candidates=interests_config.llm_relevance_max_candidates,
+                    )
+                    candidates, removed = llm_filter.filter_candidates(
+                        candidates,
+                        user_interests=interests_config.description,
+                    )
+                    result.stats.candidates_after_llm_filter = len(candidates)
+                    if removed > 0:
+                        progress("filter", f"Removed {removed} candidates by LLM relevance")
+                else:
+                    result.stats.candidates_after_llm_filter = len(candidates)
+            else:
+                result.stats.candidates_after_llm_filter = len(candidates)
 
-        # 11. Apply top_k limit
-        if self.config.top_k and len(ranked) > self.config.top_k:
-            ranked = ranked[: self.config.top_k]
+            # 8. Interest-based selection (optional)
+            if interests_config.enabled and interests_config.description.strip():
+                result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
+                result.stats.interest_papers_selected = len(result.interest_works)
 
-        result.ranked_works = ranked
-        progress("rank", f"Final: {len(ranked)} recommendations")
+            # 9. Rank by profile similarity
+            rank_start = time.time()
+            progress("rank", "Computing relevance scores...")
+            ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
+            ranked = ranker.rank(candidates)
+            result.computed_thresholds = ranker.computed_thresholds
+            rank_elapsed = time.time() - rank_start
+            progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
 
-        # 12. Generate AI summaries (optional)
-        if self.config.generate_summaries and self.settings.llm.enabled and ranked:
-            self._generate_summaries(result, storage, progress)
+            # 10. Apply filters
+            ranked = filter_recent(ranked, days=self.config.recent_days)
+            result.stats.candidates_after_recent_filter = len(ranked)
+            ranked = limit_preprints(ranked, max_ratio=self.config.max_preprint_ratio)
 
-        # 13. Translate titles (optional)
-        if self.config.translate_titles and self.settings.llm.enabled:
-            self._translate_titles(result, storage, progress)
+            # 11. Apply top_k limit
+            if self.config.top_k and len(ranked) > self.config.top_k:
+                ranked = ranked[: self.config.top_k]
 
-        # 14. Cleanup caches
-        self._cleanup_caches(embedding_cache, progress)
+            result.ranked_works = ranked
+            progress("rank", f"Final: {len(ranked)} recommendations")
 
-        # Report total elapsed time
-        total_elapsed = time.time() - pipeline_start
-        progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
+            # 12. Generate AI summaries (optional)
+            if self.config.generate_summaries and self.settings.llm.enabled and ranked:
+                self._generate_summaries(result, storage, progress)
 
-        return result
+            # 13. Translate titles (optional)
+            if self.config.translate_titles and self.settings.llm.enabled:
+                self._translate_titles(result, storage, progress)
+
+            # 14. Classify domains (optional)
+            if self.settings.llm.domain_classification.enabled and self.settings.llm.enabled:
+                self._classify_domains(result, progress)
+
+            # Report total elapsed time
+            total_elapsed = time.time() - pipeline_start
+            progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
+
+            return result
+
+        finally:
+            # Always cleanup caches, even if an exception occurred
+            try:
+                self._cleanup_caches(embedding_cache, progress)
+            except Exception as e:
+                logger.warning("Cache cleanup failed: %s", e)
 
     def _analyze_profile(
         self,
@@ -554,7 +648,8 @@ class WatchPipeline:
         est_time = len(result.ranked_works) * 2
         progress("summary", f"Generating summaries for {len(result.ranked_works)} papers (est. ~{est_time}s)...")
         summarizer = PaperSummarizer(llm_client, storage, model=self.settings.llm.model)
-        summary_result = summarizer.summarize_batch(result.ranked_works)
+        max_workers = self.settings.watch.summarizer_max_workers
+        summary_result = summarizer.summarize_batch(result.ranked_works, max_workers=max_workers)
         result.stats.summaries_generated = summary_result.success_count
 
         if summary_result.failed_ids:
@@ -573,7 +668,7 @@ class WatchPipeline:
         # Summarize interest works
         if result.interest_works:
             progress("summary", f"Generating summaries for {len(result.interest_works)} interest papers...")
-            interest_result = summarizer.summarize_batch(result.interest_works)
+            interest_result = summarizer.summarize_batch(result.interest_works, max_workers=max_workers)
             result.stats.summaries_generated += interest_result.success_count
 
             if interest_result.failed_ids:
@@ -587,6 +682,17 @@ class WatchPipeline:
             for work in result.interest_works:
                 if work.identifier in interest_map:
                     work.summary = interest_map[work.identifier]
+
+        # Summarize followed works
+        if result.followed_works:
+            progress("summary", f"Generating summaries for {len(result.followed_works)} followed author papers...")
+            followed_result = summarizer.summarize_batch(result.followed_works, max_workers=max_workers)
+            result.stats.summaries_generated += followed_result.success_count
+
+            followed_map = {s.paper_id: s for s in followed_result.summaries}
+            for work in result.followed_works:
+                if work.identifier in followed_map:
+                    work.summary = followed_map[work.identifier]
 
         # Generate overall summaries
         progress("summary", "Generating overall summaries...")
@@ -616,7 +722,7 @@ class WatchPipeline:
         if not llm_client:
             return
 
-        all_works = result.ranked_works + (result.interest_works or [])
+        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
         if not all_works:
             return
 
@@ -633,8 +739,180 @@ class WatchPipeline:
             if work.identifier in translations:
                 work.translated_title = translations[work.identifier]
 
+        for work in result.followed_works or []:
+            if work.identifier in translations:
+                work.translated_title = translations[work.identifier]
+
         translate_elapsed = time.time() - translate_start
         progress("translate", f"Translated {len(translations)} titles ({translate_elapsed:.1f}s)")
+
+    def _classify_domains(
+        self,
+        result: WatchResult,
+        progress: Callable[[str, str], None],
+    ) -> None:
+        """Classify papers into research domains using LLM."""
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            return
+
+        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
+        if not all_works:
+            return
+
+        classify_start = time.time()
+        progress("classify", f"Classifying {len(all_works)} papers into domains...")
+
+        domain_config = self.settings.llm.domain_classification
+        classifier = PaperDomainClassifier(
+            llm_client,
+            model=self.settings.llm.model,
+            domains=domain_config.domains if domain_config.domains else None,
+            batch_size=domain_config.batch_size,
+            max_workers=domain_config.max_workers,
+        )
+
+        # Classify all papers
+        classifications = classifier.classify_papers(all_works)
+
+        # Apply classifications to works
+        for work in result.ranked_works:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
+        for work in result.interest_works or []:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
+        for work in result.followed_works or []:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
+        classify_elapsed = time.time() - classify_start
+        progress("classify", f"Classified {len(classifications)} papers ({classify_elapsed:.1f}s)")
+
+    def _fetch_followed_authors(
+        self,
+        storage: ProfileStorage,
+        progress: Callable[[str, str], None],
+    ) -> list[RankedWork]:
+        """Fetch papers by followed authors from OpenAlex.
+
+        Papers skip scoring/ranking/TopK. Only deduplication is applied.
+        First run does a full pull; subsequent runs use incremental fetching.
+        """
+        from zotwatch.infrastructure.storage import ArchiveStorage
+        from zotwatch.sources.openalex import OpenAlexAuthorFetcher
+
+        followed_cfg = self.settings.sources.followed_authors
+        progress("followed", f"Fetching papers for {len(followed_cfg.authors)} followed authors...")
+
+        fetch_start = time.time()
+
+        # Initialize archive for state tracking
+        archive_db = self.base_dir / "data" / "archive.sqlite"
+        archive = ArchiveStorage(archive_db)
+        archive.initialize()
+
+        try:
+            # Get last fetch dates for incremental fetching
+            last_dates = archive.get_all_followed_author_states()
+
+            # Get known identifiers for deduplication
+            known_identifiers = archive.get_known_identifiers()
+
+            # Also get identifiers from the user's Zotero library for dedup
+            library_dois: set[str] = set()
+            library_titles: set[str] = set()
+            for item in storage.iter_items():
+                if item.doi:
+                    library_dois.add(item.doi.lower().strip())
+                library_titles.add(item.title.lower().strip())
+
+            # Fetch from OpenAlex
+            fetcher = OpenAlexAuthorFetcher(
+                polite_email=followed_cfg.polite_email,
+            )
+
+            author_dicts = [
+                {"id": a.id, "name": a.name} for a in followed_cfg.authors
+            ]
+            candidates = fetcher.fetch_all_authors(
+                author_dicts,
+                last_dates=last_dates,
+                max_results_per_author=followed_cfg.max_results_per_author,
+            )
+
+            progress("followed", f"Fetched {len(candidates)} papers from OpenAlex")
+
+            # Deduplicate against archive and library
+            new_works: list[RankedWork] = []
+            seen: set[str] = set()
+            for candidate in candidates:
+                # Skip if already in archive
+                if candidate.identifier in known_identifiers:
+                    continue
+                # Skip if already seen in this batch
+                if candidate.identifier in seen:
+                    continue
+                # Skip if DOI already in library
+                if candidate.doi and candidate.doi.lower().strip() in library_dois:
+                    continue
+                # Skip if title already in library (exact match)
+                if candidate.title.lower().strip() in library_titles:
+                    continue
+
+                seen.add(candidate.identifier)
+
+                # Convert to RankedWork with label="followed", no scoring
+                followed_author = candidate.extra.get("followed_author", "")
+                work = RankedWork(
+                    source=candidate.source,
+                    identifier=candidate.identifier,
+                    title=candidate.title,
+                    abstract=candidate.abstract,
+                    authors=candidate.authors,
+                    doi=candidate.doi,
+                    url=candidate.url,
+                    published=candidate.published,
+                    venue=candidate.venue,
+                    metrics=candidate.metrics,
+                    extra={
+                        **candidate.extra,
+                        "followed_author": followed_author,
+                    },
+                    score=0.0,
+                    similarity=0.0,
+                    label="followed",
+                )
+                new_works.append(work)
+
+            # Update state for each author
+            today = time.strftime("%Y-%m-%d")
+            for author in followed_cfg.authors:
+                author_works = [
+                    w for w in new_works
+                    if w.extra.get("followed_author") == author.name
+                ]
+                existing_state = archive.get_followed_author_state(author.id)
+                prev_total = existing_state["total_works"] if existing_state else 0
+                archive.update_followed_author_state(
+                    author_id=author.id,
+                    author_name=author.name,
+                    last_fetch_date=today,
+                    total_works=prev_total + len(author_works),
+                )
+
+            fetch_elapsed = time.time() - fetch_start
+            progress(
+                "followed",
+                f"Found {len(new_works)} new papers from followed authors ({fetch_elapsed:.1f}s)",
+            )
+
+            return new_works
+
+        finally:
+            archive.close()
 
     def _cleanup_caches(
         self,

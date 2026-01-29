@@ -117,6 +117,7 @@ class RankedWork(CandidateWork):
     label: str  # must_read/consider/ignore
     summary: "PaperSummary | None" = None
     translated_title: str | None = None  # Translated title for display
+    domain: str | None = None  # LLM-classified research domain
 
     # Hybrid scoring details (for debugging/visualization)
     micro_score: float | None = None  # S_micro: k-NN based score

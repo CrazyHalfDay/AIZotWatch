@@ -60,7 +60,7 @@ class EarthArxivConfig(BaseModel):
 
 
 class ScraperConfig(BaseModel):
-    """Abstract scraper configuration with sequential fetching and rule-based extraction."""
+    """Abstract scraper configuration with concurrent fetching and rule-based extraction."""
 
     enabled: bool = True
     rate_limit_delay: float = 1.0  # Seconds between requests
@@ -70,6 +70,28 @@ class ScraperConfig(BaseModel):
     llm_max_tokens: int = 1024  # Max tokens for LLM response
     llm_temperature: float = 0.1  # LLM temperature for extraction
     use_llm_fallback: bool = True  # Use LLM when rule extraction fails
+    max_workers: int = 3  # Maximum concurrent workers for batch fetching
+
+
+class FollowedAuthorEntry(BaseModel):
+    """Single followed author entry."""
+
+    name: str
+    id: str  # OpenAlex Author ID (e.g., "A5023888391") or ORCID
+
+
+class FollowedAuthorsConfig(BaseModel):
+    """Followed authors source configuration (OpenAlex API).
+
+    Fetches all papers by specified authors. First run does a full pull,
+    subsequent runs fetch incrementally from the last fetch date.
+    Papers skip scoring/ranking/TopK - only deduplication is applied.
+    """
+
+    enabled: bool = False
+    polite_email: str = ""  # Email for OpenAlex polite pool
+    authors: list[FollowedAuthorEntry] = Field(default_factory=list)
+    max_results_per_author: int = 10000
 
 
 class SourcesConfig(BaseModel):
@@ -79,6 +101,7 @@ class SourcesConfig(BaseModel):
     arxiv: ArxivConfig = Field(default_factory=ArxivConfig)
     eartharxiv: EarthArxivConfig = Field(default_factory=EarthArxivConfig)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
+    followed_authors: FollowedAuthorsConfig = Field(default_factory=FollowedAuthorsConfig)
 
 
 # Scoring Configuration
@@ -117,9 +140,21 @@ class ScoringConfig(BaseModel):
         description: str = ""  # Natural language interest description
         max_documents: int = 500  # Max documents for FAISS recall (must not exceed rerank API limit)
         top_k_interest: int = 5  # Final interest-based papers count
+        # Semantic similarity filter using interest description + embeddings
+        semantic_filter_enabled: bool = False
+        semantic_filter_min_similarity: float = 0.25
+        semantic_filter_max_candidates: int = 500
+        # Positive keywords: candidates must match at least one to be kept
+        include_keywords: list[str] = []
+        include_min_matches: int = 1
+        include_match_fields: list[str] = ["title", "abstract"]
         # Static exclude keywords (applied to ALL candidates, not just interest-based selection)
         # These are used in addition to LLM-generated exclude keywords
         exclude_keywords: list[str] = []
+        # LLM relevance filter (uses title + abstract semantics)
+        llm_relevance_filter_enabled: bool = False
+        llm_relevance_batch_size: int = 20
+        llm_relevance_max_candidates: int = 200
 
 
     class RerankConfig(BaseModel):
@@ -242,6 +277,14 @@ class LLMConfig(BaseModel):
 
         enabled: bool = False
 
+    class DomainClassificationConfig(BaseModel):
+        """Domain classification configuration for categorizing papers."""
+
+        enabled: bool = False  # Enable domain classification
+        batch_size: int = 20  # Papers per LLM call
+        max_workers: int = 3  # Concurrent LLM calls
+        domains: list[str] = Field(default_factory=list)  # Custom domains (uses defaults if empty)
+
     enabled: bool = True
     provider: str = "openrouter"
     api_key: str = ""
@@ -250,6 +293,7 @@ class LLMConfig(BaseModel):
     temperature: float = 0.3
     retry: RetryConfig = Field(default_factory=RetryConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
+    domain_classification: DomainClassificationConfig = Field(default_factory=DomainClassificationConfig)
 
 
 # Output Configuration
@@ -316,6 +360,7 @@ class ClusteringConfig(BaseModel):
 
     # K-means algorithm parameters
     kmeans_iterations: int = 20  # Number of k-means iterations
+    kmeans_seed: int = 42  # Random seed for reproducibility
     subsample_threshold: int = 5000  # Subsample above this for silhouette search
     representative_title_count: int = 5  # Number of representative titles per cluster
 
@@ -354,6 +399,8 @@ class WatchPipelineConfig(BaseModel):
     max_preprint_ratio: float = 0.9  # Maximum ratio of preprints in results
     top_k: int = 20  # Default number of recommendations
     require_abstract: bool = True  # Filter out candidates without abstracts
+    dedupe_threshold: float = 0.9  # Fuzzy title matching threshold for deduplication
+    summarizer_max_workers: int = 5  # Max concurrent workers for LLM summarization
 
 
 # Main Settings
@@ -424,6 +471,8 @@ __all__ = [
     "CrossRefConfig",
     "ArxivConfig",
     "ScraperConfig",
+    "FollowedAuthorEntry",
+    "FollowedAuthorsConfig",
     "ScoringConfig",
     "Thresholds",
     "EmbeddingConfig",

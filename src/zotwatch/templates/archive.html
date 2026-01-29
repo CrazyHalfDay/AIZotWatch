@@ -17,8 +17,8 @@
             'text-primary': '#1e293b',
             'text-secondary': '#64748b',
             'border-color': '#e2e8f0',
-            'accent': '#2563eb',
-            'accent-hover': '#1d4ed8',
+            'accent': '#4f46e5',
+            'accent-hover': '#4338ca',
           }
         }
       }
@@ -30,7 +30,7 @@
     }
 
     .content-container {
-      max-width: 64rem;
+      max-width: 72rem;
       margin: 0 auto;
       padding: 0 1rem;
     }
@@ -54,307 +54,1156 @@
       max-height: none;
     }
 
-    .view-btn.active {
-      background-color: #2563eb;
-      color: white;
-    }
-
-    .filter-tag {
+    /* Pill button styles */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.375rem 0.875rem;
+      border: 1.5px solid #c7d2fe;
+      border-radius: 9999px;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: #4f46e5;
+      background: white;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      user-select: none;
     }
 
-    .filter-tag:hover {
-      background-color: #dbeafe;
+    .pill:hover {
+      background: #eef2ff;
+      border-color: #a5b4fc;
     }
 
-    .filter-tag.active {
-      background-color: #2563eb;
+    .pill.active {
+      background: #4f46e5;
       color: white;
+      border-color: #4f46e5;
+    }
+
+    .pill.active:hover {
+      background: #4338ca;
+      border-color: #4338ca;
+    }
+
+    /* Navigation pill (link) */
+    a.pill {
+      text-decoration: none;
+    }
+
+    .group-header {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-header:hover {
+      background-color: #f8fafc;
+    }
+
+    .group-content {
+      transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
+    }
+
+    .group-content.collapsed {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+
+    .rotate-icon {
+      transition: transform 0.2s ease-out;
+    }
+
+    .rotate-icon.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    /* Compact view styles */
+    .compact-view .paper-card {
+      padding: 0.75rem !important;
+    }
+
+    .compact-view .paper-card h3 {
+      font-size: 0.875rem !important;
+    }
+
+    .compact-view .paper-abstract {
+      display: none;
+    }
+
+    .compact-view .paper-details {
+      display: none;
+    }
+
+    /* Loading spinner */
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #4f46e5;
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Back to top button */
+    #back-to-top {
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s, visibility 0.3s;
+    }
+
+    #back-to-top.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* Search highlight */
+    .search-highlight {
+      background-color: #fef08a;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+
+    /* Author group header accent */
+    .group-header-author {
+      border-left: 3px solid #6366f1;
+      background: linear-gradient(to right, #eef2ff, #ffffff);
+    }
+
+    .group-header-ai {
+      border-left: 3px solid #f59e0b;
+      background: linear-gradient(to right, #fffbeb, #ffffff);
+    }
+
+    /* Paper checkbox */
+    .paper-check {
+      width: 1.125rem;
+      height: 1.125rem;
+      accent-color: #4f46e5;
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 0.125rem;
+    }
+
+    .paper-card.selected {
+      border-color: #a5b4fc;
+      background: #fafafe;
+    }
+
+    /* Bottom toolbar */
+    .bottom-toolbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 40;
+      background: white;
+      border-top: 1px solid #e2e8f0;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
+      padding: 0.75rem 1rem;
+      transform: translateY(0);
+      transition: transform 0.2s ease;
+    }
+
+    /* Export dropdown */
+    .export-dropdown {
+      position: absolute;
+      bottom: 100%;
+      right: 0;
+      margin-bottom: 0.5rem;
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      box-shadow: 0 -4px 12px rgba(0,0,0,0.1);
+      overflow: hidden;
+      min-width: 12rem;
+    }
+
+    .export-dropdown button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 0.625rem 1rem;
+      font-size: 0.875rem;
+      transition: background 0.1s;
+    }
+
+    .export-dropdown button:hover {
+      background: #f1f5f9;
+    }
+
+    /* Ensure content doesn't hide behind toolbar */
+    body {
+      padding-bottom: 4.5rem;
     }
   </style>
 </head>
 
 <body class="bg-bg-primary min-h-screen text-text-primary">
   <!-- Header -->
-  <header class="bg-bg-card border-b border-border-color sticky top-0 z-10">
-    <div class="content-container py-4 md:py-6">
-      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+  <header class="bg-bg-card border-b border-border-color">
+    <div class="content-container py-5">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献归档</h1>
           <p class="text-xs md:text-sm text-text-secondary mt-1">
-            共 {{ stats.total }} 篇论文 ·
-            最后更新: {{ generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
+            共 <span id="stat-total" class="font-semibold text-text-primary">{{ stats.total }}</span> 篇 ·
+            更新: {{ generated_at.strftime('%Y-%m-%d %H:%M') }}
           </p>
         </div>
-        <!-- Stats badges -->
-        <div class="flex flex-wrap gap-2">
-          <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-            必读 {{ stats.must_read }}
-          </span>
-          <span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-sm font-medium">
-            推荐 {{ stats.consider }}
-          </span>
-          <span class="px-3 py-1 bg-bg-hover text-text-secondary rounded-full text-sm">
-            参考 {{ stats.total - stats.must_read - stats.consider }}
-          </span>
+        <div class="flex items-center gap-2">
+          <button id="toggle-view" class="px-3 py-1.5 border border-border-color rounded-lg text-sm hover:bg-bg-hover flex items-center gap-2" title="切换视图">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+            </svg>
+            <span id="view-label">完整</span>
+          </button>
+          <button id="expand-all" class="px-3 py-1.5 border border-border-color rounded-lg text-sm hover:bg-bg-hover" title="展开/折叠全部">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
   </header>
 
-  <!-- Filter Bar -->
-  <nav class="bg-bg-card border-b border-border-color py-3">
-    <div class="content-container">
-      <!-- View Switcher -->
-      <div class="flex flex-wrap items-center gap-3 mb-3">
-        <span class="text-sm text-text-secondary">分组方式:</span>
-        <div class="flex gap-1">
-          <a href="archive.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'date' }}">按日期</a>
-          <a href="archive-venue.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'venue' }}">按期刊</a>
-          <a href="archive-source.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'source' }}">按来源</a>
-          <a href="archive-label.html"
-            class="view-btn px-3 py-1.5 rounded text-sm transition-colors hover:bg-bg-hover {{ 'active' if group_by == 'label' }}">按标签</a>
+  <!-- Filter Section -->
+  <section class="bg-bg-card border-b border-border-color">
+    <div class="content-container py-4 space-y-3">
+
+      <!-- 分组方式 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">📋 分组:</span>
+        <div class="flex flex-wrap gap-1.5">
+          <a href="archive.html" class="pill {{ 'active' if group_by == 'date' else '' }}">日期</a>
+          <a href="archive-venue.html" class="pill {{ 'active' if group_by == 'venue' else '' }}">期刊</a>
+          <a href="archive-source.html" class="pill {{ 'active' if group_by == 'source' else '' }}">来源</a>
+          <a href="archive-label.html" class="pill {{ 'active' if group_by == 'label' else '' }}">标签</a>
+          <a href="archive-domain.html" class="pill {{ 'active' if group_by == 'domain' else '' }}">领域</a>
+          <a href="archive-author.html" class="pill {{ 'active' if group_by == 'author' else '' }}">作者</a>
         </div>
       </div>
 
-      <!-- Filters -->
-      <div class="flex flex-wrap items-center gap-3">
-        <span class="text-sm text-text-secondary">筛选:</span>
-        <!-- Source Filter -->
-        <div class="flex gap-1">
-          {% for src in sources %}
-          <span class="filter-tag px-2 py-1 bg-bg-hover rounded text-xs" data-filter="source"
-            data-value="{{ src.source }}">
-            {{ src.source }} ({{ src.count }})
-          </span>
-          {% endfor %}
-        </div>
-        <!-- Label Filter -->
-        <div class="flex gap-1">
-          <span class="filter-tag px-2 py-1 bg-green-50 text-green-700 rounded text-xs" data-filter="label"
-            data-value="must_read">必读</span>
-          <span class="filter-tag px-2 py-1 bg-amber-50 text-amber-700 rounded text-xs" data-filter="label"
-            data-value="consider">推荐</span>
+      <!-- 月份 -->
+      <div class="flex flex-wrap items-center gap-2" id="month-row" style="display:none">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">📅 月份:</span>
+        <div class="flex flex-wrap gap-1.5" id="month-pills"></div>
+      </div>
+
+      <!-- 标签 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">⭐ 标签:</span>
+        <div class="flex flex-wrap gap-1.5" id="label-pills">
+          <button class="pill active" data-filter="label" data-value="">全部</button>
+          <button class="pill" data-filter="label" data-value="must_read">必读 (<span id="stat-must-read">0</span>)</button>
+          <button class="pill" data-filter="label" data-value="consider">推荐 (<span id="stat-consider">0</span>)</button>
+          <button class="pill" data-filter="label" data-value="followed" id="followed-badge">关注 (<span id="stat-followed">0</span>)</button>
+          <button class="pill" data-filter="label" data-value="ignore">参考 (<span id="stat-ignore">0</span>)</button>
         </div>
       </div>
+
+      <!-- 研究领域 -->
+      <div class="flex flex-wrap items-center gap-2" id="domain-row" style="display:none">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">🔬 领域:</span>
+        <div class="flex flex-wrap gap-1.5" id="domain-pills"></div>
+      </div>
+
+      <!-- 来源 -->
+      <div class="flex flex-wrap items-center gap-2" id="source-row" style="display:none">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">📚 来源:</span>
+        <div class="flex flex-wrap gap-1.5" id="source-pills"></div>
+      </div>
+
+      <!-- 关注作者 -->
+      <div class="flex flex-wrap items-center gap-2" id="author-row" style="display:none">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">👤 关注:</span>
+        <div class="flex flex-wrap gap-1.5" id="author-pills"></div>
+      </div>
+
+      <!-- 排序方式 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-sm font-medium text-text-secondary w-20 shrink-0">🔄 排序:</span>
+        <div class="flex flex-wrap gap-1.5" id="sort-pills">
+          <button class="pill active" data-sort="newest">最新优先</button>
+          <button class="pill" data-sort="oldest">最早优先</button>
+          <button class="pill" data-sort="score">评分优先</button>
+        </div>
+      </div>
+
+      <!-- 搜索 -->
+      <div class="relative mt-1">
+        <input type="text" id="search-input" placeholder="🔍 搜索论文标题、作者、摘要..."
+          class="w-full pl-4 pr-10 py-2.5 border border-border-color rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent bg-bg-primary">
+        <button id="clear-search" class="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary hidden">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
     </div>
-  </nav>
+  </section>
+
+  <!-- Loading Indicator -->
+  <div id="loading" class="flex flex-col items-center justify-center py-20">
+    <div class="spinner mb-4"></div>
+    <p class="text-text-secondary">加载中...</p>
+  </div>
 
   <!-- Main Content -->
-  <main class="py-6">
+  <main class="py-6 hidden" id="main-content">
     <div class="content-container">
-      {% for group_name, works in grouped_works.items() %}
-      <section class="mb-8" data-group="{{ group_name }}">
-        <!-- Group Header -->
-        <div class="flex items-center justify-between mb-4 pb-2 border-b border-border-color">
-          <h2 class="text-lg font-bold text-text-primary flex items-center gap-2">
-            {% if group_by == 'label' %}
-            {% if group_name == 'must_read' %}
-            <span class="w-3 h-3 bg-green-500 rounded-full"></span>必读
-            {% elif group_name == 'consider' %}
-            <span class="w-3 h-3 bg-amber-500 rounded-full"></span>推荐
-            {% else %}
-            <span class="w-3 h-3 bg-gray-400 rounded-full"></span>参考
-            {% endif %}
-            {% else %}
-            {{ group_name }}
-            {% endif %}
-          </h2>
-          <span class="text-sm text-text-secondary">{{ works|length }} 篇</span>
-        </div>
-
-        <!-- Works List -->
-        <div class="space-y-4">
-          {% for work in works %}
-          <article
-            class="paper-card bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors"
-            data-source="{{ work.source }}" data-label="{{ work.label }}" data-venue="{{ work.venue or 'Unknown' }}">
-            <div class="p-4 md:p-5">
-              <!-- Header: Label + Source + Date -->
-              <div class="flex items-center gap-2 mb-2 flex-wrap">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium
-                  {% if work.label == 'must_read' %}bg-green-100 text-green-700 border border-green-300
-                  {% elif work.label == 'consider' %}bg-amber-100 text-amber-700 border border-amber-300
-                  {% else %}bg-bg-hover text-text-secondary border border-border-color{% endif %}">
-                  {% if work.label == 'must_read' %}必读{% elif work.label == 'consider' %}推荐{% else %}参考{% endif %}
-                </span>
-                <span class="text-xs text-text-secondary">评分 {{ '%.2f'|format(work.score) }}</span>
-                <span class="text-xs text-text-secondary">·</span>
-                <span class="text-xs text-text-secondary">{{ work.source }}</span>
-                <span class="text-xs text-text-secondary">· {{ work.published.strftime('%Y-%m-%d') if work.published
-                  else work.extra.run_date }}</span>
-              </div>
-
-              <!-- Title -->
-              <div class="mb-2">
-                <h3 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
-                  <a href="{{ work.url or '#' }}" target="_blank" rel="noopener"
-                    class="hover:text-accent transition-colors">
-                    {{ work.title }}
-                  </a>
-                </h3>
-                {% if work.translated_title %}
-                <p class="text-sm text-text-secondary mt-0.5 leading-snug">{{ work.translated_title }}</p>
-                {% endif %}
-              </div>
-
-              <!-- Venue + IF -->
-              <div class="text-xs text-text-secondary mb-2" title="{{ work.venue or '' }}">
-                {{ work.venue or '未知来源' }}
-                {% if work.is_chinese_core %}
-                <span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>
-                {% elif work.impact_factor %}
-                <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
-                {% endif %}
-              </div>
-
-              <!-- Authors -->
-              <p class="text-sm text-text-secondary mb-3">
-                {{ work.authors[:5] | join('，') }}{% if work.authors|length > 5 %} 等{% endif %}
-              </p>
-
-              <!-- DOI -->
-              {% if work.doi %}
-              <div class="text-xs text-text-secondary mb-3">
-                <span class="font-medium mr-1">DOI:</span>
-                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener"
-                  class="text-accent hover:underline">{{ work.doi }}</a>
-              </div>
-              {% endif %}
-
-              <!-- Abstract (Collapsible) -->
-              {% if work.abstract %}
-              <div class="bg-bg-hover/50 rounded-lg p-3 mb-3 border border-border-color">
-                <button onclick="toggleSection('abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}')"
-                  class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
-                  <span>原文摘要</span>
-                  <svg class="w-4 h-4 text-text-secondary transform transition-transform"
-                    id="icon-abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" fill="none"
-                    stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                <div id="abstract-{{ loop.index }}-{{ group_name|replace(' ', '-') }}" class="section-expand collapsed">
-                  <p class="text-sm text-text-secondary mt-2 leading-relaxed">{{ work.abstract }}</p>
-                </div>
-              </div>
-              {% endif %}
-
-              <!-- AI Summary -->
-              {% if work.summary %}
-              <div class="bg-accent/10 rounded-lg p-3 mb-3 border border-accent/30">
-                <h4 class="text-sm font-semibold text-accent mb-2 flex items-center">
-                  <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z" />
-                  </svg>
-                  AI 总结
-                </h4>
-                <div class="space-y-1.5 text-sm text-text-primary">
-                  <p><span class="font-medium text-accent">研究问题：</span>{{ work.summary.bullets.research_question }}</p>
-                  <p><span class="font-medium text-accent">研究方法：</span>{{ work.summary.bullets.methodology }}</p>
-                  <p><span class="font-medium text-accent">主要发现：</span>{{ work.summary.bullets.key_findings }}</p>
-                  <p><span class="font-medium text-accent">创新点：</span>{{ work.summary.bullets.innovation }}</p>
-                </div>
-              </div>
-              {% endif %}
-
-              <!-- Scores -->
-              <div class="pt-3 border-t border-border-color">
-                <div class="flex flex-wrap gap-2 text-xs">
-                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 {{ '%.2f'|format(work.similarity)
-                    }}</span>
-                  <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">
-                    期刊影响力 {{ '%.2f'|format(work.impact_factor_score) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-      </section>
-      {% endfor %}
+      <!-- Search Results Info -->
+      <div id="search-info" class="mb-4 text-sm text-text-secondary hidden"></div>
+      <!-- Archive Groups -->
+      <div id="archive-groups" class="space-y-6"></div>
+      <!-- No Results -->
+      <div id="no-results" class="text-center py-12 hidden">
+        <svg class="w-16 h-16 mx-auto text-text-secondary/50 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <p class="text-text-secondary">没有找到匹配的文献</p>
+        <button id="reset-search" class="mt-4 text-accent hover:text-accent-hover text-sm">重置搜索</button>
+      </div>
     </div>
   </main>
+
+  <!-- Bottom Toolbar -->
+  <div class="bottom-toolbar" id="bottom-toolbar">
+    <div class="content-container flex items-center justify-between">
+      <span class="text-sm text-text-secondary">
+        显示 <span id="visible-count" class="font-semibold text-text-primary">0</span> 篇论文
+      </span>
+      <div class="flex items-center gap-2 relative">
+        <button id="select-all-btn" class="px-3 py-1.5 text-sm border border-border-color rounded-lg hover:bg-bg-hover flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          全选
+        </button>
+        <button id="clear-selection-btn" class="px-3 py-1.5 text-sm border border-border-color rounded-lg hover:bg-bg-hover flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          清空
+        </button>
+        <button id="export-btn" class="px-4 py-1.5 text-sm text-white bg-accent hover:bg-accent-hover rounded-lg flex items-center gap-1.5 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          导出选中 (<span id="selected-count">0</span>)
+        </button>
+        <!-- Export dropdown -->
+        <div id="export-dropdown" class="export-dropdown hidden">
+          <button data-format="ris" class="flex items-center gap-2 text-text-primary">
+            <span class="text-lg">📄</span>
+            <div>
+              <div class="font-medium">RIS 格式</div>
+              <div class="text-xs text-text-secondary">适用于 Zotero / Mendeley / EndNote</div>
+            </div>
+          </button>
+          <button data-format="bibtex" class="flex items-center gap-2 text-text-primary">
+            <span class="text-lg">📝</span>
+            <div>
+              <div class="font-medium">BibTeX 格式</div>
+              <div class="text-xs text-text-secondary">适用于 LaTeX / JabRef / Overleaf</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Back to Top Button -->
+  <button id="back-to-top" class="fixed bottom-20 right-6 w-12 h-12 bg-accent text-white rounded-full shadow-lg hover:bg-accent-hover flex items-center justify-center z-30" title="返回顶部">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
+    </svg>
+  </button>
 
   <!-- Footer -->
   <footer class="bg-bg-card border-t border-border-color mt-12">
     <div class="content-container py-6 text-center text-sm text-text-secondary">
-      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch"
-        class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
+      灵感来自 <a href="https://github.com/Yorks0n/ZotWatch" class="text-accent hover:text-accent-hover transition-colors">ZotWatch</a>
       · 数据来源: arXiv, Crossref, EarthArXiv
     </div>
   </footer>
 
   <script>
-    function toggleSection(id) {
-      const el = document.getElementById(id);
-      const icon = document.getElementById('icon-' + id);
-      if (el.classList.contains('collapsed')) {
-        el.classList.remove('collapsed');
-        el.classList.add('expanded');
-        if (icon) icon.style.transform = 'rotate(180deg)';
-      } else {
-        el.classList.remove('expanded');
-        el.classList.add('collapsed');
-        if (icon) icon.style.transform = 'rotate(0deg)';
+    (function() {
+      'use strict';
+
+      const CONFIG = { pageSize: 30, debounceDelay: 200, searchMinLength: 2 };
+      const dataUrl = "{{ data_url }}";
+
+      // Filter state: single-select per category
+      const filters = { month: '', label: '', domain: '', source: '', author: '', sort: 'newest' };
+      let archiveData = null;
+      let groupStates = new Map();
+      let intersectionObserver = null;
+      let searchQuery = '';
+      let isCompactView = false;
+      let allGroupsExpanded = true;
+
+      // Multi-select state: Set of work identifiers
+      const selectedWorks = new Set();
+
+      const LABEL_ORDER = { 'must_read': 0, 'consider': 1, 'followed': 2, 'ignore': 3 };
+
+      // ── Utilities ──
+
+      function normalizeGroupId(name) {
+        return name.toLowerCase().replace(/[^a-z0-9]+/gi, '-');
       }
-    }
 
-    // Filter functionality
-    document.querySelectorAll('.filter-tag').forEach(tag => {
-      tag.addEventListener('click', function () {
-        const filterType = this.dataset.filter;
-        const filterValue = this.dataset.value;
+      function formatDate(value) {
+        if (!value) return '未知';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toISOString().slice(0, 10);
+      }
 
-        // Toggle active state
-        this.classList.toggle('active');
+      function escapeHtml(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      }
 
-        // Get all active filters
-        const activeFilters = {
-          source: [],
-          label: []
+      function highlightText(text, query) {
+        if (!query || !text) return escapeHtml(text);
+        const escaped = escapeHtml(text);
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return escaped.replace(regex, '<span class="search-highlight">$1</span>');
+      }
+
+      function debounce(fn, delay) {
+        let timer = null;
+        return function(...args) {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn.apply(this, args), delay);
         };
+      }
 
-        document.querySelectorAll('.filter-tag.active').forEach(activeTag => {
-          const type = activeTag.dataset.filter;
-          const value = activeTag.dataset.value;
-          if (!activeFilters[type].includes(value)) {
-            activeFilters[type].push(value);
+      function getWorkMonth(work) {
+        const d = work.published || (work.extra && work.extra.run_date) || '';
+        if (!d) return '';
+        return d.slice(0, 7); // YYYY-MM
+      }
+
+      // ── Toggle UI ──
+
+      window.toggleSection = function(id) {
+        const el = document.getElementById(id);
+        const icon = document.getElementById('icon-' + id);
+        if (!el) return;
+        const isCollapsed = el.classList.contains('collapsed');
+        el.classList.toggle('collapsed', !isCollapsed);
+        el.classList.toggle('expanded', isCollapsed);
+        if (icon) icon.style.transform = isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+      };
+
+      window.toggleGroup = function(groupId) {
+        const content = document.getElementById(`content-${groupId}`);
+        const icon = document.getElementById(`icon-group-${groupId}`);
+        if (!content) return;
+        const isCollapsed = content.classList.contains('collapsed');
+        content.classList.toggle('collapsed', !isCollapsed);
+        if (icon) icon.classList.toggle('collapsed', !isCollapsed);
+      };
+
+      // ── Multi-select ──
+
+      window.toggleWorkSelect = function(identifier, checkbox) {
+        if (checkbox.checked) {
+          selectedWorks.add(identifier);
+        } else {
+          selectedWorks.delete(identifier);
+        }
+        // Update card style
+        const card = checkbox.closest('.paper-card');
+        if (card) card.classList.toggle('selected', checkbox.checked);
+        updateSelectionUI();
+      };
+
+      function updateSelectionUI() {
+        document.getElementById('selected-count').textContent = selectedWorks.size;
+      }
+
+      function selectAllVisible() {
+        document.querySelectorAll('.paper-check').forEach(cb => {
+          cb.checked = true;
+          selectedWorks.add(cb.dataset.id);
+          const card = cb.closest('.paper-card');
+          if (card) card.classList.add('selected');
+        });
+        updateSelectionUI();
+      }
+
+      function clearSelection() {
+        selectedWorks.clear();
+        document.querySelectorAll('.paper-check').forEach(cb => {
+          cb.checked = false;
+          const card = cb.closest('.paper-card');
+          if (card) card.classList.remove('selected');
+        });
+        updateSelectionUI();
+      }
+
+      // ── Export ──
+
+      function getSelectedWorksData() {
+        if (!archiveData) return [];
+        const works = [];
+        archiveData.groups.forEach(g => {
+          g.works.forEach(w => {
+            if (selectedWorks.has(w.identifier)) works.push(w);
+          });
+        });
+        return works;
+      }
+
+      function exportRIS(works) {
+        const lines = [];
+        works.forEach(w => {
+          const isPreprint = (w.source || '').toLowerCase().includes('arxiv');
+          lines.push(`TY  - ${isPreprint ? 'UNPB' : 'JOUR'}`);
+          lines.push(`TI  - ${w.title || ''}`);
+          (w.authors || []).forEach(a => lines.push(`AU  - ${a}`));
+          if (w.venue) lines.push(`T2  - ${w.venue}`);
+          const year = (w.published || '').slice(0, 4);
+          if (year) lines.push(`PY  - ${year}`);
+          const pubDate = (w.published || '').slice(0, 10);
+          if (pubDate) lines.push(`DA  - ${pubDate.replace(/-/g, '/')}`);
+          if (w.doi) lines.push(`DO  - ${w.doi}`);
+          if (w.url) lines.push(`UR  - ${w.url}`);
+          if (w.abstract) lines.push(`AB  - ${w.abstract}`);
+          lines.push('ER  - ');
+          lines.push('');
+        });
+        return lines.join('\n');
+      }
+
+      function exportBibTeX(works) {
+        const entries = [];
+        works.forEach((w, idx) => {
+          const firstAuthor = (w.authors && w.authors[0]) ? w.authors[0].replace(/[^a-zA-Z]/g, '') : 'unknown';
+          const year = (w.published || '').slice(0, 4) || 'nd';
+          const key = `${firstAuthor}${year}_${idx}`;
+          const isPreprint = (w.source || '').toLowerCase().includes('arxiv');
+          const type = isPreprint ? 'misc' : 'article';
+
+          const fields = [];
+          if (w.title) fields.push(`  title = {${w.title}}`);
+          if (w.authors && w.authors.length > 0) fields.push(`  author = {${w.authors.join(' and ')}}`);
+          if (year !== 'nd') fields.push(`  year = {${year}}`);
+          if (w.venue) fields.push(`  journal = {${w.venue}}`);
+          if (w.doi) fields.push(`  doi = {${w.doi}}`);
+          if (w.url) fields.push(`  url = {${w.url}}`);
+          if (w.abstract) {
+            const abs = w.abstract.replace(/[{}]/g, '');
+            fields.push(`  abstract = {${abs}}`);
           }
+          if (isPreprint && w.identifier) fields.push(`  eprint = {${w.identifier}}`);
+
+          entries.push(`@${type}{${key},\n${fields.join(',\n')}\n}`);
+        });
+        return entries.join('\n\n');
+      }
+
+      function downloadFile(content, filename, mime) {
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 100);
+      }
+
+      function doExport(format) {
+        const works = getSelectedWorksData();
+        if (works.length === 0) return;
+        const dateStr = new Date().toISOString().slice(0, 10);
+        if (format === 'ris') {
+          downloadFile(exportRIS(works), `zotwatch-${dateStr}.ris`, 'application/x-research-info-systems');
+        } else if (format === 'bibtex') {
+          downloadFile(exportBibTeX(works), `zotwatch-${dateStr}.bib`, 'application/x-bibtex');
+        }
+        document.getElementById('export-dropdown').classList.add('hidden');
+      }
+
+      // ── Build pill-based filters ──
+
+      function buildPillRow(containerId, rowId, items, filterKey) {
+        const container = document.getElementById(containerId);
+        const row = document.getElementById(rowId);
+        if (!items || items.length === 0) {
+          if (row) row.style.display = 'none';
+          return;
+        }
+        if (row) row.style.display = 'flex';
+
+        const fragment = document.createDocumentFragment();
+        // "All" button
+        const allBtn = document.createElement('button');
+        allBtn.className = 'pill active';
+        allBtn.dataset.filter = filterKey;
+        allBtn.dataset.value = '';
+        allBtn.textContent = `全部 (${items.reduce((s, i) => s + i.count, 0)})`;
+        allBtn.addEventListener('click', () => setPillFilter(filterKey, '', containerId));
+        fragment.appendChild(allBtn);
+
+        items.forEach(item => {
+          const btn = document.createElement('button');
+          btn.className = 'pill';
+          btn.dataset.filter = filterKey;
+          btn.dataset.value = item.value;
+          btn.textContent = `${item.label} (${item.count})`;
+          btn.addEventListener('click', () => setPillFilter(filterKey, item.value, containerId));
+          fragment.appendChild(btn);
         });
 
-        // Filter papers
-        document.querySelectorAll('.paper-card').forEach(card => {
-          const cardSource = card.dataset.source;
-          const cardLabel = card.dataset.label;
+        container.innerHTML = '';
+        container.appendChild(fragment);
+      }
 
-          let show = true;
+      function setPillFilter(filterKey, value, containerId) {
+        filters[filterKey] = value;
+        // Update active state in this row
+        const container = document.getElementById(containerId);
+        container.querySelectorAll('.pill').forEach(p => {
+          p.classList.toggle('active', p.dataset.value === value);
+        });
+        debouncedRender();
+      }
 
-          if (activeFilters.source.length > 0 && !activeFilters.source.includes(cardSource)) {
-            show = false;
-          }
+      function buildAllFilters(data) {
+        // Month pills
+        const monthCounts = new Map();
+        data.groups.forEach(g => g.works.forEach(w => {
+          const m = getWorkMonth(w);
+          if (m) monthCounts.set(m, (monthCounts.get(m) || 0) + 1);
+        }));
+        const months = [...monthCounts.entries()]
+          .sort((a, b) => b[0].localeCompare(a[0]))
+          .map(([m, c]) => ({ value: m, label: m, count: c }));
+        buildPillRow('month-pills', 'month-row', months, 'month');
 
-          if (activeFilters.label.length > 0 && !activeFilters.label.includes(cardLabel)) {
-            show = false;
-          }
+        // Domain pills
+        const domainCounts = new Map();
+        data.groups.forEach(g => g.works.forEach(w => {
+          if (w.domain) domainCounts.set(w.domain, (domainCounts.get(w.domain) || 0) + 1);
+        }));
+        const domains = [...domainCounts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([d, c]) => ({ value: d, label: d, count: c }));
+        buildPillRow('domain-pills', 'domain-row', domains, 'domain');
 
-          card.style.display = show ? 'block' : 'none';
+        // Source pills
+        const srcItems = (data.sources || []).map(s => ({ value: s.source, label: s.source, count: s.count }));
+        buildPillRow('source-pills', 'source-row', srcItems, 'source');
+
+        // Author pills
+        const authorCounts = new Map();
+        data.groups.forEach(g => g.works.forEach(w => {
+          const author = w.extra && w.extra.followed_author;
+          if (author) authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+        }));
+        const authors = [...authorCounts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([a, c]) => ({ value: a, label: a, count: c }));
+        buildPillRow('author-pills', 'author-row', authors, 'author');
+
+        // Label pills: attach click handlers
+        document.querySelectorAll('#label-pills .pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            setPillFilter('label', btn.dataset.value, 'label-pills');
+          });
         });
 
-        // Update group counts
-        document.querySelectorAll('section[data-group]').forEach(section => {
-          const visibleCards = section.querySelectorAll('.paper-card:not([style*="display: none"])').length;
-          const countEl = section.querySelector('h2 + span, .text-text-secondary');
-          // Note: This simple approach may not update counts correctly for all layouts
+        // Sort pills: attach click handlers
+        document.querySelectorAll('#sort-pills .pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            filters.sort = btn.dataset.sort;
+            document.querySelectorAll('#sort-pills .pill').forEach(p => p.classList.toggle('active', p.dataset.sort === filters.sort));
+            debouncedRender();
+          });
+        });
+      }
+
+      // ── Stats ──
+
+      function updateStats(stats) {
+        if (!stats) return;
+        const total = stats.total ?? 0;
+        const mustRead = stats.must_read ?? 0;
+        const consider = stats.consider ?? 0;
+        const followed = stats.followed ?? 0;
+        document.getElementById('stat-total').textContent = total;
+        document.getElementById('stat-must-read').textContent = mustRead;
+        document.getElementById('stat-consider').textContent = consider;
+        document.getElementById('stat-followed').textContent = followed;
+        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider - followed);
+
+        const followedAuthors = stats.followed_authors || [];
+        if (followedAuthors.length > 0) {
+          document.getElementById('followed-badge').title = followedAuthors.map(a => `${a.name}: ${a.count} 篇`).join('\n');
+        }
+      }
+
+      // ── Filter & Sort ──
+
+      function matchesFilters(work) {
+        if (filters.label && work.label !== filters.label) return false;
+        if (filters.source && work.source !== filters.source) return false;
+        if (filters.domain && work.domain !== filters.domain) return false;
+        if (filters.month && getWorkMonth(work) !== filters.month) return false;
+        if (filters.author) {
+          const fa = (work.extra && work.extra.followed_author) || '';
+          if (fa !== filters.author) return false;
+        }
+        return true;
+      }
+
+      function matchesSearch(work) {
+        if (!searchQuery || searchQuery.length < CONFIG.searchMinLength) return true;
+        const q = searchQuery.toLowerCase();
+        return (work.title || '').toLowerCase().includes(q) ||
+               (work.abstract || '').toLowerCase().includes(q) ||
+               (work.authors || []).join(' ').toLowerCase().includes(q) ||
+               (work.venue || '').toLowerCase().includes(q);
+      }
+
+      function sortWorks(works) {
+        const sorted = [...works];
+        if (filters.sort === 'newest') {
+          sorted.sort((a, b) => (b.published || '').localeCompare(a.published || ''));
+        } else if (filters.sort === 'oldest') {
+          sorted.sort((a, b) => (a.published || '').localeCompare(b.published || ''));
+        } else if (filters.sort === 'score') {
+          sorted.sort((a, b) => (b.score || 0) - (a.score || 0));
+        }
+        return sorted;
+      }
+
+      function getFilteredGroups(data) {
+        if (!data) return [];
+        let groups = data.groups.map(group => ({
+          ...group,
+          filteredWorks: sortWorks(group.works.filter(w => matchesFilters(w) && matchesSearch(w)))
+        })).filter(g => g.filteredWorks.length > 0);
+
+        if (data.group_by === 'label') {
+          groups.sort((a, b) => (LABEL_ORDER[a.name] ?? 99) - (LABEL_ORDER[b.name] ?? 99));
+        }
+
+        if (data.group_by === 'author') {
+          groups.sort((a, b) => {
+            if (a.name === 'AI 推荐') return 1;
+            if (b.name === 'AI 推荐') return -1;
+            return b.filteredWorks.length - a.filteredWorks.length;
+          });
+        }
+
+        return groups;
+      }
+
+      // ── Rendering ──
+
+      function buildSummaryHTML(bullets) {
+        if (!bullets) return '';
+        const items = [
+          { label: '研究问题', text: bullets.research_question },
+          { label: '方法', text: bullets.methodology },
+          { label: '关键发现', text: bullets.key_findings },
+          { label: '创新点', text: bullets.innovation },
+        ];
+        if (bullets.relevance_note) items.push({ label: '相关性', text: bullets.relevance_note });
+        return items.map(item =>
+          `<div class="flex gap-2"><span class="text-accent font-medium shrink-0">${item.label}:</span><span>${escapeHtml(item.text)}</span></div>`
+        ).join('');
+      }
+
+      function createArticleHTML(work, groupId, idx) {
+        const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
+        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : (work.label === 'followed' ? '关注' : '参考'));
+        const labelClass = work.label === 'must_read'
+          ? 'bg-green-100 text-green-700'
+          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : (work.label === 'followed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'));
+        const abstractId = `abs-${groupId}-${idx}`;
+        const summaryId = `sum-${groupId}-${idx}`;
+
+        const title = searchQuery ? highlightText(work.title, searchQuery) : escapeHtml(work.title);
+        const venue = escapeHtml(work.venue || '未知来源');
+        const authorsRaw = (work.authors || []).slice(0, 5);
+        const authors = searchQuery
+          ? authorsRaw.map(a => highlightText(a, searchQuery)).join('，')
+          : authorsRaw.map(escapeHtml).join('，');
+        const hasMore = (work.authors || []).length > 5;
+        const hasSummary = work.summary_bullets && work.summary_bullets.research_question;
+        const isSelected = selectedWorks.has(work.identifier);
+
+        return `<article class="paper-card bg-bg-card rounded-lg border border-border-color p-4 hover:border-accent/30 transition-colors${isSelected ? ' selected' : ''}" data-idx="${idx}">
+          <div class="flex items-start gap-3">
+            <input type="checkbox" class="paper-check" data-id="${escapeHtml(work.identifier)}" ${isSelected ? 'checked' : ''}
+              onchange="toggleWorkSelect('${escapeHtml(work.identifier)}', this)">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${labelClass} shrink-0">${labelText}</span>
+            <div class="flex-1 min-w-0">
+              <h3 class="text-sm md:text-base font-semibold text-text-primary leading-snug mb-1">
+                <a href="${escapeHtml(work.url || '#')}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">${title}</a>
+              </h3>
+              ${work.translated_title ? `<p class="text-xs text-text-secondary mb-1">${escapeHtml(work.translated_title)}</p>` : ''}
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
+                <span>${venue}</span>
+                ${work.impact_factor ? `<span class="text-blue-600">IF: ${work.impact_factor.toFixed(1)}</span>` : ''}
+                ${work.domain ? `<span class="text-purple-600">${escapeHtml(work.domain)}</span>` : ''}
+                <span>· ${published}</span>
+                ${work.label === 'followed' && work.extra?.followed_author
+                  ? (archiveData && archiveData.group_by === 'author'
+                    ? ''
+                    : `<span class="text-blue-600">· 关注: ${escapeHtml(work.extra.followed_author)}</span>`)
+                  : `<span>· 评分 ${work.score.toFixed(2)}</span>`}
+              </div>
+              <p class="text-xs text-text-secondary mt-1">${authors}${hasMore ? ' 等' : ''}</p>
+              ${hasSummary ? `<div class="paper-summary mt-2">
+                <button onclick="toggleSection('${summaryId}')" class="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
+                  <span>AI 总结</span>
+                  <svg class="w-3 h-3 transform transition-transform" id="icon-${summaryId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div id="${summaryId}" class="section-expand collapsed">
+                  <div class="text-xs text-text-secondary mt-2 leading-relaxed bg-blue-50/50 p-3 rounded space-y-1.5">
+                    ${buildSummaryHTML(work.summary_bullets)}
+                  </div>
+                </div>
+              </div>` : ''}
+              ${work.abstract ? `<div class="paper-abstract mt-2">
+                <button onclick="toggleSection('${abstractId}')" class="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
+                  <span>查看摘要</span>
+                  <svg class="w-3 h-3 transform transition-transform" id="icon-${abstractId}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div id="${abstractId}" class="section-expand collapsed">
+                  <p class="text-xs text-text-secondary mt-2 leading-relaxed bg-bg-hover/50 p-3 rounded">${searchQuery ? highlightText(work.abstract, searchQuery) : escapeHtml(work.abstract)}</p>
+                </div>
+              </div>` : ''}
+              <div class="paper-details flex flex-wrap gap-2 mt-2 text-xs">
+                ${work.doi ? `<a href="https://doi.org/${escapeHtml(work.doi)}" target="_blank" rel="noopener" class="text-accent hover:underline">DOI</a>` : ''}
+                <span class="text-text-secondary">相似度 ${work.similarity.toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+        </article>`;
+      }
+
+      function renderChunk(state, count = CONFIG.pageSize) {
+        const { works, list, groupId } = state;
+        const start = state.rendered;
+        const end = Math.min(start + count, works.length);
+        if (start >= end) return;
+
+        const htmlParts = [];
+        for (let i = start; i < end; i++) {
+          htmlParts.push(createArticleHTML(works[i], groupId, i));
+        }
+        list.insertAdjacentHTML('beforeend', htmlParts.join(''));
+        state.rendered = end;
+
+        const btn = state.loadMoreBtn;
+        if (btn) {
+          if (state.rendered >= works.length) {
+            btn.style.display = 'none';
+          } else {
+            btn.textContent = `加载更多 (${works.length - state.rendered} 剩余)`;
+            btn.style.display = 'block';
+          }
+        }
+      }
+
+      function setupLazyLoad(state) {
+        if (!intersectionObserver) {
+          intersectionObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+              if (entry.isIntersecting) {
+                const groupId = entry.target.dataset.groupId;
+                const s = groupStates.get(groupId);
+                if (s && s.rendered < s.works.length) {
+                  renderChunk(s);
+                }
+              }
+            });
+          }, { rootMargin: '200px' });
+        }
+
+        const sentinel = document.createElement('div');
+        sentinel.className = 'load-sentinel h-1';
+        sentinel.dataset.groupId = state.groupId;
+        state.list.parentElement.appendChild(sentinel);
+        intersectionObserver.observe(sentinel);
+        state.sentinel = sentinel;
+      }
+
+      function renderGroups(data) {
+        const container = document.getElementById('archive-groups');
+        const noResults = document.getElementById('no-results');
+        const searchInfo = document.getElementById('search-info');
+
+        if (intersectionObserver) {
+          intersectionObserver.disconnect();
+        }
+        groupStates.clear();
+
+        const filteredGroups = getFilteredGroups(data);
+        const totalFiltered = filteredGroups.reduce((sum, g) => sum + g.filteredWorks.length, 0);
+
+        // Update visible count in toolbar
+        document.getElementById('visible-count').textContent = totalFiltered;
+
+        // Update search info
+        const hasAnyFilter = Object.entries(filters).some(([k, v]) => k !== 'sort' && v);
+        if (searchQuery && searchQuery.length >= CONFIG.searchMinLength) {
+          searchInfo.textContent = `找到 ${totalFiltered} 篇匹配 "${searchQuery}" 的文献`;
+          searchInfo.classList.remove('hidden');
+        } else if (hasAnyFilter) {
+          const parts = [];
+          if (filters.author) parts.push(`作者: ${filters.author}`);
+          if (filters.domain) parts.push(`领域: ${filters.domain}`);
+          if (filters.source) parts.push(`来源: ${filters.source}`);
+          if (filters.label) parts.push(`标签: ${filters.label}`);
+          if (filters.month) parts.push(`月份: ${filters.month}`);
+          searchInfo.textContent = `筛选结果: ${totalFiltered} 篇 (${parts.join('; ')})`;
+          searchInfo.classList.remove('hidden');
+        } else {
+          searchInfo.classList.add('hidden');
+        }
+
+        if (filteredGroups.length === 0) {
+          container.innerHTML = '';
+          noResults.classList.remove('hidden');
+          return;
+        }
+
+        noResults.classList.add('hidden');
+        const fragment = document.createDocumentFragment();
+
+        filteredGroups.forEach((group, gIdx) => {
+          const groupId = `g${gIdx}-${normalizeGroupId(group.name)}`;
+          const section = document.createElement('section');
+          section.className = 'group-section';
+          section.dataset.group = group.name;
+
+          const header = document.createElement('div');
+          let headerExtra = '';
+          if (data.group_by === 'author') {
+            headerExtra = group.name === 'AI 推荐' ? ' group-header-ai' : ' group-header-author';
+          }
+          header.className = 'group-header flex items-center justify-between p-3 bg-bg-card rounded-lg border border-border-color mb-3 cursor-pointer' + headerExtra;
+          header.onclick = () => toggleGroup(groupId);
+
+          let titleContent = '';
+          if (data.group_by === 'label') {
+            const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : (group.name === 'followed' ? 'bg-blue-500' : 'bg-gray-400'));
+            const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : (group.name === 'followed' ? '关注' : '参考'));
+            titleContent = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${labelName}`;
+          } else if (data.group_by === 'author') {
+            const isAI = group.name === 'AI 推荐';
+            const iconSvg = isAI
+              ? '<svg class="w-4 h-4 mr-2 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>'
+              : '<svg class="w-4 h-4 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>';
+            titleContent = `${iconSvg}<span class="${isAI ? 'text-amber-700' : 'text-blue-700'}">${escapeHtml(group.name)}</span>`;
+          } else {
+            titleContent = escapeHtml(group.name);
+          }
+
+          header.innerHTML = `
+            <div class="flex items-center">
+              <svg class="w-4 h-4 mr-2 text-text-secondary rotate-icon" id="icon-group-${groupId}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+              <h2 class="text-base font-semibold text-text-primary flex items-center">${titleContent}</h2>
+            </div>
+            <span class="text-sm text-text-secondary">${group.filteredWorks.length} 篇</span>
+          `;
+          section.appendChild(header);
+
+          const contentWrapper = document.createElement('div');
+          contentWrapper.id = `content-${groupId}`;
+          contentWrapper.className = 'group-content';
+
+          const list = document.createElement('div');
+          list.className = 'space-y-3';
+          contentWrapper.appendChild(list);
+
+          const loadMoreBtn = document.createElement('button');
+          loadMoreBtn.className = 'mt-3 w-full px-4 py-2 text-sm font-medium text-accent border border-accent/30 rounded-lg hover:bg-accent/10 transition-colors';
+          loadMoreBtn.style.display = group.filteredWorks.length > CONFIG.pageSize ? 'block' : 'none';
+          contentWrapper.appendChild(loadMoreBtn);
+
+          section.appendChild(contentWrapper);
+
+          const state = {
+            groupId,
+            works: group.filteredWorks,
+            list,
+            rendered: 0,
+            loadMoreBtn,
+            sentinel: null
+          };
+          groupStates.set(groupId, state);
+
+          loadMoreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            renderChunk(state);
+          });
+
+          renderChunk(state);
+
+          if (state.works.length > state.rendered) {
+            setupLazyLoad(state);
+          }
+
+          fragment.appendChild(section);
+        });
+
+        container.innerHTML = '';
+        container.appendChild(fragment);
+
+        // Update total display
+        if (hasAnyFilter || searchQuery) {
+          document.getElementById('stat-total').textContent = `${totalFiltered} / ${data.stats.total}`;
+        } else {
+          document.getElementById('stat-total').textContent = data.stats.total;
+        }
+      }
+
+      const debouncedRender = debounce(() => {
+        if (archiveData) renderGroups(archiveData);
+      }, CONFIG.debounceDelay);
+
+      // ── Event listeners ──
+
+      // Search
+      const searchInput = document.getElementById('search-input');
+      const clearSearch = document.getElementById('clear-search');
+
+      searchInput.addEventListener('input', debounce((e) => {
+        searchQuery = e.target.value.trim();
+        clearSearch.classList.toggle('hidden', !searchQuery);
+        debouncedRender();
+      }, CONFIG.debounceDelay));
+
+      clearSearch.addEventListener('click', () => {
+        searchInput.value = '';
+        searchQuery = '';
+        clearSearch.classList.add('hidden');
+        debouncedRender();
+      });
+
+      // View toggle
+      document.getElementById('toggle-view').addEventListener('click', () => {
+        isCompactView = !isCompactView;
+        document.getElementById('main-content').classList.toggle('compact-view', isCompactView);
+        document.getElementById('view-label').textContent = isCompactView ? '紧凑' : '完整';
+      });
+
+      // Expand/collapse all
+      document.getElementById('expand-all').addEventListener('click', () => {
+        allGroupsExpanded = !allGroupsExpanded;
+        document.querySelectorAll('.group-content').forEach(content => {
+          content.classList.toggle('collapsed', !allGroupsExpanded);
+        });
+        document.querySelectorAll('.rotate-icon').forEach(icon => {
+          icon.classList.toggle('collapsed', !allGroupsExpanded);
         });
       });
-    });
+
+      // Reset search
+      document.getElementById('reset-search').addEventListener('click', () => {
+        Object.keys(filters).forEach(k => { if (k !== 'sort') filters[k] = ''; });
+        filters.sort = 'newest';
+        searchQuery = '';
+        searchInput.value = '';
+        clearSearch.classList.add('hidden');
+        // Reset all pill active states
+        document.querySelectorAll('.pill[data-filter]').forEach(p => p.classList.toggle('active', p.dataset.value === ''));
+        document.querySelectorAll('#sort-pills .pill').forEach(p => p.classList.toggle('active', p.dataset.sort === 'newest'));
+        debouncedRender();
+      });
+
+      // Selection toolbar
+      document.getElementById('select-all-btn').addEventListener('click', selectAllVisible);
+      document.getElementById('clear-selection-btn').addEventListener('click', clearSelection);
+
+      // Export button + dropdown
+      const exportBtn = document.getElementById('export-btn');
+      const exportDropdown = document.getElementById('export-dropdown');
+
+      exportBtn.addEventListener('click', () => {
+        if (selectedWorks.size === 0) return;
+        exportDropdown.classList.toggle('hidden');
+      });
+
+      exportDropdown.querySelectorAll('button[data-format]').forEach(btn => {
+        btn.addEventListener('click', () => doExport(btn.dataset.format));
+      });
+
+      // Close dropdown on outside click
+      document.addEventListener('click', (e) => {
+        if (!exportBtn.contains(e.target) && !exportDropdown.contains(e.target)) {
+          exportDropdown.classList.add('hidden');
+        }
+      });
+
+      // Back to top
+      const backToTop = document.getElementById('back-to-top');
+      window.addEventListener('scroll', () => {
+        backToTop.classList.toggle('visible', window.scrollY > 300);
+      });
+      backToTop.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+          e.preventDefault();
+          searchInput.focus();
+        }
+        if (e.key === 'Escape') {
+          if (document.activeElement === searchInput) {
+            searchInput.value = '';
+            searchQuery = '';
+            clearSearch.classList.add('hidden');
+            searchInput.blur();
+            debouncedRender();
+          }
+          exportDropdown.classList.add('hidden');
+        }
+      });
+
+      // ── Load data ──
+
+      fetch(dataUrl)
+        .then(response => response.json())
+        .then(data => {
+          archiveData = data;
+          document.getElementById('loading').classList.add('hidden');
+          document.getElementById('main-content').classList.remove('hidden');
+          updateStats(data.stats);
+          buildAllFilters(data);
+          renderGroups(data);
+        })
+        .catch(err => {
+          console.error('Failed to load archive data:', err);
+          document.getElementById('loading').innerHTML =
+            '<p class="text-center text-red-500">加载数据失败，请刷新页面重试</p>';
+        });
+
+    })();
   </script>
 </body>
 

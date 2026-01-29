@@ -1,7 +1,7 @@
 """Abstract scraper with Camoufox browser and rule-based + LLM extraction.
 
 Features:
-- Sequential batch fetching with rate limiting
+- Concurrent batch fetching with configurable parallelism
 - Publisher-specific rule-based extraction (ACM, IEEE, Springer, Elsevier, etc.)
 - LLM fallback for unknown publishers or failed rules
 - Cloudflare bypass via camoufox-captcha
@@ -10,8 +10,10 @@ Flow: DOI -> doi.org redirect -> HTML -> Rules extract -> (LLM fallback) -> abst
 """
 
 import logging
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from zotwatch.llm.base import BaseLLMProvider
 
@@ -24,12 +26,16 @@ logger = logging.getLogger(__name__)
 # Type alias for result callback: (doi, abstract_or_none) -> None
 ResultCallback = Callable[[str, str | None], None]
 
+# Default max workers for concurrent fetching
+DEFAULT_MAX_WORKERS = 3
+
 
 class AbstractScraper:
-    """DOI-based abstract scraper with sequential fetching.
+    """DOI-based abstract scraper with concurrent fetching.
 
     Features:
-    - Sequential batch processing with rate limiting
+    - Concurrent batch processing with configurable parallelism
+    - Rate limiting per worker to avoid overloading servers
     - Rule-based extraction for major publishers
     - LLM fallback when rules fail
     - Cloudflare bypass via Camoufox
@@ -45,23 +51,26 @@ class AbstractScraper:
         llm_max_tokens: int = 1024,
         llm_temperature: float = 0.1,
         use_llm_fallback: bool = True,
+        max_workers: int | None = None,
     ):
         """Initialize the abstract scraper.
 
         Args:
             llm: LLM provider for fallback extraction. Optional if use_llm_fallback=False.
-            rate_limit_delay: Minimum seconds between requests.
+            rate_limit_delay: Minimum seconds between requests (per worker).
             timeout: Page load timeout in milliseconds.
             max_retries: Maximum retry attempts for Cloudflare challenges.
             max_html_chars: Maximum HTML chars to send to LLM.
             llm_max_tokens: Maximum tokens for LLM response.
             llm_temperature: LLM temperature for extraction.
             use_llm_fallback: Whether to use LLM when rules fail.
+            max_workers: Maximum concurrent workers for batch fetching.
         """
         self.rate_limit_delay = rate_limit_delay
         self.timeout = timeout
         self.max_retries = max_retries
         self.use_llm_fallback = use_llm_fallback
+        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
 
         # Publisher-specific extractor
         self.publisher_extractor = PublisherExtractor(use_llm_fallback=use_llm_fallback)
@@ -76,16 +85,19 @@ class AbstractScraper:
                 temperature=llm_temperature,
             )
 
+        # Thread-safe rate limiting
+        self._rate_lock = threading.Lock()
         self._last_request_time = 0.0
 
     def _wait_for_rate_limit(self):
-        """Respect rate limit between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.rate_limit_delay:
-            sleep_time = self.rate_limit_delay - elapsed
-            logger.debug("Rate limiting: sleeping %.1fs", sleep_time)
-            time.sleep(sleep_time)
-        self._last_request_time = time.time()
+        """Respect rate limit between requests (thread-safe)."""
+        with self._rate_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < self.rate_limit_delay:
+                sleep_time = self.rate_limit_delay - elapsed
+                logger.debug("Rate limiting: sleeping %.1fs", sleep_time)
+                time.sleep(sleep_time)
+            self._last_request_time = time.time()
 
     def _extract_abstract(
         self,
@@ -158,7 +170,10 @@ class AbstractScraper:
         items: list[dict[str, str]],
         on_result: ResultCallback | None = None,
     ) -> dict[str, str]:
-        """Fetch abstracts for multiple DOIs sequentially.
+        """Fetch abstracts for multiple DOIs with concurrent processing.
+
+        Uses ThreadPoolExecutor for parallel fetching while respecting
+        rate limits through a shared lock.
 
         Args:
             items: List of dicts with 'doi' and optional 'title'.
@@ -171,28 +186,59 @@ class AbstractScraper:
         if not items:
             return {}
 
-        logger.info("Batch fetching %d DOIs (sequential)", len(items))
-        results = {}
-        total = len(items)
+        # Filter out items without DOI
+        valid_items = [item for item in items if item.get("doi")]
+        if not valid_items:
+            return {}
 
-        for idx, item in enumerate(items, 1):
-            doi = item.get("doi")
-            if not doi:
-                continue
+        total = len(valid_items)
+        workers = min(self.max_workers, total)
 
+        logger.info("Batch fetching %d DOIs with %d concurrent workers", total, workers)
+
+        results: dict[str, str] = {}
+        results_lock = threading.Lock()
+
+        def fetch_one(item: dict[str, str]) -> tuple[str, str | None]:
+            """Fetch a single DOI. Returns (doi, abstract_or_none)."""
+            doi = item["doi"]
             title = item.get("title")
-            logger.info("Fetching [%d/%d]: %s", idx, total, doi)
-
             abstract = self.fetch_abstract(doi, title)
-            if abstract:
-                results[doi] = abstract
-                logger.info("Fetching [%d/%d]: success (%d chars)", idx, total, len(abstract))
-            else:
-                logger.info("Fetching [%d/%d]: no abstract found", idx, total)
+            return (doi, abstract)
 
-            # Call callback for each result
-            if on_result:
-                on_result(doi, abstract)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            # Submit all tasks
+            futures = {executor.submit(fetch_one, item): item for item in valid_items}
+
+            # Process results as they complete
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    doi, abstract = future.result()
+                    if abstract:
+                        with results_lock:
+                            results[doi] = abstract
+                        logger.info(
+                            "Fetched [%d/%d]: %s (%d chars)",
+                            completed,
+                            total,
+                            doi,
+                            len(abstract),
+                        )
+                    else:
+                        logger.info("Fetched [%d/%d]: %s (no abstract)", completed, total, doi)
+
+                    # Call callback for each result
+                    if on_result:
+                        on_result(doi, abstract)
+
+                except Exception as e:
+                    item = futures[future]
+                    doi = item.get("doi", "unknown")
+                    logger.warning("Failed to fetch %s: %s", doi, e)
+                    if on_result:
+                        on_result(doi, None)
 
         return results
 

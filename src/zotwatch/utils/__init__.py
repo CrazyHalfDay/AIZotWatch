@@ -5,6 +5,7 @@ from .hashing import hash_content
 from .logging import get_logger, setup_logging
 from .temporal import compute_batch_weights, compute_item_age_days, compute_temporal_weight
 from .text import iter_batches
+from .url import URLValidationError, is_safe_url, validate_url
 
 __all__ = [
     "setup_logging",
@@ -18,4 +19,7 @@ __all__ = [
     "compute_temporal_weight",
     "compute_batch_weights",
     "compute_item_age_days",
+    "validate_url",
+    "is_safe_url",
+    "URLValidationError",
 ]

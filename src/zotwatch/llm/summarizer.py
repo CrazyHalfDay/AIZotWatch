@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from zotwatch.core.models import (
@@ -16,6 +17,9 @@ from zotwatch.utils.datetime import utc_now
 
 from .base import BaseLLMProvider
 from .prompts import BULLET_SUMMARY_PROMPT, DETAILED_ANALYSIS_PROMPT
+
+# Default max workers for concurrent summarization
+DEFAULT_MAX_WORKERS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -175,13 +179,21 @@ class PaperSummarizer:
         *,
         force: bool = False,
         limit: int | None = None,
+        max_workers: int | None = None,
     ) -> SummarizationResult:
-        """Generate summaries for multiple papers.
+        """Generate summaries for multiple papers with concurrent processing.
+
+        Uses ThreadPoolExecutor to parallelize LLM calls, significantly reducing
+        total processing time when summarizing many papers.
+
+        When caching is enabled, each worker creates its own ProfileStorage
+        instance to avoid sharing SQLite connections across threads.
 
         Args:
             works: List of ranked works to summarize.
             force: If True, regenerate even if cached.
             limit: Maximum number of papers to summarize.
+            max_workers: Maximum concurrent workers. Defaults to DEFAULT_MAX_WORKERS.
 
         Returns:
             SummarizationResult containing successful summaries and failed paper IDs.
@@ -189,23 +201,68 @@ class PaperSummarizer:
         if limit:
             works = works[:limit]
 
-        summaries: list[PaperSummary] = []
-        failed_ids: list[str] = []
+        if not works:
+            return SummarizationResult(summaries=[], failed_ids=[])
 
-        for i, work in enumerate(works):
+        workers = max_workers or DEFAULT_MAX_WORKERS
+        total = len(works)
+
+        # Results indexed by position to preserve order
+        results: dict[int, PaperSummary | None] = {}
+        failed_ids: list[str] = []
+        storage_path = self.storage.path if self.storage else None
+
+        def summarize_one(idx: int, work: RankedWork) -> tuple[int, PaperSummary | None, str | None]:
+            """Summarize a single paper. Returns (index, summary, error_id)."""
+            worker_storage = ProfileStorage(storage_path) if storage_path else None
+            summarizer = (
+                self
+                if worker_storage is None
+                else PaperSummarizer(self.llm, storage=worker_storage, model=self.model)
+            )
             try:
-                logger.info("Summarizing paper %d/%d: %s", i + 1, len(works), work.title[:50])
-                summary = self.summarize(work, force=force)
-                summaries.append(summary)
+                summary = summarizer.summarize(work, force=force)
+                return (idx, summary, None)
             except Exception as e:
                 logger.error("Failed to summarize %s: %s", work.identifier, e)
-                failed_ids.append(work.identifier)
+                return (idx, None, work.identifier)
+            finally:
+                if worker_storage is not None:
+                    worker_storage.close()
+
+        logger.info("Summarizing %d papers with %d concurrent workers", total, workers)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(summarize_one, idx, work): idx
+                for idx, work in enumerate(works)
+            }
+
+            # Process results as they complete
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                idx, summary, error_id = future.result()
+                results[idx] = summary
+                if error_id:
+                    failed_ids.append(error_id)
+                else:
+                    logger.info(
+                        "Summarized [%d/%d]: %s",
+                        completed,
+                        total,
+                        works[idx].title[:50],
+                    )
+
+        # Collect summaries in original order, filtering out None
+        summaries = [results[i] for i in range(total) if results.get(i) is not None]
 
         if failed_ids:
             logger.warning(
                 "Summarization completed with %d failures out of %d papers",
                 len(failed_ids),
-                len(works),
+                total,
             )
 
         return SummarizationResult(summaries=summaries, failed_ids=failed_ids)

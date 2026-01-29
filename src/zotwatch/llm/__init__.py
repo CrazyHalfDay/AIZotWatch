@@ -2,12 +2,14 @@
 
 from .cluster_labeler import ClusterLabeler
 from .deepseek import DeepSeekClient
+from .domain_classifier import DEFAULT_DOMAINS, PaperDomainClassifier
 from .factory import create_llm_client
 from .interest_refiner import InterestRefiner
 from .kimi import KimiClient
 from .library_analyzer import LibraryAnalyzer
 from .openrouter import OpenRouterClient
 from .overall_summarizer import OverallSummarizer
+from .relevance_filter import PaperRelevanceFilter
 from .summarizer import PaperSummarizer
 from .translator import TitleTranslator
 
@@ -22,4 +24,7 @@ __all__ = [
     "OverallSummarizer",
     "LibraryAnalyzer",
     "TitleTranslator",
+    "PaperRelevanceFilter",
+    "PaperDomainClassifier",
+    "DEFAULT_DOMAINS",
 ]

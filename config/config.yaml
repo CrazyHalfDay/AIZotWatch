@@ -38,7 +38,18 @@ sources:
     llm_max_tokens: 1024
     llm_temperature: 0.1
     use_llm_fallback: true
-
+  # Followed authors (OpenAlex API)
+  # Fetches all papers by specified authors. First run = full pull, then daily incremental.
+  # These papers skip scoring/ranking/TopK - only deduplication is applied.
+  followed_authors:
+    enabled: true
+    polite_email: "${CROSSREF_MAILTO}"
+    max_results_per_author: 10000
+    authors:
+      - name: "汪在聪"
+        id: "0000-0002-3584-1673"   # ORCID
+      - name: "JB Walters"
+        id: "0000-0002-1275-8826"   # ORCID
 scoring:
   # Threshold configuration: controls how papers are labeled (must_read/consider/ignore)
   thresholds:
@@ -69,6 +80,30 @@ scoring:
       - 食品科学、农业化学、电化学电池、光电材料、超导材料、磁性材料
     max_documents: 500  # Max documents for FAISS recall (Voyage limit: 1000, DashScope: 500)
     top_k_interest: 5  # Final interest-based papers count
+    # Semantic similarity filter (interest description vs candidate title/abstract)
+    semantic_filter_enabled: true
+    semantic_filter_min_similarity: 0.28
+    semantic_filter_max_candidates: 800
+    # Static include keywords: keep only candidates that match at least one keyword
+    include_keywords:
+      - "geochemistry"
+      - "petrology"
+      - "geology"
+      - "volcanology"
+      - "mineralogy"
+      - "mantle"
+      - "subduction"
+      - "arc magma"
+      - "isotope"
+      - "sulfide"
+      - "ore deposit"
+      - "ore-forming"
+    # Require at least N keyword matches in title/abstract to keep
+    include_min_matches: 1
+    # Match fields: ["title"], ["abstract"], or ["title", "abstract"]
+    include_match_fields:
+      - "title"
+      - "abstract"
     # Static exclude keywords (case-insensitive, applied to ALL candidates)
     # 用于过滤 Nature/Science 等综合性期刊中的非地学文章
     exclude_keywords:
@@ -173,6 +208,15 @@ scoring:
       - "pollutant degradation"
       - "adsorption material"
       - "membrane separation"
+      - "gas separation"
+      - "xenon"
+      - "krypton"
+      - "coordination framework"
+      - "metal-organic framework"
+      - "MOF"
+      - "sorbent"
+      - "adsorbent"
+      - "adsorption"
       - "drinking water treatment"
       - "air pollution"
       
@@ -186,6 +230,10 @@ scoring:
       - "neural network"
       - "daily briefing"
       - "news feature"
+    # LLM relevance filter (semantic filtering using title + abstract)
+    llm_relevance_filter_enabled: false
+    llm_relevance_batch_size: 20
+    llm_relevance_max_candidates: 200
 
 
   # Micro/Macro fusion scoring configuration
@@ -237,6 +285,27 @@ llm:
     initial_delay: 1.0
   translation:
     enabled: true  # Translate English titles to Chinese
+  domain_classification:
+    enabled: true  # Classify papers into research domains
+    batch_size: 20
+    max_workers: 3
+    domains:  # Custom domains for geoscience (empty = use defaults)
+      - "地球化学"
+      - "岩石学"
+      - "矿物学"
+      - "火山学"
+      - "构造地质学"
+      - "地震学"
+      - "大地测量学"
+      - "地球物理学"
+      - "海洋地质"
+      - "古气候与古环境"
+      - "遥感与GIS"
+      - "水文地质学"
+      - "矿床学与成矿"
+      - "环境地球化学"
+      - "行星科学"
+      - "其他"
 
 # Output Configuration
 output:

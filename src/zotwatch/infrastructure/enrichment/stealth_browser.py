@@ -481,6 +481,15 @@ class StealthBrowser:
         Returns:
             Tuple of (html_content, final_url) or (None, None) on failure.
         """
+        # Validate URL to prevent SSRF attacks
+        from zotwatch.utils.url import URLValidationError, validate_url
+
+        try:
+            validate_url(url, allow_private_ip=False)
+        except URLValidationError as e:
+            logger.warning("URL validation failed for %s: %s", url, e)
+            return None, None
+
         browser, context = cls.get_browser()
         if browser is None:
             return None, None

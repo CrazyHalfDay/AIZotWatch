@@ -16,6 +16,7 @@ from zotwatch.infrastructure.embedding import (
 )
 from zotwatch.infrastructure.embedding.base import BaseEmbeddingProvider
 from zotwatch.infrastructure.storage import ProfileStorage
+from zotwatch.utils.hashing import hash_content
 from zotwatch.utils.temporal import compute_batch_weights
 
 logger = logging.getLogger(__name__)
@@ -67,13 +68,62 @@ class ProfileBuilder:
             faiss_path=str(self.base_dir / "data" / "faiss.index"),
         )
 
+    def _compute_library_hash(self) -> str:
+        """Compute a hash representing the current library state.
+
+        Uses item count + all content hashes to detect any change.
+        """
+        content_hashes = self.storage.get_all_content_hashes()
+        # Sort by key for deterministic ordering
+        parts = [f"{k}:{v}" for k, v in sorted(content_hashes.items())]
+        return hash_content(str(len(parts)), *parts)
+
+    def _can_skip_rebuild(self) -> bool:
+        """Check whether the profile can be skipped (nothing changed).
+
+        Returns True if:
+        1. FAISS index file exists on disk
+        2. Embedding signature matches (same provider/model)
+        3. Library hash matches (no items added/removed/changed)
+        """
+        faiss_path = Path(self.artifacts.faiss_path)
+        if not faiss_path.exists():
+            logger.info("FAISS index not found, rebuild required")
+            return False
+
+        # Check embedding provider/model hasn't changed
+        current_signature = self.settings.embedding.signature
+        stored_signature = self.storage.get_metadata("embedding_signature")
+        if stored_signature != current_signature:
+            logger.info(
+                "Embedding signature changed (%s -> %s), rebuild required",
+                stored_signature,
+                current_signature,
+            )
+            return False
+
+        # Check library content hasn't changed
+        current_hash = self._compute_library_hash()
+        stored_hash = self.storage.get_metadata("profile_library_hash")
+        if stored_hash != current_hash:
+            logger.info("Library content changed, rebuild required")
+            return False
+
+        logger.info("Profile is up to date, skipping rebuild")
+        return True
+
     def run(self, *, full: bool = False) -> ProfileArtifacts:
         """Build profile from library items.
 
         Args:
             full: If True, invalidate all profile embeddings and recompute.
-                  If False (default), use cached embeddings where available.
+                  If False (default), use cached embeddings where available,
+                  and skip rebuild entirely if nothing changed.
         """
+        # Skip rebuild if nothing changed (incremental mode only)
+        if not full and self._can_skip_rebuild():
+            return self.artifacts
+
         total_items = self.storage.count_items()
         items = self.storage.get_items_with_abstract()
 
@@ -121,6 +171,10 @@ class ProfileBuilder:
         # Persist embedding signature to detect provider/model changes across runs
         signature = self.settings.embedding.signature
         self.storage.set_metadata("embedding_signature", signature)
+
+        # Persist library hash to detect content changes across runs
+        library_hash = self._compute_library_hash()
+        self.storage.set_metadata("profile_library_hash", library_hash)
 
         # Run clustering if enabled
         if self.settings.profile.clustering.enabled:

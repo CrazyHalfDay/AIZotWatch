@@ -108,9 +108,7 @@ def _build_profile(
             "No items found in your Zotero library. Please add some papers to Zotero before running ZotWatch."
         )
 
-    click.echo(f"Building profile from {total_items} items...")
-
-    # Build profile with unified cache
+    # Build profile with unified cache (incremental: skips if nothing changed)
     vectorizer = create_embedding_provider(settings.embedding)
     builder = ProfileBuilder(
         base_dir,
@@ -121,9 +119,7 @@ def _build_profile(
     )
     artifacts = builder.run(full=full)
 
-    click.echo("Profile built successfully:")
-    click.echo(f"  SQLite: {artifacts.sqlite_path}")
-    click.echo(f"  FAISS: {artifacts.faiss_path}")
+    click.echo(f"Profile ready: {artifacts.faiss_path}")
 
 
 @cli.command()
@@ -151,17 +147,6 @@ def profile(ctx: click.Context, full: bool) -> None:
     stats = ingestor.run(full=full, on_progress=on_ingest_progress)
     click.echo(f"  Fetched: {stats.fetched}, Updated: {stats.updated}, Removed: {stats.removed}")
 
-    # Count items
-    total_items = storage.count_items()
-    cached_profile = embedding_cache.count(source_type="profile", model=settings.embedding.model)
-
-    if full:
-        click.echo("Building profile (full rebuild)...")
-    elif cached_profile < total_items:
-        click.echo(f"Building profile ({total_items - cached_profile}/{total_items} items need embedding)...")
-    else:
-        click.echo(f"Building profile (all {total_items} embeddings cached)...")
-
     # Build profile with unified cache
     vectorizer = create_embedding_provider(settings.embedding)
     builder = ProfileBuilder(
@@ -171,9 +156,23 @@ def profile(ctx: click.Context, full: bool) -> None:
         vectorizer=vectorizer,
         embedding_cache=embedding_cache,
     )
+
+    # Check if rebuild is needed before logging
+    if full:
+        click.echo("Building profile (full rebuild)...")
+    elif not builder._can_skip_rebuild():
+        total_items = storage.count_items()
+        cached_profile = embedding_cache.count(source_type="profile", model=settings.embedding.model)
+        if cached_profile < total_items:
+            click.echo(f"Building profile ({total_items - cached_profile}/{total_items} items need embedding)...")
+        else:
+            click.echo(f"Building profile (all {total_items} embeddings cached, rebuilding FAISS index)...")
+    else:
+        click.echo("Profile is up to date, no rebuild needed.")
+
     artifacts = builder.run(full=full)
 
-    click.echo("Profile built successfully:")
+    click.echo(f"Profile ready:")
     click.echo(f"  SQLite: {artifacts.sqlite_path}")
     click.echo(f"  FAISS: {artifacts.faiss_path}")
 
@@ -224,7 +223,10 @@ def watch(
     result = pipeline.run(on_progress=on_progress)
 
     # Handle empty results
-    if not result.ranked_works:
+    has_ranked = bool(result.ranked_works)
+    has_followed = bool(result.followed_works)
+
+    if not has_ranked and not has_followed:
         click.echo("No recommendations found")
         if rss:
             write_rss([], base_dir / "reports" / "feed.xml")
@@ -238,9 +240,17 @@ def watch(
         click.echo(f"\nThresholds ({t.mode}): must_read >= {t.must_read:.3f}, consider >= {t.consider:.3f}")
 
     # Display top recommendations
-    click.echo(f"\nTop {min(10, len(result.ranked_works))} recommendations:")
-    for idx, work in enumerate(result.ranked_works[:10], start=1):
-        click.echo(f"  {idx:02d} | {work.score:.3f} | {work.label} | {work.title[:60]}...")
+    if has_ranked:
+        click.echo(f"\nTop {min(10, len(result.ranked_works))} recommendations:")
+        for idx, work in enumerate(result.ranked_works[:10], start=1):
+            click.echo(f"  {idx:02d} | {work.score:.3f} | {work.label} | {work.title[:60]}...")
+
+    # Display followed author papers
+    if has_followed:
+        click.echo(f"\nFollowed authors: {len(result.followed_works)} new papers")
+        for idx, work in enumerate(result.followed_works[:5], start=1):
+            author = work.extra.get("followed_author", "")
+            click.echo(f"  {idx:02d} | {author} | {work.title[:60]}...")
 
     # Generate outputs
     _output_results(result, base_dir, settings, rss, report, push)
@@ -249,7 +259,10 @@ def watch(
     archive_db = base_dir / "data" / "archive.sqlite"
     with ArchiveStorage(archive_db) as archive:
         saved = archive.save_batch(result.ranked_works)
-        click.echo(f"Saved {saved} works to archive")
+        click.echo(f"Saved {saved} ranked works to archive")
+        if result.followed_works:
+            saved_followed = archive.save_batch(result.followed_works)
+            click.echo(f"Saved {saved_followed} followed author works to archive")
 
 
 def _output_results(
@@ -282,6 +295,7 @@ def _output_results(
             template_dir=template_dir if template_dir.exists() else None,
             timezone_name=settings.output.timezone,
             interest_works=result.interest_works if result.interest_works else None,
+            followed_works=result.followed_works if result.followed_works else None,
             overall_summaries=result.overall_summaries if result.overall_summaries else None,
             researcher_profile=result.researcher_profile,
         )
@@ -301,7 +315,7 @@ if __name__ == "__main__":
 @click.option("--days", default=90, help="Number of days to include")
 @click.option(
     "--group-by",
-    type=click.Choice(["date", "venue", "source", "label", "all"]),
+    type=click.Choice(["date", "venue", "source", "label", "domain", "author", "all"]),
     default="all",
     help="Grouping dimension ('all' generates all views)",
 )
@@ -321,7 +335,7 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
     reports_dir = base_dir / "reports"
 
     # Determine which views to generate
-    views = ["date", "venue", "source", "label"] if group_by == "all" else [group_by]
+    views = ["date", "venue", "source", "label", "domain", "author"] if group_by == "all" else [group_by]
 
     with ArchiveStorage(archive_db) as storage:
         stats = storage.get_stats(days=days)
@@ -337,6 +351,10 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
                 grouped = storage.get_grouped_by_source(days=days)
             elif view == "label":
                 grouped = storage.get_grouped_by_label(days=days)
+            elif view == "domain":
+                grouped = storage.get_grouped_by_domain(days=days)
+            elif view == "author":
+                grouped = storage.get_grouped_by_author(days=days)
             else:
                 grouped = storage.get_grouped_by_date(days=days)
 
