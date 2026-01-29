@@ -307,6 +307,24 @@ class ArchiveStorage:
             grouped[domain].append(work)
         return grouped
 
+    def get_grouped_by_year(
+        self,
+        days: int = 90,
+        sources: list[str] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, list[RankedWork]]:
+        """Get works grouped by publication year (descending)."""
+        works = self.get_all(days=days, sources=sources, labels=labels)
+        grouped: dict[str, list[RankedWork]] = {}
+        for work in works:
+            published = work.published or work.extra.get("run_date", "")
+            year = published[:4] if published and len(published) >= 4 else "未知"
+            if year not in grouped:
+                grouped[year] = []
+            grouped[year].append(work)
+        # Return sorted by year descending
+        return dict(sorted(grouped.items(), key=lambda x: x[0], reverse=True))
+
     def get_grouped_by_label(
         self,
         days: int = 90,

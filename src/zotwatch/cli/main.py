@@ -315,7 +315,7 @@ if __name__ == "__main__":
 @click.option("--days", default=90, help="Number of days to include")
 @click.option(
     "--group-by",
-    type=click.Choice(["date", "venue", "source", "label", "domain", "author", "all"]),
+    type=click.Choice(["date", "year", "venue", "source", "label", "domain", "author", "all"]),
     default="all",
     help="Grouping dimension ('all' generates all views)",
 )
@@ -335,7 +335,7 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
     reports_dir = base_dir / "reports"
 
     # Determine which views to generate
-    views = ["date", "venue", "source", "label", "domain", "author"] if group_by == "all" else [group_by]
+    views = ["date", "year", "venue", "source", "label", "domain", "author"] if group_by == "all" else [group_by]
 
     with ArchiveStorage(archive_db) as storage:
         stats = storage.get_stats(days=days)
@@ -353,6 +353,8 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
                 grouped = storage.get_grouped_by_label(days=days)
             elif view == "domain":
                 grouped = storage.get_grouped_by_domain(days=days)
+            elif view == "year":
+                grouped = storage.get_grouped_by_year(days=days)
             elif view == "author":
                 grouped = storage.get_grouped_by_author(days=days)
             else:
