@@ -228,7 +228,7 @@ llm:
   enabled: true
   provider: "openrouter"  # Options: "kimi", "openrouter", or "deepseek"
   api_key: "${OPENROUTER_API_KEY}"  # kimi: MOONSHOT_API_KEY
-  model: "gemini-3-pro-preview"
+  model: "gemini-2.5-flash"
   max_tokens: 5120
   temperature: 0.3
   retry:
