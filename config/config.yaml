@@ -10,7 +10,7 @@ zotero:
 
 sources:
   arxiv:
-    enabled: true
+    enabled: false
     categories:
       - "physics.geo-ph"  # Geophysics (solid earth, mantle, tectonics)
       - "astro-ph.EP"     # Earth and Planetary Astrophysics
