@@ -12,22 +12,20 @@ sources:
   arxiv:
     enabled: false
     categories:
-      - "cs.LG"   # Machine Learning
-      - "cs.CV"   # Computer Vision and Pattern Recognition
-      - "cs.AI"   # Artificial Intelligence
-      - "stat.ML" # Machine Learning (Statistics)
-    days_back: 4
-    max_results: 3000
+      - "physics.geo-ph"  # Geophysics (solid earth, mantle, tectonics)
+      - "astro-ph.EP"     # Earth and Planetary Astrophysics
+    days_back: 7
+    max_results: 500
   crossref:
     enabled: true
     mailto: "${CROSSREF_MAILTO}"
-    days_back: 2
+    days_back: 7
     max_results: 3000
   # EarthArXiv preprints (Earth sciences via OSF)
   eartharxiv:
     enabled: true  # Enable to get Earth science preprints
-    days_back: 7
-    max_results: 200
+    days_back: 14
+    max_results: 500
   # Abstract scraper (Camoufox + rule-based + LLM fallback)
   scraper:
     enabled: true
@@ -59,8 +57,8 @@ scoring:
     dynamic:         # Dynamic mode: percentile-based thresholds
       must_read_percentile: 95  # Top 5% as must_read
       consider_percentile: 70   # 70th-95th percentile as consider
-      min_must_read: 0.60       # Minimum score floor for must_read
-      min_consider: 0.40        # Minimum score floor for consider
+      min_must_read: 0.55       # Minimum score floor for must_read
+      min_consider: 0.35        # Minimum score floor for consider
 
   # User research interests for interest-based recommendations (optional)
   interests:
@@ -82,22 +80,76 @@ scoring:
     top_k_interest: 5  # Final interest-based papers count
     # Semantic similarity filter (interest description vs candidate title/abstract)
     semantic_filter_enabled: true
-    semantic_filter_min_similarity: 0.28
-    semantic_filter_max_candidates: 800
+    semantic_filter_min_similarity: 0.22
+    semantic_filter_max_candidates: 1000
     # Static include keywords: keep only candidates that match at least one keyword
     include_keywords:
+      # Core disciplines
       - "geochemistry"
       - "petrology"
       - "geology"
       - "volcanology"
       - "mineralogy"
+      - "geophysics"
+      - "tectonics"
+      - "geochronology"
+      - "geodesy"
+      # Mantle & magma processes
       - "mantle"
       - "subduction"
       - "arc magma"
-      - "isotope"
+      - "magma"
+      - "volcanic"
+      - "volcanism"
+      - "magmatic"
+      - "melt inclusion"
+      - "mid-ocean ridge"
+      - "hotspot"
+      - "lithosphere"
+      - "asthenosphere"
+      # Minerals & rocks
+      - "basalt"
+      - "granite"
+      - "peridotite"
+      - "olivine"
+      - "pyroxene"
+      - "garnet"
+      - "zircon"
+      - "feldspar"
+      - "amphibole"
+      - "serpentinite"
+      # Chalcophile & ore elements
+      - "chalcophile"
       - "sulfide"
       - "ore deposit"
       - "ore-forming"
+      - "porphyry"
+      - "copper"
+      - "gold"
+      - "silver"
+      - "mineralization"
+      - "hydrothermal"
+      # Isotopes & geochemical tracers
+      - "isotope"
+      - "isotopic"
+      - "trace element"
+      - "rare earth"
+      - "platinum group"
+      # Volatiles & fluids
+      - "volatile"
+      - "sulfur"
+      - "halogen"
+      - "degassing"
+      - "fluid inclusion"
+      # Earth structure & processes
+      - "oceanic crust"
+      - "continental crust"
+      - "plate tectonic"
+      - "metamorphism"
+      - "metamorphic"
+      - "sediment"
+      - "seismic"
+      - "earthquake"
     # Require at least N keyword matches in title/abstract to keep
     include_min_matches: 1
     # Match fields: ["title"], ["abstract"], or ["title", "abstract"]
@@ -152,7 +204,6 @@ scoring:
       - "laser"
       - "plasmon"
       - "phosphorescence"
-      - "luminescence"
       - "LED"
       - "light-emitting"
       
@@ -216,7 +267,6 @@ scoring:
       - "MOF"
       - "sorbent"
       - "adsorbent"
-      - "adsorption"
       - "drinking water treatment"
       - "air pollution"
       
@@ -243,7 +293,7 @@ scoring:
     # Similarity gate: filter out candidates with low relevance to your library
     # This is the key setting to filter Nature/Science papers not related to geoscience
     similarity_gate_enabled: true
-    min_similarity: 0.30  # Minimum similarity threshold (0.0-1.0, higher = stricter)
+    min_similarity: 0.20  # Minimum similarity threshold (0.0-1.0, higher = stricter)
 
   # Rerank settings (only used when interests.enabled=true)
   # Provider MUST match embedding.provider when interests are enabled
@@ -351,6 +401,6 @@ profile:
 # Watch pipeline configuration
 watch:
   recent_days: 7          # Filter papers older than N days
-  max_preprint_ratio: 0.9 # Max preprint ratio in results
-  top_k: 20               # Default recommendation count
+  max_preprint_ratio: 0.7 # Max preprint ratio in results (lowered to balance sources)
+  top_k: 30               # Default recommendation count
   require_abstract: true  # Filter out papers without abstracts

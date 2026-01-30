@@ -81,6 +81,7 @@ class WatchStats:
     candidates_after_abstract_filter: int = 0
     candidates_after_semantic_filter: int = 0
     candidates_after_llm_filter: int = 0
+    candidates_after_ranking: int = 0  # After similarity gate in ProfileRanker
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
     summaries_generated: int = 0
@@ -403,6 +404,7 @@ class WatchPipeline:
             ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
             ranked = ranker.rank(candidates)
             result.computed_thresholds = ranker.computed_thresholds
+            result.stats.candidates_after_ranking = len(ranked)
             rank_elapsed = time.time() - rank_start
             progress("rank", f"Scored {len(ranked)} candidates ({rank_elapsed:.1f}s)")
 
@@ -430,9 +432,25 @@ class WatchPipeline:
             if self.settings.llm.domain_classification.enabled and self.settings.llm.enabled:
                 self._classify_domains(result, progress)
 
-            # Report total elapsed time
+            # Report total elapsed time and pipeline funnel
             total_elapsed = time.time() - pipeline_start
             progress("done", f"Pipeline complete: {len(result.ranked_works)} recommendations in {total_elapsed:.1f}s")
+
+            # Log pipeline funnel summary for diagnosis
+            s = result.stats
+            funnel_lines = [
+                f"  Fetched:          {s.candidates_fetched}",
+                f"  After dedupe:     {s.candidates_after_dedupe}",
+                f"  After include kw: {s.candidates_after_include_filter}",
+                f"  After exclude kw: {s.candidates_after_keyword_filter}",
+                f"  After abstract:   {s.candidates_after_abstract_filter}",
+                f"  After semantic:   {s.candidates_after_semantic_filter}",
+                f"  After LLM:        {s.candidates_after_llm_filter}",
+                f"  After ranking:    {s.candidates_after_ranking}",
+                f"  After recency:    {s.candidates_after_recent_filter}",
+                f"  Final output:     {len(result.ranked_works)}",
+            ]
+            progress("stats", "Pipeline funnel:\n" + "\n".join(funnel_lines))
 
             return result
 
