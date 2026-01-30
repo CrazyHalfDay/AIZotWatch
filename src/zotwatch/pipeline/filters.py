@@ -212,22 +212,16 @@ def include_by_keywords(
             parts.append(candidate.abstract or "")
         return " ".join(parts)
 
-    if len(include_keywords) <= 10:
-        include_lower = frozenset(kw.lower() for kw in include_keywords)
-        filtered = []
-        for c in candidates:
-            text = build_text(c).lower()
-            matches = sum(1 for kw in include_lower if kw in text)
-            if matches >= min_matches:
-                filtered.append(c)
-    else:
-        pattern = _compile_keyword_pattern(keywords_tuple)
-        filtered = []
-        for c in candidates:
-            text = build_text(c)
-            matches = len(pattern.findall(text))
-            if matches >= min_matches:
-                filtered.append(c)
+    # Always use substring matching for include keywords to maximize recall.
+    # Word boundary regex would miss plural/derived forms (e.g., "isotope"
+    # wouldn't match "isotopes", "basalt" wouldn't match "basaltic").
+    include_lower = [kw.lower() for kw in include_keywords]
+    filtered = []
+    for c in candidates:
+        text = build_text(c).lower()
+        matches = sum(1 for kw in include_lower if kw in text)
+        if matches >= min_matches:
+            filtered.append(c)
 
     removed = len(candidates) - len(filtered)
     if removed > 0:
