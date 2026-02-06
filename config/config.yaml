@@ -48,6 +48,10 @@ sources:
         id: "0000-0002-3584-1673"   # ORCID
       - name: "JB Walters"
         id: "0000-0002-1275-8826"   # ORCID
+      - name: "刘勇胜"
+        id: "0000-0002-9340-9205"   # ORCID
+      - name: "李继磊"
+        id: "0000-0002-5847-4642"   # ORCID
 scoring:
   # Threshold configuration: controls how papers are labeled (must_read/consider/ignore)
   thresholds:
