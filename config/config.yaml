@@ -52,6 +52,10 @@ sources:
         id: "0000-0002-9340-9205"   # ORCID
       - name: "李继磊"
         id: "0000-0002-5847-4642"   # ORCID
+      - name: "Esther M. Schwarzenbach"
+        id: "0000-0002-4549-4660"   # ORCID
+      - name: "Jay J. Ague"
+        id: "0000-0001-8408-0279"   # ORCID
 scoring:
   # Threshold configuration: controls how papers are labeled (must_read/consider/ignore)
   thresholds:
