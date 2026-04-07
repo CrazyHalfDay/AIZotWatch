@@ -126,8 +126,17 @@ class PaperSummarizer:
         signature = self._summary_cache_signature()
         self.storage.ensure_summary_cache_signature(signature)
 
-    def _parse_bullets(self, content: str) -> BulletSummary:
+    def _parse_bullets(self, content: str | None) -> BulletSummary:
         """Parse bullet summary from LLM response."""
+        if content is None:
+            logger.warning("LLM returned None content for bullet summary")
+            return BulletSummary(
+                research_question="Unable to extract research question",
+                methodology="Unable to extract methodology",
+                key_findings="Unable to extract findings",
+                innovation="Unable to extract innovation",
+                relevance_note=None,
+            )
         try:
             # Try to extract JSON from response
             content = content.strip()
@@ -150,8 +159,18 @@ class PaperSummarizer:
                 relevance_note=content[:200] if content else None,
             )
 
-    def _parse_detailed(self, content: str) -> DetailedAnalysis:
+    def _parse_detailed(self, content: str | None) -> DetailedAnalysis:
         """Parse detailed analysis from LLM response."""
+        if content is None:
+            logger.warning("LLM returned None content for detailed analysis")
+            return DetailedAnalysis(
+                background="Unable to extract background",
+                methodology_details="Unable to extract methodology details",
+                results="Unable to extract results",
+                limitations="Unable to extract limitations",
+                future_directions=None,
+                relevance_to_interests="Unable to determine relevance",
+            )
         try:
             content = content.strip()
             if content.startswith("```"):

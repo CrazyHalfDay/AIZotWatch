@@ -118,8 +118,11 @@ class TitleTranslator:
             logger.warning("Translation batch failed: %s", e)
             return {}
 
-    def _parse_response(self, content: str) -> dict[str, str]:
+    def _parse_response(self, content: str | None) -> dict[str, str]:
         """Parse LLM response to extract translations."""
+        if content is None:
+            logger.warning("LLM returned None content for translation")
+            return {}
         try:
             content = content.strip()
             # Remove markdown code blocks if present

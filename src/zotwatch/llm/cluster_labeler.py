@@ -45,6 +45,8 @@ class ClusterLabeler:
 
         try:
             response = self.llm.complete(prompt, model=self.model, max_tokens=100)
+            if response.content is None:
+                raise ValueError("LLM returned None content")
             label = response.content.strip()
             # Remove quotes if present
             label = label.strip("\"'")
@@ -92,7 +94,7 @@ class ClusterLabeler:
             logger.warning("Batch labeling failed, falling back to individual calls: %s", e)
             return [self.label_cluster(c) for c in clusters]
 
-    def _parse_batch_response(self, content: str, expected_count: int) -> list[str]:
+    def _parse_batch_response(self, content: str | None, expected_count: int) -> list[str]:
         """Parse batch labeling LLM response.
 
         Args:
@@ -102,6 +104,9 @@ class ClusterLabeler:
         Returns:
             List of labels.
         """
+        if content is None:
+            logger.warning("LLM returned None content for batch labels")
+            return [f"Cluster {i + 1}" for i in range(expected_count)]
         content = content.strip()
 
         # Remove markdown code blocks if present

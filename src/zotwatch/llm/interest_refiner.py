@@ -44,8 +44,15 @@ class InterestRefiner:
 
         return result
 
-    def _parse_response(self, content: str) -> RefinedInterests:
+    def _parse_response(self, content: str | None) -> RefinedInterests:
         """Parse LLM JSON response into RefinedInterests."""
+        if content is None:
+            logger.warning("LLM returned None content for interest refinement")
+            return RefinedInterests(
+                refined_query="",
+                include_keywords=[],
+                exclude_keywords=[],
+            )
         try:
             # Try to extract JSON from response
             content = content.strip()

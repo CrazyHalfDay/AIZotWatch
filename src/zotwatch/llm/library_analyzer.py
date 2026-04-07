@@ -221,8 +221,10 @@ class LibraryAnalyzer:
                 recommendations="分析生成失败，请重试。",
             )
 
-    def _clean_json_response(self, content: str) -> str:
+    def _clean_json_response(self, content: str | None) -> str:
         """Clean JSON response by removing markdown formatting."""
+        if content is None:
+            return "{}"
         content = content.strip()
         if content.startswith("```"):
             # Remove markdown code block

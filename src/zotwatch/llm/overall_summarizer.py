@@ -92,13 +92,24 @@ class OverallSummarizer:
 
     def _parse_response(
         self,
-        content: str,
+        content: str | None,
         section_type: str,
         paper_count: int,
         model_used: str,
         tokens_used: int,
     ) -> OverallSummary:
         """Parse LLM response into OverallSummary with topics."""
+        if content is None:
+            logger.warning("LLM returned None content for overall summary")
+            return OverallSummary(
+                section_type=section_type,
+                overview=f"本期共推荐 {paper_count} 篇论文。",
+                topics=[],
+                paper_count=paper_count,
+                generated_at=utc_now(),
+                model_used=model_used,
+                tokens_used=tokens_used,
+            )
         try:
             content = content.strip()
             if content.startswith("```"):

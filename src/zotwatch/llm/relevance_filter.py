@@ -107,7 +107,10 @@ class PaperRelevanceFilter:
             lines.append(f"- {c.identifier}\n  Title: {c.title}\n  Abstract: {abstract}")
         return "\n".join(lines)
 
-    def _parse_response(self, content: str) -> RelevanceFilterResult | None:
+    def _parse_response(self, content: str | None) -> RelevanceFilterResult | None:
+        if content is None:
+            logger.warning("LLM returned None content for relevance filter")
+            return None
         try:
             text = content.strip()
             if text.startswith("```"):

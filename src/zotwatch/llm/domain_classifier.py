@@ -246,7 +246,7 @@ class PaperDomainClassifier:
 
         return "其他"
 
-    def _clean_json_response(self, content: str) -> str:
+    def _clean_json_response(self, content: str | None) -> str:
         """Clean JSON response by removing markdown formatting.
 
         Args:
@@ -255,6 +255,8 @@ class PaperDomainClassifier:
         Returns:
             Cleaned JSON string.
         """
+        if content is None:
+            return "{}"
         content = content.strip()
         if content.startswith("```"):
             parts = content.split("```")

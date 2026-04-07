@@ -163,6 +163,10 @@ class LLMAbstractExtractor:
                 temperature=self.temperature,
             )
 
+            if response.content is None:
+                logger.debug("LLM extraction returned None")
+                return None
+
             result = response.content.strip()
 
             # Check for NOT_FOUND response
