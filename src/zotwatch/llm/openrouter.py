@@ -86,7 +86,22 @@ class OpenRouterClient(BaseHTTPLLMClient):
 
     def _extract_response(self, data: dict, model: str) -> LLMResponse:
         """Extract LLMResponse from OpenRouter API response."""
-        content = data["choices"][0]["message"]["content"]
+        choices = data.get("choices", [])
+        if not choices:
+            logger.warning("OpenRouter returned empty choices, data: %s", data)
+            return LLMResponse(content=None, model=model, tokens_used=0)
+
+        message = choices[0].get("message", {})
+        content = message.get("content")
+
+        if content is None:
+            finish_reason = choices[0].get("finish_reason", "unknown")
+            logger.warning(
+                "OpenRouter returned None content (finish_reason: %s, model: %s)",
+                finish_reason,
+                model,
+            )
+
         tokens_used = data.get("usage", {}).get("total_tokens", 0)
 
         return LLMResponse(
