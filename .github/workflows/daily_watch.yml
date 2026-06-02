@@ -45,9 +45,13 @@ jobs:
       - name: Ensure directories
         run: mkdir -p data reports
 
-      # Cache ZotWatch data (profile, embeddings, metadata)
-      - name: Cache ZotWatch data
-        uses: actions/cache@v4
+      # Restore ZotWatch data (profile, embeddings, metadata).
+      # restore-keys always recovers the most recent cache so the profile is
+      # reused incrementally instead of being rebuilt from scratch each run.
+      # The matching "Save ZotWatch data" step persists the updated artifacts.
+      - name: Restore ZotWatch data
+        id: zotwatch-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             data/profile.sqlite
@@ -55,7 +59,7 @@ jobs:
             data/embeddings.sqlite
             data/metadata.sqlite
             data/archive.sqlite
-          key: zotwatch-${{ hashFiles('config/config.yaml') }}-${{ github.run_number }}
+          key: zotwatch-${{ hashFiles('config/config.yaml') }}-${{ github.run_id }}
           restore-keys: |
             zotwatch-${{ hashFiles('config/config.yaml') }}-
             zotwatch-
@@ -83,6 +87,22 @@ jobs:
 
       - name: Generate Archive Page
         run: uv run zotwatch archive --days 90
+
+      # Persist the incrementally-updated profile/embeddings for the next run.
+      # Uses a unique per-run key so the cache is always written (a fixed key
+      # would be skipped on hit, dropping incremental updates). Guarded by
+      # success() so a crashed run never caches half-written artifacts.
+      - name: Save ZotWatch data
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/profile.sqlite
+            data/faiss.index
+            data/embeddings.sqlite
+            data/metadata.sqlite
+            data/archive.sqlite
+          key: zotwatch-${{ hashFiles('config/config.yaml') }}-${{ github.run_id }}
 
       # Deploy to external public repository
       - name: Prepare Pages

@@ -279,7 +279,8 @@ Optional:
 
 - Preprint ratio is configurable via `watch.max_preprint_ratio` (default: 0.9)
 - Recent paper filter is configurable via `watch.recent_days` (default: 7 days)
-- GitHub Actions caches profile artifacts monthly to avoid full rebuilds
+- The profile is rebuilt incrementally, not daily: `watch` only re-embeds new/changed Zotero items (via `embeddings.sqlite`) and skips the FAISS rebuild entirely when the library is unchanged (`ProfileBuilder._can_skip_rebuild`). A full rebuild happens only when artifacts are missing or the embedding provider/model changes.
+- GitHub Actions persists profile artifacts across runs via `actions/cache` (restore/save split with a per-run key + `restore-keys` fallback), so the daily run reuses the cached profile. The daily cron also keeps the cache warm (GitHub evicts caches unused for 7 days); after a long gap the next run does one full rebuild.
 - AI summaries require LLM API key (`MOONSHOT_API_KEY`, `OPENROUTER_API_KEY`, or `DEEPSEEK_API_KEY`) and `llm.enabled: true` in config
 - Embedding and rerank providers must use the same provider when interests.enabled=true (both Voyage or both DashScope)
 - When writing code, please use English for all comments
