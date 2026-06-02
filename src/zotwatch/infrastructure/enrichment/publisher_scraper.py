@@ -236,7 +236,7 @@ class AbstractScraper:
                 except Exception as e:
                     item = futures[future]
                     doi = item.get("doi", "unknown")
-                    logger.warning("Failed to fetch %s: %s", doi, e)
+                    logger.warning("Failed to fetch %s: %s", doi, repr(e))
                     if on_result:
                         on_result(doi, None)
 

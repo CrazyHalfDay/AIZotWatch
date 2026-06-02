@@ -450,7 +450,7 @@ class StealthBrowser:
                     "Fetch attempt %d/%d failed: %s",
                     attempt + 1,
                     max_retries,
-                    e,
+                    repr(e),
                 )
                 if attempt < max_retries - 1:
                     await asyncio.sleep(3)
@@ -497,7 +497,7 @@ class StealthBrowser:
         try:
             return cls._run_async(cls._fetch_page_async(browser, context, url, timeout, max_retries))
         except Exception as e:
-            logger.warning("Failed to fetch %s: %s", url, e)
+            logger.warning("Failed to fetch %s: %s", url, repr(e))
             return None, None
 
     @classmethod
