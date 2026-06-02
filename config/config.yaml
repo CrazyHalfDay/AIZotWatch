@@ -329,7 +329,7 @@ scoring:
   # embedding + optional LLM fallback) instead of the personal similarity
   # filter, and appear in their own "顶刊地学速览" section.
   flagship:
-    enabled: false
+    enabled: true
     issns:                       # Nature, Science, NC, SA, PNAS, Nature sub-journals, Comm Earth & Env ...
       - "0028-0836"              # Nature
       - "1476-4687"              # Nature (online)
@@ -346,8 +346,8 @@ scoring:
     # Field anchors for the geoscience gate (English, matched against abstracts)
     positive_anchor: "Solid Earth geoscience: igneous, metamorphic and sedimentary petrology, geochemistry and isotope geochemistry, mineralogy, tectonics and structural geology, geochronology, ore deposits and economic geology, volcanology, the deep Earth, stratigraphy, and paleontology / paleobiology."
     negative_anchor: "Atmospheric science, meteorology, climate dynamics, air quality, weather and atmospheric circulation."
-    min_score: 0.35              # positive-anchor cosine >= this -> accept
-    gray_low: 0.28               # < this -> reject; in between -> gray zone
+    min_score: 0.30              # positive-anchor cosine >= this -> accept
+    gray_low: 0.22               # < this -> reject; in between -> gray zone
     llm_fallback: true           # judge gray-zone articles with the LLM
     llm_boundary: "Solid-earth geoscience or paleontology (petrology, geochemistry, mineralogy, tectonics, geochronology, ore deposits, stratigraphy, paleontology). EXCLUDE pure atmospheric science, meteorology and climate dynamics."
     llm_batch_size: 20
