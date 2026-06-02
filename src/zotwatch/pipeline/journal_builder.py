@@ -62,8 +62,11 @@ def _title_match(query: str, candidate: str) -> bool:
     c = _normalize_title(candidate)
     if not q or not c:
         return False
-    if q == c or q.issubset(c) or c.issubset(q):
+    if q == c:
         return True
+    # Token Jaccard handles minor wording/punctuation differences. Bare subset
+    # matching is intentionally avoided: a one-word query like "Science" must
+    # not match any longer title that merely contains that word.
     overlap = len(q & c) / len(q | c)
     return overlap >= _TITLE_MATCH_THRESHOLD
 
@@ -85,7 +88,10 @@ class CrossrefJournalVerifier:
         Returns:
             Tuple of (issns, official_title) if found, else None.
         """
-        params: dict[str, str | int] = {"query": title, "rows": 5}
+        # Strip punctuation from the query: characters like "&" otherwise make
+        # Crossref's search return nothing (e.g. "... Earth & Environment").
+        query = re.sub(r"[^\w\s]", " ", title).strip() or title
+        params: dict[str, str | int] = {"query": query, "rows": 20}
         if self.mailto:
             params["mailto"] = self.mailto
 
@@ -97,13 +103,21 @@ class CrossrefJournalVerifier:
             return None
 
         items = resp.json().get("message", {}).get("items", [])
+        target = _normalize_title(title)
+        loose: tuple[list[str], str] | None = None
         for item in items:
             cr_title = item.get("title") or ""
-            if _title_match(title, cr_title):
-                issns = [s.strip() for s in (item.get("ISSN") or []) if s and s.strip()]
-                if issns:
-                    return issns, cr_title
-        return None
+            issns = [s.strip() for s in (item.get("ISSN") or []) if s and s.strip()]
+            if not issns:
+                continue
+            # Prefer an exact normalized-title match: recovers flagship journals
+            # (e.g. "Nature") that rank below generic look-alikes, and avoids
+            # loose subset matches grabbing the wrong journal.
+            if _normalize_title(cr_title) == target:
+                return issns, cr_title
+            if loose is None and _title_match(title, cr_title):
+                loose = (issns, cr_title)
+        return loose
 
 
 class JournalWhitelistBuilder:
