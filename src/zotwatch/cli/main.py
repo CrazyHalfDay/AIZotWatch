@@ -448,7 +448,7 @@ def journals(
     generated = recommender.generate(
         venues,
         research_focus=research_focus,
-        max_tokens=max(settings.llm.max_tokens, 4096),
+        max_tokens=max(settings.llm.max_tokens, 8192),
     )
     click.echo(f"LLM proposed {len(generated)} journals")
     if not generated:
