@@ -229,12 +229,51 @@ class ScoringConfig(BaseModel):
                 )
             return self
 
+    class FlagshipConfig(BaseModel):
+        """Flagship-journal geoscience track.
+
+        Articles from a curated set of flagship/general journals (by ISSN) are
+        passed through a field-level geoscience gate instead of the personal
+        similarity filter, and surfaced in their own section. Lets high-value
+        venues push all on-topic articles regardless of library similarity.
+        """
+
+        enabled: bool = False
+        # Flagship journal ISSNs (matched against candidate.extra["issns"]).
+        issns: list[str] = Field(default_factory=list)
+        # Positive anchor describing the target field (solid earth + paleontology).
+        positive_anchor: str = (
+            "Solid Earth geoscience: igneous, metamorphic and sedimentary petrology, "
+            "geochemistry and isotope geochemistry, mineralogy, tectonics and structural "
+            "geology, geochronology, ore deposits and economic geology, volcanology, the "
+            "deep Earth, stratigraphy, and paleontology / paleobiology."
+        )
+        # Negative anchor; if set, articles closer to it than to the positive
+        # anchor are rejected (filters out atmospheric science).
+        negative_anchor: str = (
+            "Atmospheric science, meteorology, climate dynamics, air quality, "
+            "weather and atmospheric circulation."
+        )
+        # Bands on positive-anchor cosine similarity.
+        min_score: float = 0.35  # >= accept
+        gray_low: float = 0.28  # < reject; [gray_low, min_score) is the gray zone
+        # LLM judgement for the gray zone.
+        llm_fallback: bool = True
+        llm_boundary: str = (
+            "Solid-earth geoscience or paleontology (petrology, geochemistry, mineralogy, "
+            "tectonics, geochronology, ore deposits, stratigraphy, paleontology). "
+            "EXCLUDE pure atmospheric science, meteorology and climate dynamics."
+        )
+        llm_batch_size: int = 20
+        max_results: int = 30
+
     thresholds: Thresholds = Field(default_factory=Thresholds)
     interests: InterestsConfig = Field(default_factory=InterestsConfig)
     rerank: RerankConfig = Field(default_factory=RerankConfig)
     fusion: FusionScoringConfig = Field(default_factory=FusionScoringConfig)
     journal: JournalScoringConfig = Field(default_factory=JournalScoringConfig)
     final_weights: FinalWeightsConfig = Field(default_factory=FinalWeightsConfig)
+    flagship: FlagshipConfig = Field(default_factory=FlagshipConfig)
 
 
 # Embedding Configuration

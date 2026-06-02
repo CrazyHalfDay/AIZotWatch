@@ -324,6 +324,35 @@ scoring:
     similarity_weight: 0.8      # Weight for embedding similarity
     impact_factor_weight: 0.2   # Weight for journal impact factor
 
+  # Flagship-journal geoscience track
+  # Articles from these journals pass a field-level geoscience gate (anchor
+  # embedding + optional LLM fallback) instead of the personal similarity
+  # filter, and appear in their own "顶刊地学速览" section.
+  flagship:
+    enabled: false
+    issns:                       # Nature, Science, NC, SA, PNAS, Nature sub-journals, Comm Earth & Env ...
+      - "0028-0836"              # Nature
+      - "1476-4687"              # Nature (online)
+      - "0036-8075"              # Science
+      - "1095-9203"              # Science (online)
+      - "2041-1723"              # Nature Communications
+      - "2375-2548"              # Science Advances
+      - "2662-4435"              # Communications Earth & Environment
+      - "1091-6490"              # PNAS
+      - "0027-8424"              # PNAS (print)
+      - "1752-0894"              # Nature Geoscience
+      - "1752-0908"              # Nature Geoscience (online)
+      - "2662-138X"              # Nature Reviews Earth & Environment
+    # Field anchors for the geoscience gate (English, matched against abstracts)
+    positive_anchor: "Solid Earth geoscience: igneous, metamorphic and sedimentary petrology, geochemistry and isotope geochemistry, mineralogy, tectonics and structural geology, geochronology, ore deposits and economic geology, volcanology, the deep Earth, stratigraphy, and paleontology / paleobiology."
+    negative_anchor: "Atmospheric science, meteorology, climate dynamics, air quality, weather and atmospheric circulation."
+    min_score: 0.35              # positive-anchor cosine >= this -> accept
+    gray_low: 0.28               # < this -> reject; in between -> gray zone
+    llm_fallback: true           # judge gray-zone articles with the LLM
+    llm_boundary: "Solid-earth geoscience or paleontology (petrology, geochemistry, mineralogy, tectonics, geochronology, ore deposits, stratigraphy, paleontology). EXCLUDE pure atmospheric science, meteorology and climate dynamics."
+    llm_batch_size: 20
+    max_results: 30
+
 # Embedding configuration (provider MUST match rerank.provider when interests are enabled)
 embedding:
   provider: "dashscope"  # Options: "voyage" or "dashscope"

@@ -5,6 +5,7 @@ from .dedupe import DedupeEngine
 from .enrich import AbstractEnricher, EnrichmentStats, enrich_candidates
 from .fetch import fetch_candidates
 from .filters import filter_recent, filter_without_abstract, limit_preprints
+from .flagship_filter import GeoscienceGate
 from .ingest import ingest_zotero
 from .interest_ranker import InterestRanker
 from .journal_builder import (
@@ -44,6 +45,7 @@ __all__ = [
     "filter_recent",
     "limit_preprints",
     "filter_without_abstract",
+    "GeoscienceGate",
     # Watch pipeline
     "WatchPipeline",
     "WatchConfig",

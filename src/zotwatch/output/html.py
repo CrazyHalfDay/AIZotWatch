@@ -139,6 +139,7 @@ def render_html(
     timezone_name: str = "UTC",
     interest_works: list[InterestWork] | None = None,
     followed_works: list[RankedWork] | None = None,
+    flagship_works: list[RankedWork] | None = None,
     overall_summaries: dict[str, OverallSummary] | None = None,
     researcher_profile: ResearcherProfile | None = None,
 ) -> Path:
@@ -196,6 +197,7 @@ def render_html(
         timezone_name=timezone_name,
         interest_works=interest_works or [],
         followed_works=followed_works or [],
+        flagship_works=flagship_works or [],
         overall_summaries=overall_summaries or {},
         researcher_profile=researcher_profile,
         profile_generated_at=profile_generated_at,

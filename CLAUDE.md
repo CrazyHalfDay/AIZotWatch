@@ -134,6 +134,22 @@ Controls the watch command behavior:
 - `top_k`: Default number of recommendations (default: 20)
 - `require_abstract`: Filter out candidates without abstracts (default: true)
 
+#### Flagship Geoscience Track (`scoring.flagship`)
+
+Articles from a curated set of flagship/general journals (`issns`) are pulled
+out of the personal pipeline right after dedupe and gated on **field relevance**
+instead of library similarity, then surfaced in their own "顶刊地学速览" section
+(RSS + HTML + archive, label `flagship`). Lets high-value venues push all
+on-topic geoscience articles regardless of how similar they are to the library.
+
+The gate (`pipeline/flagship_filter.py::GeoscienceGate`) embeds each article and
+compares it to a `positive_anchor` (solid earth + paleontology) and a
+`negative_anchor` (atmospheric science): articles closer to the negative anchor
+are dropped; positive-anchor cosine `>= min_score` is accepted, `< gray_low` is
+rejected, and the gray zone in between is judged by the LLM (`llm_fallback`,
+reusing `PaperRelevanceFilter` with `llm_boundary`). Disabled by default; set
+`scoring.flagship.enabled: true` to activate.
+
 ### Switching Embedding Providers
 
 ZotWatch supports two embedding providers:

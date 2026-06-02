@@ -41,6 +41,8 @@ from zotwatch.llm.factory import create_llm_client
 from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
+from zotwatch.pipeline.flagship_filter import GeoscienceGate
+from zotwatch.pipeline.journal_scorer import JournalScorer
 from zotwatch.pipeline.filters import (
     exclude_by_keywords,
     filter_by_interest_similarity,
@@ -95,6 +97,7 @@ class WatchResult:
     ranked_works: list[RankedWork] = field(default_factory=list)
     interest_works: list[InterestWork] = field(default_factory=list)
     followed_works: list[RankedWork] = field(default_factory=list)
+    flagship_works: list[RankedWork] = field(default_factory=list)
     researcher_profile: ResearcherProfile | None = None
     overall_summaries: dict[str, OverallSummary] = field(default_factory=dict)
     stats: WatchStats = field(default_factory=WatchStats)
@@ -310,6 +313,14 @@ class WatchPipeline:
             result.stats.candidates_after_dedupe = len(candidates)
             progress("dedupe", f"Removed {before_dedupe - len(candidates)} duplicates ({len(candidates)} remaining)")
 
+            # 6.1 Flagship geoscience track: pull flagship-journal articles out of
+            # the personal pipeline and gate them on field relevance instead.
+            flagship_cfg = self.settings.scoring.flagship
+            if flagship_cfg.enabled and flagship_cfg.issns:
+                result.flagship_works, candidates = self._select_flagship(
+                    candidates, embedding_cache, progress
+                )
+
             # 6.5 Exclude by keywords (if configured)
             interests_config = self.settings.scoring.interests
             if interests_config.include_keywords:
@@ -421,7 +432,11 @@ class WatchPipeline:
             progress("rank", f"Final: {len(ranked)} recommendations")
 
             # 12. Generate AI summaries (optional)
-            if self.config.generate_summaries and self.settings.llm.enabled and ranked:
+            if (
+                self.config.generate_summaries
+                and self.settings.llm.enabled
+                and (ranked or result.followed_works or result.flagship_works)
+            ):
                 self._generate_summaries(result, storage, progress)
 
             # 13. Translate titles (optional)
@@ -712,6 +727,17 @@ class WatchPipeline:
                 if work.identifier in followed_map:
                     work.summary = followed_map[work.identifier]
 
+        # Summarize flagship geoscience works
+        if result.flagship_works:
+            progress("summary", f"Generating summaries for {len(result.flagship_works)} flagship articles...")
+            flagship_result = summarizer.summarize_batch(result.flagship_works, max_workers=max_workers)
+            result.stats.summaries_generated += flagship_result.success_count
+
+            flagship_map = {s.paper_id: s for s in flagship_result.summaries}
+            for work in result.flagship_works:
+                if work.identifier in flagship_map:
+                    work.summary = flagship_map[work.identifier]
+
         # Generate overall summaries
         progress("summary", "Generating overall summaries...")
         overall_summarizer = OverallSummarizer(llm_client, model=self.settings.llm.model)
@@ -740,7 +766,12 @@ class WatchPipeline:
         if not llm_client:
             return
 
-        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
+        all_works = (
+            result.ranked_works
+            + (result.interest_works or [])
+            + (result.followed_works or [])
+            + (result.flagship_works or [])
+        )
         if not all_works:
             return
 
@@ -761,6 +792,10 @@ class WatchPipeline:
             if work.identifier in translations:
                 work.translated_title = translations[work.identifier]
 
+        for work in result.flagship_works or []:
+            if work.identifier in translations:
+                work.translated_title = translations[work.identifier]
+
         translate_elapsed = time.time() - translate_start
         progress("translate", f"Translated {len(translations)} titles ({translate_elapsed:.1f}s)")
 
@@ -774,7 +809,12 @@ class WatchPipeline:
         if not llm_client:
             return
 
-        all_works = result.ranked_works + (result.interest_works or []) + (result.followed_works or [])
+        all_works = (
+            result.ranked_works
+            + (result.interest_works or [])
+            + (result.followed_works or [])
+            + (result.flagship_works or [])
+        )
         if not all_works:
             return
 
@@ -806,8 +846,76 @@ class WatchPipeline:
             if work.identifier in classifications:
                 work.domain = classifications[work.identifier]
 
+        for work in result.flagship_works or []:
+            if work.identifier in classifications:
+                work.domain = classifications[work.identifier]
+
         classify_elapsed = time.time() - classify_start
         progress("classify", f"Classified {len(classifications)} papers ({classify_elapsed:.1f}s)")
+
+    def _select_flagship(
+        self,
+        candidates: list[CandidateWork],
+        embedding_cache: EmbeddingCache,
+        progress: Callable[[str, str], None],
+    ) -> tuple[list[RankedWork], list[CandidateWork]]:
+        """Split off flagship-journal articles and gate them on field relevance.
+
+        Returns (flagship_works, remaining_candidates). Flagship articles bypass
+        the personal similarity pipeline and are gated by the geoscience anchor.
+        """
+        cfg = self.settings.scoring.flagship
+        issns = {s.strip() for s in cfg.issns if s.strip()}
+
+        flagship_cands: list[CandidateWork] = []
+        flagship_ids: set[int] = set()
+        for candidate in candidates:
+            if issns & {i for i in (candidate.extra.get("issns") or []) if i}:
+                flagship_cands.append(candidate)
+                flagship_ids.add(id(candidate))
+        remaining = [c for c in candidates if id(c) not in flagship_ids]
+
+        # Field gate needs abstracts for the embedding similarity.
+        flagship_cands = [c for c in flagship_cands if c.abstract]
+        if not flagship_cands:
+            return [], remaining
+
+        progress("flagship", f"Gating {len(flagship_cands)} flagship-journal articles on geoscience relevance...")
+
+        vectorizer = CachingEmbeddingProvider(
+            provider=create_embedding_provider(self.settings.embedding),
+            cache=embedding_cache,
+            source_type="candidate",
+            ttl_days=self.settings.embedding.candidate_ttl_days,
+        )
+        llm = self._get_llm_client() if cfg.llm_fallback else None
+        gate = GeoscienceGate(cfg, vectorizer, llm=llm, model=self.settings.llm.model)
+        accepted = gate.select(flagship_cands)
+
+        # Keep only recent articles, newest first, capped by max_results.
+        accepted = filter_recent(
+            [self._to_flagship_work(c) for c in accepted], days=self.config.recent_days
+        )
+        accepted.sort(key=lambda w: (w.published is not None, w.published), reverse=True)
+        if cfg.max_results and len(accepted) > cfg.max_results:
+            accepted = accepted[: cfg.max_results]
+
+        progress("flagship", f"Flagship geoscience: {len(accepted)} articles")
+        return accepted, remaining
+
+    def _to_flagship_work(self, candidate: CandidateWork) -> RankedWork:
+        """Convert a flagship candidate into a RankedWork (no personal scoring)."""
+        scorer = JournalScorer(self.base_dir, self.settings.scoring.journal)
+        if_score, raw_if, is_cn = scorer.compute_score(candidate)
+        return RankedWork(
+            **candidate.model_dump(),
+            score=0.0,
+            similarity=0.0,
+            impact_factor_score=if_score,
+            impact_factor=raw_if,
+            is_chinese_core=is_cn,
+            label="flagship",
+        )
 
     def _fetch_followed_authors(
         self,

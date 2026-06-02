@@ -234,8 +234,9 @@ def watch(
     # Handle empty results
     has_ranked = bool(result.ranked_works)
     has_followed = bool(result.followed_works)
+    has_flagship = bool(result.flagship_works)
 
-    if not has_ranked and not has_followed:
+    if not has_ranked and not has_followed and not has_flagship:
         click.echo("No recommendations found")
         if rss:
             write_rss([], base_dir / "reports" / "feed.xml")
@@ -261,6 +262,12 @@ def watch(
             author = work.extra.get("followed_author", "")
             click.echo(f"  {idx:02d} | {author} | {work.title[:60]}...")
 
+    # Display flagship geoscience papers
+    if has_flagship:
+        click.echo(f"\nFlagship geoscience: {len(result.flagship_works)} articles")
+        for idx, work in enumerate(result.flagship_works[:5], start=1):
+            click.echo(f"  {idx:02d} | {work.venue or '?'} | {work.title[:60]}...")
+
     # Generate outputs
     _output_results(result, base_dir, settings, rss, report, push)
 
@@ -272,6 +279,9 @@ def watch(
         if result.followed_works:
             saved_followed = archive.save_batch(result.followed_works)
             click.echo(f"Saved {saved_followed} followed author works to archive")
+        if result.flagship_works:
+            saved_flagship = archive.save_batch(result.flagship_works)
+            click.echo(f"Saved {saved_flagship} flagship geoscience works to archive")
 
 
 def _output_results(
@@ -286,7 +296,7 @@ def _output_results(
     if rss:
         rss_path = base_dir / "reports" / "feed.xml"
         write_rss(
-            result.ranked_works,
+            result.flagship_works + result.ranked_works,
             rss_path,
             title=settings.output.rss.title,
             link=settings.output.rss.link,
@@ -305,6 +315,7 @@ def _output_results(
             timezone_name=settings.output.timezone,
             interest_works=result.interest_works if result.interest_works else None,
             followed_works=result.followed_works if result.followed_works else None,
+            flagship_works=result.flagship_works if result.flagship_works else None,
             overall_summaries=result.overall_summaries if result.overall_summaries else None,
             researcher_profile=result.researcher_profile,
         )
