@@ -1,0 +1,86 @@
+name: Refresh Journal Whitelist
+
+on:
+  schedule:
+    - cron: "0 1 1 * *"  # 01:00 UTC on the 1st of every month
+  workflow_dispatch:  # Supports manual trigger
+
+# Never run two refreshes at once; let an in-progress run finish.
+concurrency:
+  group: "refresh-journals"
+  cancel-in-progress: false
+
+jobs:
+  journals:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Needed to commit the regenerated whitelist back to main
+
+    env:
+      # ZotWatch Required
+      ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+      ZOTERO_USER_ID: ${{ secrets.ZOTERO_USER_ID }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Ensure directories
+        run: mkdir -p data
+
+      # Reuse the profile produced by the daily watch workflow so we don't
+      # rebuild embeddings just to read the library's venues.
+      - name: Restore ZotWatch data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/profile.sqlite
+            data/faiss.index
+            data/embeddings.sqlite
+            data/metadata.sqlite
+            data/archive.sqlite
+          key: zotwatch-${{ hashFiles('config/config.yaml') }}-${{ github.run_id }}
+          restore-keys: |
+            zotwatch-${{ hashFiles('config/config.yaml') }}-
+            zotwatch-
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Fall back to building the profile if the cache had no usable copy
+      # (e.g. first run before any daily watch has populated the cache).
+      - name: Ensure profile exists
+        run: |
+          if [ ! -s data/profile.sqlite ]; then
+            echo "No cached profile found; building from Zotero library..."
+            uv run zotwatch profile
+          else
+            echo "Using cached profile."
+          fi
+
+      - name: Generate journal whitelist
+        run: uv run zotwatch journals
+
+      - name: Commit updated whitelist
+        run: |
+          rm -f data/journal_whitelist.csv.bak
+          if git diff --quiet -- data/journal_whitelist.csv; then
+            echo "Whitelist unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/journal_whitelist.csv
+          git commit -m "chore(journals): refresh journal whitelist"
+          git push origin HEAD:${{ github.ref_name }}

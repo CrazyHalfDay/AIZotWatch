@@ -91,6 +91,8 @@ The `journals` command builds `data/journal_whitelist.csv` from the user's libra
 3. **Crossref verification** (`pipeline/journal_builder.py`): resolves authoritative ISSNs per title via the Crossref `/journals` endpoint; titles not found on Crossref are skipped so every row has a real ISSN. One row is written per ISSN to maximize candidate matching
 4. **Merge + backup**: by default merges with the existing whitelist (manual entries are preserved) and backs up the old file to `*.csv.bak`
 
+A scheduled workflow (`.github/workflows/refresh_journals.yml`) runs this monthly: it restores the cached profile, runs `zotwatch journals`, and commits the regenerated `data/journal_whitelist.csv` straight to the default branch (no PR). It can also be triggered manually via `workflow_dispatch`. Note: the auto-run rewrites the CSV without preserving hand-written comment lines (data rows are still merged/preserved).
+
 Note: Crossref does not provide impact factors, so IF values come from the LLM and may be approximate.
 
 ### Configuration Files (config/)
