@@ -525,41 +525,32 @@ def test_crossref() -> TestResult:
         return TestResult("Crossref", Status.FAILED, f"Connection error: {e}")
 
 
-def test_arxiv() -> TestResult:
-    """Test arXiv API connection."""
-    import feedparser
-
+def test_eartharxiv() -> TestResult:
+    """Test EarthArXiv OAI-PMH API connection."""
     try:
-        params = {
-            "search_query": "cat:cs.LG",
-            "max_results": 1,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-        }
+        params = {"verb": "Identify"}
 
         resp = requests.get(
-            "https://export.arxiv.org/api/query",
+            "https://eartharxiv.org/api/oai/",
             params=params,
             timeout=30,
         )
 
         if resp.status_code == 200:
-            feed = feedparser.parse(resp.text)
-            if feed.entries:
-                title = feed.entries[0].get("title", "")[:50]
-                return TestResult("arXiv", Status.SUCCESS, f"Connected (latest: {title}...)")
+            if "OAI-PMH" in resp.text:
+                return TestResult("EarthArXiv", Status.SUCCESS, "Connected (OAI-PMH reachable)")
             else:
-                return TestResult("arXiv", Status.SUCCESS, "Connected (no entries found)")
+                return TestResult("EarthArXiv", Status.SUCCESS, "Connected (unexpected response)")
         elif resp.status_code == 429:
             # Rate limited - this is not a configuration error
-            return TestResult("arXiv", Status.SUCCESS, "Connected (rate limited, but API is reachable)")
+            return TestResult("EarthArXiv", Status.SUCCESS, "Connected (rate limited, but API is reachable)")
         else:
-            return TestResult("arXiv", Status.FAILED, f"HTTP {resp.status_code}")
+            return TestResult("EarthArXiv", Status.FAILED, f"HTTP {resp.status_code}")
 
     except requests.exceptions.Timeout:
-        return TestResult("arXiv", Status.FAILED, "Connection timeout")
+        return TestResult("EarthArXiv", Status.FAILED, "Connection timeout")
     except requests.exceptions.RequestException as e:
-        return TestResult("arXiv", Status.FAILED, f"Connection error: {e}")
+        return TestResult("EarthArXiv", Status.FAILED, f"Connection error: {e}")
 
 
 def test_openrouter() -> TestResult:
@@ -753,8 +744,8 @@ def run_tests(settings: Settings | None) -> list[TestResult]:
     print(format_status(result.status, result.message))
 
     test_count += 1
-    print(f"  [{test_count}] arXiv           ", end="", flush=True)
-    result = test_arxiv()
+    print(f"  [{test_count}] EarthArXiv      ", end="", flush=True)
+    result = test_eartharxiv()
     results.append(result)
     print(format_status(result.status, result.message))
 
