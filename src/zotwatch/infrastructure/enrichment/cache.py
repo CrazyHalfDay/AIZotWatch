@@ -99,6 +99,37 @@ class MetadataCache(BaseSQLiteCache):
         # Return with original DOI case
         return {doi_map.get(row["doi"], row["doi"]): row["abstract"] for row in cur}
 
+    def get_failed_dois(self, dois: list[str]) -> set[str]:
+        """Return DOIs negative-cached as unresolved (abstract IS NULL, not expired).
+
+        These are DOIs that every enrichment source failed to resolve within the
+        negative-cache TTL, so they should be skipped until the entry expires.
+
+        Args:
+            dois: List of DOIs to check.
+
+        Returns:
+            Set of DOIs (original case) with a live negative-cache entry.
+        """
+        if not dois:
+            return set()
+
+        normalized = [d.lower() for d in dois]
+        doi_map = {d.lower(): d for d in dois}
+
+        conn = self._connect()
+        placeholders = ",".join("?" for _ in normalized)
+        cur = conn.execute(
+            f"""
+            SELECT doi FROM paper_metadata
+            WHERE doi IN ({placeholders})
+              AND abstract IS NULL
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
+            """,
+            normalized,
+        )
+        return {doi_map.get(row["doi"], row["doi"]) for row in cur}
+
     def put(
         self,
         doi: str,

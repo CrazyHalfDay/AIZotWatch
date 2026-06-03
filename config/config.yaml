@@ -36,6 +36,16 @@ sources:
     llm_max_tokens: 1024
     llm_temperature: 0.1
     use_llm_fallback: true
+  # API-based abstract fallback (Crossref + OpenAlex), tried BEFORE the scraper.
+  # Fast and free; OpenAlex covers many Elsevier papers the scraper cannot.
+  abstract_fallback:
+    enabled: true
+    use_crossref: true
+    use_openalex: true
+    mailto: "${CROSSREF_MAILTO}"
+    timeout: 15.0
+    max_workers: 8
+    negative_cache_ttl_days: 7  # Skip re-fetching unresolved DOIs for N days
   # Followed authors (OpenAlex API)
   # Fetches all papers by specified authors. First run = full pull, then daily incremental.
   # These papers skip scoring/ranking/TopK - only deduplication is applied.
