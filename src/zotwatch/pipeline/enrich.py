@@ -22,6 +22,7 @@ class EnrichmentStats:
     missing_abstracts: int
     skipped_no_doi: int
     cache_hits: int
+    api_fetched: int = 0  # Abstracts fetched via Crossref/OpenAlex APIs
     scraper_fetched: int = 0  # Abstracts fetched via scraper
     enriched: int = 0
     failed: int = 0
@@ -44,9 +45,12 @@ class EnrichmentStats:
 class AbstractEnricher:
     """Enriches candidates with missing abstracts from multiple sources.
 
-    Uses a two-tier strategy:
+    Uses an API-first, multi-tier strategy:
     1. Check local cache first (SQLite-backed)
-    2. Use abstract scraper (Camoufox + rules + LLM) for cache misses
+    2. API fallback (Crossref + OpenAlex) - fast and free
+    3. Browser scraper (Camoufox + rules + LLM) for whatever the APIs miss
+    4. Negative-cache DOIs no source could resolve, to skip re-fetching dead
+       links on subsequent runs
     """
 
     def __init__(
@@ -65,6 +69,7 @@ class AbstractEnricher:
             cache: Optional pre-configured cache (for testing).
         """
         self.config = settings.sources.scraper
+        self.fallback_config = settings.sources.abstract_fallback
         self.base_dir = Path(base_dir)
         self.llm = llm
 
@@ -89,8 +94,10 @@ class AbstractEnricher:
         Returns:
             Tuple of (enriched candidates, statistics).
         """
-        if not self.config.enabled:
-            logger.debug("Abstract scraper enrichment is disabled")
+        scraper_enabled = self.config.enabled
+        api_enabled = self.fallback_config.enabled
+        if not scraper_enabled and not api_enabled:
+            logger.debug("Abstract enrichment is disabled (scraper + API fallback off)")
             with_abstract = sum(1 for c in candidates if c.abstract)
             return candidates, EnrichmentStats(
                 total_candidates=len(candidates),
@@ -135,23 +142,40 @@ class AbstractEnricher:
                 failed=0,
             )
 
-        # Step 1: Check cache
+        # Step 1: Check cache (positive hits only)
         dois_to_check = [c.doi for c in needs_enrichment]
         cached_abstracts = self.cache.get_batch(dois_to_check)
         cache_hits = len(cached_abstracts)
 
         logger.debug("Cache hits: %d/%d", cache_hits, len(dois_to_check))
 
-        # Step 2: Scraper for cache misses
+        # Skip DOIs that are negative-cached (every source failed within TTL)
         uncached_dois = [doi for doi in dois_to_check if doi not in cached_abstracts]
-        scraper_abstracts: dict[str, str] = {}
+        failed_cached = self.cache.get_failed_dois(uncached_dois)
+        if failed_cached:
+            logger.info("Skipping %d DOIs negative-cached as unresolved", len(failed_cached))
+        to_fetch = [doi for doi in uncached_dois if doi not in failed_cached]
 
-        if uncached_dois:
-            logger.info("Scraper: fetching %d papers...", len(uncached_dois))
-            scraper_abstracts = self._fetch_with_scraper(uncached_dois, needs_enrichment)
+        # Step 2: API fallback first (Crossref + OpenAlex) - fast and free
+        api_abstracts: dict[str, str] = {}
+        if api_enabled and to_fetch:
+            logger.info("API fallback: fetching %d papers via Crossref/OpenAlex...", len(to_fetch))
+            api_abstracts = self._fetch_with_api(to_fetch, needs_enrichment)
+
+        # Step 3: Browser scraper for whatever the APIs could not resolve
+        remaining = [doi for doi in to_fetch if doi not in api_abstracts]
+        scraper_abstracts: dict[str, str] = {}
+        if scraper_enabled and remaining:
+            logger.info("Scraper: fetching %d papers...", len(remaining))
+            scraper_abstracts = self._fetch_with_scraper(remaining, needs_enrichment)
+
+        # Step 4: Negative-cache DOIs that no source could resolve
+        still_missing = [doi for doi in remaining if doi not in scraper_abstracts]
+        if still_missing:
+            self._negative_cache(still_missing)
 
         # Merge results from all sources
-        all_abstracts = {**cached_abstracts, **scraper_abstracts}
+        all_abstracts = {**cached_abstracts, **api_abstracts, **scraper_abstracts}
 
         # Step 3: Apply abstracts to candidates
         enriched_count = 0
@@ -168,16 +192,19 @@ class AbstractEnricher:
             missing_abstracts=len(needs_enrichment),
             skipped_no_doi=len(no_doi),
             cache_hits=cache_hits,
+            api_fetched=len(api_abstracts),
             scraper_fetched=len(scraper_abstracts),
             enriched=enriched_count,
             failed=failed,
         )
 
         logger.info(
-            "Enrichment complete: %d/%d abstracts added (cache: %d, scraper: %d, not found: %d)",
+            "Enrichment complete: %d/%d abstracts added "
+            "(cache: %d, api: %d, scraper: %d, not found: %d)",
             stats.enriched,
             stats.missing_abstracts,
             stats.cache_hits,
+            stats.api_fetched,
             stats.scraper_fetched,
             stats.failed,
         )
@@ -196,6 +223,64 @@ class AbstractEnricher:
         )
 
         return candidates, stats
+
+    def _fetch_with_api(
+        self,
+        dois: list[str],
+        candidates: list[CandidateWork],
+    ) -> dict[str, str]:
+        """Fetch abstracts via Crossref/OpenAlex APIs, caching each result.
+
+        Args:
+            dois: List of DOIs to fetch.
+            candidates: List of candidates (for title context when caching).
+
+        Returns:
+            Dict mapping DOI to abstract.
+        """
+        from zotwatch.infrastructure.enrichment.api_fallback import ApiAbstractFetcher
+
+        doi_to_title = {c.doi: c.title for c in candidates if c.doi}
+
+        fetcher = ApiAbstractFetcher(
+            mailto=self.fallback_config.mailto,
+            use_crossref=self.fallback_config.use_crossref,
+            use_openalex=self.fallback_config.use_openalex,
+            timeout=self.fallback_config.timeout,
+            max_workers=self.fallback_config.max_workers,
+        )
+
+        # Cache each resolved abstract immediately, tagged with its source
+        def on_result(doi: str, abstract: str | None, source: str | None) -> None:
+            if abstract:
+                self.cache.put(
+                    doi=doi,
+                    abstract=abstract,
+                    source=source or "api",
+                    title=doi_to_title.get(doi),
+                    ttl_days=30,
+                )
+
+        try:
+            results = fetcher.fetch_batch(dois, on_result=on_result)
+            if results:
+                logger.info("API fallback: fetched %d/%d abstracts", len(results), len(dois))
+            return results
+        finally:
+            fetcher.close()
+
+    def _negative_cache(self, dois: list[str]) -> None:
+        """Record DOIs no source could resolve, with a short TTL.
+
+        Stored as rows with a NULL abstract so positive lookups ignore them,
+        while ``get_failed_dois`` can skip re-fetching them until they expire.
+        """
+        ttl = self.fallback_config.negative_cache_ttl_days
+        if ttl <= 0:
+            return
+        for doi in dois:
+            self.cache.put(doi=doi, abstract=None, source="failed", ttl_days=ttl)
+        logger.info("Negative-cached %d unresolved DOIs for %d days", len(dois), ttl)
 
     def _fetch_with_scraper(
         self,

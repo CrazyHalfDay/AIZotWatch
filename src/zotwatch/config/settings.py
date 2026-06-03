@@ -73,6 +73,23 @@ class ScraperConfig(BaseModel):
     max_workers: int = 3  # Maximum concurrent workers for batch fetching
 
 
+class AbstractFallbackConfig(BaseModel):
+    """API-based abstract fallback (Crossref + OpenAlex).
+
+    Tried before the browser scraper because these endpoints are fast and free.
+    DOIs that no source can resolve are negative-cached for a short period to
+    avoid re-fetching known dead links on every run.
+    """
+
+    enabled: bool = True
+    use_crossref: bool = True
+    use_openalex: bool = True
+    mailto: str = "you@example.com"  # Polite-pool email for both APIs
+    timeout: float = 15.0  # Per-request timeout in seconds
+    max_workers: int = 8  # Concurrent workers for batch fetching
+    negative_cache_ttl_days: int = 7  # TTL for caching unresolved DOIs
+
+
 class FollowedAuthorEntry(BaseModel):
     """Single followed author entry."""
 
@@ -101,6 +118,7 @@ class SourcesConfig(BaseModel):
     arxiv: ArxivConfig = Field(default_factory=ArxivConfig)
     eartharxiv: EarthArxivConfig = Field(default_factory=EarthArxivConfig)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
+    abstract_fallback: AbstractFallbackConfig = Field(default_factory=AbstractFallbackConfig)
     followed_authors: FollowedAuthorsConfig = Field(default_factory=FollowedAuthorsConfig)
 
 
