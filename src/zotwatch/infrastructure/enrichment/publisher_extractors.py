@@ -16,6 +16,7 @@ Supported publishers:
 """
 
 import html
+import json
 import logging
 import re
 from urllib.parse import urlparse
@@ -262,15 +263,168 @@ def _extract_meta_tag(html_content: str, attr_name: str, attr_value: str) -> str
     return None
 
 
+def _scan_balanced(text: str, open_idx: int, open_ch: str, close_ch: str) -> str | None:
+    """Return the balanced substring starting at ``open_idx`` (a bracket/quote-aware scan).
+
+    Handles JSON string literals so braces inside strings do not unbalance the
+    scan. ``open_idx`` must point at ``open_ch``.
+    """
+    if open_idx >= len(text) or text[open_idx] != open_ch:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(open_idx, len(text)):
+        c = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[open_idx : i + 1]
+    return None
+
+
+def _find_preloaded_state(html_content: str) -> dict | None:
+    """Parse ScienceDirect's ``__PRELOADED_STATE__`` into a dict.
+
+    Handles both embedding forms:
+      * ``window.__PRELOADED_STATE__ = { ... };``
+      * ``window.__PRELOADED_STATE__ = JSON.parse("...escaped json...");``
+
+    Uses a brace/quote-aware scan (not a fragile non-greedy regex) so the full
+    object is recovered intact.
+    """
+    anchor = html_content.find("__PRELOADED_STATE__")
+    if anchor == -1:
+        return None
+    # Look at the assignment region following the anchor
+    region = html_content[anchor : anchor + 12_000_000]
+
+    # Form 2: JSON.parse("...")
+    parse_idx = region.find("JSON.parse(")
+    eq_idx = region.find("=")
+    if parse_idx != -1 and (eq_idx == -1 or parse_idx < eq_idx + 40):
+        quote_idx = region.find('"', parse_idx)
+        literal = _scan_balanced_string(region, quote_idx)
+        if literal is not None:
+            try:
+                # The JS string literal decodes (via json) to the JSON text itself
+                inner = json.loads(literal)
+                return json.loads(inner)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    # Form 1: direct object literal
+    brace_idx = region.find("{")
+    if brace_idx == -1:
+        return None
+    obj = _scan_balanced(region, brace_idx, "{", "}")
+    if obj is None:
+        return None
+    try:
+        return json.loads(obj)
+    except (ValueError, TypeError):
+        return None
+
+
+def _scan_balanced_string(text: str, quote_idx: int) -> str | None:
+    """Return the JSON string literal (including quotes) starting at ``quote_idx``."""
+    if quote_idx < 0 or quote_idx >= len(text) or text[quote_idx] != '"':
+        return None
+    escape = False
+    for i in range(quote_idx + 1, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+        elif c == "\\":
+            escape = True
+        elif c == '"':
+            return text[quote_idx : i + 1]
+    return None
+
+
+def _collect_para_text(node: object) -> list[str]:
+    """Recursively collect text from ``para``/``simple-para`` nodes within ``node``."""
+    paras: list[str] = []
+
+    def gather_text(n: object) -> str:
+        parts: list[str] = []
+
+        def walk(x: object) -> None:
+            if isinstance(x, dict):
+                value = x.get("_")
+                if isinstance(value, str):
+                    parts.append(value)
+                for child in x.get("$$", []):
+                    walk(child)
+            elif isinstance(x, list):
+                for y in x:
+                    walk(y)
+
+        walk(n)
+        return " ".join(parts)
+
+    def walk(n: object) -> None:
+        if isinstance(n, dict):
+            if n.get("#name") in ("para", "simple-para"):
+                text = gather_text(n)
+                if text:
+                    paras.append(text)
+                return  # do not double-count nested paras
+            for child in n.get("$$", []):
+                walk(child)
+        elif isinstance(n, list):
+            for y in n:
+                walk(y)
+
+    walk(node)
+    return paras
+
+
+def _find_author_abstract(data: object) -> dict | None:
+    """Find the ``abstract`` node with class ``author`` (the real abstract).
+
+    Skips ``author-highlights`` (bullet points) and any other abstract variants.
+    """
+    found: list[dict] = []
+
+    def walk(n: object) -> None:
+        if isinstance(n, dict):
+            attrs = n.get("$")
+            if (
+                n.get("#name") == "abstract"
+                and isinstance(attrs, dict)
+                and attrs.get("class") == "author"
+            ):
+                found.append(n)
+            for value in n.values():
+                walk(value)
+        elif isinstance(n, list):
+            for y in n:
+                walk(y)
+
+    walk(data)
+    return found[0] if found else None
+
+
 def _extract_sciencedirect_json(html_content: str) -> str | None:
-    """Extract abstract from ScienceDirect's __PRELOADED_STATE__ JSON.
+    """Extract abstract from ScienceDirect's ``__PRELOADED_STATE__`` JSON.
 
-    ScienceDirect stores article content in a JSON object embedded in the page.
-    This method extracts the abstract from the 'author' class section (not
-    'author-highlights' which contains bullet points).
-
-    The JSON structure for each abstract block is:
-    {"$$":[...content...],"$":{"view":"all","id":"ab010","class":"author"},"#name":"abstract"}
+    Parses the embedded state as real JSON and walks it to the ``author`` class
+    abstract block (not ``author-highlights``, which contains bullet points).
+    Falls back to the legacy regex approach if JSON parsing yields nothing.
 
     Args:
         html_content: HTML content containing the JSON.
@@ -278,6 +432,23 @@ def _extract_sciencedirect_json(html_content: str) -> str | None:
     Returns:
         Full abstract text or None.
     """
+    data = _find_preloaded_state(html_content)
+    if data is not None:
+        node = _find_author_abstract(data)
+        if node is not None:
+            paragraphs = [_clean_html_text(p) for p in _collect_para_text(node)]
+            full_abstract = "\n".join(p for p in paragraphs if p)
+            if len(full_abstract) >= 100:
+                logger.info(
+                    "Extracted abstract from ScienceDirect JSON (%d chars)", len(full_abstract)
+                )
+                return full_abstract
+
+    return _extract_sciencedirect_json_regex(html_content)
+
+
+def _extract_sciencedirect_json_regex(html_content: str) -> str | None:
+    """Legacy regex-based ScienceDirect JSON extraction (fallback path)."""
     # Find the PRELOADED_STATE JSON
     match = re.search(r"window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});", html_content, re.DOTALL)
     if not match:
@@ -324,6 +495,8 @@ def _extract_sciencedirect_json(html_content: str) -> str | None:
         return full_abstract
 
     return None
+
+
 
 
 def _is_highlights_content(text: str) -> bool:
