@@ -71,6 +71,7 @@ class ScraperConfig(BaseModel):
     llm_temperature: float = 0.1  # LLM temperature for extraction
     use_llm_fallback: bool = True  # Use LLM when rule extraction fails
     max_workers: int = 3  # Maximum concurrent workers for batch fetching
+    block_resources: bool = True  # Abort image/font/css/media requests for speed
 
 
 class AbstractFallbackConfig(BaseModel):

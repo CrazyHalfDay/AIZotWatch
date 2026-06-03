@@ -10,6 +10,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,19 @@ CLOUDFLARE_BODY_INDICATORS = [
 
 # Path for persistent browser profile
 DEFAULT_PROFILE_PATH = Path.home() / ".cache" / "zotwatch" / "camoufox_profile"
+
+# Resource types to abort when resource blocking is enabled. We only need the
+# document/scripts/XHR to obtain the abstract, so images/fonts/styles/media are
+# pure overhead and slow down page loads.
+BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+
+# Smart-settle polling: instead of always waiting for networkidle, poll the DOM
+# and return as soon as the abstract is extractable.
+SETTLE_POLL_INTERVAL_S = 0.5
+SETTLE_MAX_WAIT_S = 15.0
+
+# An extraction readiness probe: (html, final_url) -> bool
+ReadyCheck = Callable[[str, "str | None"], bool]
 
 
 class StealthBrowser:
@@ -386,6 +400,68 @@ class StealthBrowser:
         return False
 
     @classmethod
+    async def _enable_resource_blocking(cls, page) -> None:
+        """Abort image/font/stylesheet/media requests to speed up page loads."""
+
+        async def _handler(route):
+            try:
+                if route.request.resource_type in BLOCKED_RESOURCE_TYPES:
+                    await route.abort()
+                else:
+                    await route.continue_()
+            except Exception:
+                # Never let a routing error break the fetch
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
+
+        try:
+            await page.route("**/*", _handler)
+        except Exception as e:
+            logger.debug("Failed to enable resource blocking: %s", e)
+
+    @classmethod
+    async def _settle_page(
+        cls,
+        page,
+        ready_check: ReadyCheck | None,
+    ) -> tuple[str, str | None]:
+        """Wait for the page to become extractable, returning as early as possible.
+
+        With a ``ready_check``, poll the DOM and return the moment the abstract
+        is extractable (or a Cloudflare challenge is detected). Without one, fall
+        back to a single networkidle wait. This avoids always burning the full
+        15s settle budget on pages that are ready immediately.
+        """
+        if ready_check is None:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=int(SETTLE_MAX_WAIT_S * 1000))
+            except Exception:
+                pass
+            return await page.content(), page.url
+
+        elapsed = 0.0
+        html = await page.content()
+        final_url = page.url
+        while elapsed < SETTLE_MAX_WAIT_S:
+            html = await page.content()
+            final_url = page.url
+            # Hand off to the Cloudflare handler as soon as a challenge appears
+            if cls._is_cloudflare_challenge(html):
+                return html, final_url
+            try:
+                if ready_check(html, final_url):
+                    logger.debug("Page ready (abstract extractable) after %.1fs", elapsed)
+                    return html, final_url
+            except Exception as e:
+                logger.debug("ready_check raised: %s", e)
+            await asyncio.sleep(SETTLE_POLL_INTERVAL_S)
+            elapsed += SETTLE_POLL_INTERVAL_S
+
+        return html, final_url
+
+    @classmethod
     async def _fetch_page_async(
         cls,
         browser,
@@ -393,12 +469,17 @@ class StealthBrowser:
         url: str,
         timeout: int,
         max_retries: int,
+        ready_check: ReadyCheck | None = None,
+        block_resources: bool = True,
     ) -> tuple[str | None, str | None]:
         """Async implementation of page fetching."""
         for attempt in range(max_retries):
             page = None
             try:
                 page = await context.new_page()
+
+                if block_resources:
+                    await cls._enable_resource_blocking(page)
 
                 logger.debug("Navigating to %s (attempt %d/%d)", url, attempt + 1, max_retries)
 
@@ -407,14 +488,8 @@ class StealthBrowser:
                 except Exception as e:
                     logger.debug("Navigation exception (may be normal): %s", str(e)[:100])
 
-                # Wait for page to stabilize
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=15000)
-                except Exception:
-                    pass
-
-                html = await page.content()
-                final_url = page.url
+                # Smart settle: return as soon as the abstract is extractable
+                html, final_url = await cls._settle_page(page, ready_check)
 
                 # Handle Cloudflare if detected
                 if cls._is_cloudflare_challenge(html):
@@ -470,6 +545,8 @@ class StealthBrowser:
         url: str,
         timeout: int = DEFAULT_TIMEOUT,
         max_retries: int = MAX_CF_RETRIES,
+        ready_check: ReadyCheck | None = None,
+        block_resources: bool = True,
     ) -> tuple[str | None, str | None]:
         """Fetch page content with Cloudflare Turnstile bypass.
 
@@ -477,6 +554,10 @@ class StealthBrowser:
             url: URL to fetch.
             timeout: Timeout in milliseconds.
             max_retries: Maximum retry attempts.
+            ready_check: Optional probe ``(html, final_url) -> bool``; when it
+                returns True the page is considered ready and returned early,
+                instead of waiting for the full settle budget.
+            block_resources: Abort image/font/stylesheet/media requests.
 
         Returns:
             Tuple of (html_content, final_url) or (None, None) on failure.
@@ -495,7 +576,17 @@ class StealthBrowser:
             return None, None
 
         try:
-            return cls._run_async(cls._fetch_page_async(browser, context, url, timeout, max_retries))
+            return cls._run_async(
+                cls._fetch_page_async(
+                    browser,
+                    context,
+                    url,
+                    timeout,
+                    max_retries,
+                    ready_check=ready_check,
+                    block_resources=block_resources,
+                )
+            )
         except Exception as e:
             logger.warning("Failed to fetch %s: %s", url, repr(e))
             return None, None

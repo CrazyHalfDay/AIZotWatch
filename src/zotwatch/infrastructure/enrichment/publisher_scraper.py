@@ -52,6 +52,7 @@ class AbstractScraper:
         llm_temperature: float = 0.1,
         use_llm_fallback: bool = True,
         max_workers: int | None = None,
+        block_resources: bool = True,
     ):
         """Initialize the abstract scraper.
 
@@ -65,12 +66,14 @@ class AbstractScraper:
             llm_temperature: LLM temperature for extraction.
             use_llm_fallback: Whether to use LLM when rules fail.
             max_workers: Maximum concurrent workers for batch fetching.
+            block_resources: Abort image/font/stylesheet/media requests for speed.
         """
         self.rate_limit_delay = rate_limit_delay
         self.timeout = timeout
         self.max_retries = max_retries
         self.use_llm_fallback = use_llm_fallback
         self.max_workers = max_workers or DEFAULT_MAX_WORKERS
+        self.block_resources = block_resources
 
         # Publisher-specific extractor
         self.publisher_extractor = PublisherExtractor(use_llm_fallback=use_llm_fallback)
@@ -145,11 +148,19 @@ class AbstractScraper:
         """
         self._wait_for_rate_limit()
 
+        # Readiness probe: stop waiting as soon as the rules can extract an
+        # abstract, so well-behaved pages return in seconds instead of waiting
+        # out the full settle budget.
+        def _ready(html_content: str, page_url: str | None) -> bool:
+            return extract_abstract(html_content, page_url or "") is not None
+
         doi_url = f"https://doi.org/{doi}"
         html, final_url = StealthBrowser.fetch_page(
             doi_url,
             timeout=self.timeout,
             max_retries=self.max_retries,
+            ready_check=_ready,
+            block_resources=self.block_resources,
         )
 
         if not html:
