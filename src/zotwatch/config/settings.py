@@ -267,21 +267,43 @@ class ScoringConfig(BaseModel):
             "geology, geochronology, ore deposits and economic geology, volcanology, the "
             "deep Earth, stratigraphy, and paleontology / paleobiology."
         )
-        # Negative anchor; if set, articles closer to it than to the positive
-        # anchor are rejected (filters out atmospheric science).
-        negative_anchor: str = (
-            "Atmospheric science, meteorology, climate dynamics, air quality, "
-            "weather and atmospheric circulation."
+        # Negative anchors (multi-discipline). Flagship journals are general
+        # science, so articles closer to ANY of these than to the positive
+        # anchor are rejected. Each anchor is a single coherent field so its
+        # embedding stays sharp (a single blended anchor is too blurry).
+        negative_anchors: list[str] = Field(
+            default_factory=lambda: [
+                "Atmospheric science, meteorology, climate dynamics, air quality, "
+                "weather and atmospheric circulation.",
+                "Condensed matter and materials physics: ferroelectrics, semiconductors, "
+                "nanomaterials, thin films, crystal device structures, electron microscopy of "
+                "engineered materials, quantum, topological and magnetic materials.",
+                "Chemistry: synthesis, catalysis, electrochemistry, batteries and energy "
+                "storage, polymers, molecular, organic and analytical chemistry.",
+                "Biology and biomedicine: genetics and genomics, molecular and cell biology, "
+                "neuroscience, physiology, immunology, microbiology, ecology and evolution.",
+                "Astronomy, astrophysics, cosmology, exoplanets and the atmospheres of "
+                "other planets.",
+                "Engineering, computer science, machine learning, optics, photonics and "
+                "applied device physics.",
+            ]
         )
+        # Legacy single negative anchor (merged with negative_anchors if set).
+        negative_anchor: str = ""
         # Bands on positive-anchor cosine similarity.
         min_score: float = 0.35  # >= accept
         gray_low: float = 0.28  # < reject; [gray_low, min_score) is the gray zone
         # LLM judgement for the gray zone.
         llm_fallback: bool = True
         llm_boundary: str = (
-            "Solid-earth geoscience or paleontology (petrology, geochemistry, mineralogy, "
-            "tectonics, geochronology, ore deposits, stratigraphy, paleontology). "
-            "EXCLUDE pure atmospheric science, meteorology and climate dynamics."
+            "ONLY solid-earth geoscience or paleontology (igneous/metamorphic/sedimentary "
+            "petrology, geochemistry and isotope geochemistry, mineralogy, tectonics and "
+            "structural geology, geochronology, ore deposits, volcanology, stratigraphy, "
+            "paleontology/paleobiology, the deep Earth). "
+            "EXCLUDE everything else, including materials science and condensed-matter "
+            "physics, chemistry, biology and biomedicine, astronomy and astrophysics, "
+            "atmospheric science/meteorology/climate, engineering and computer science — "
+            "even when published in a general-science journal."
         )
         llm_batch_size: int = 20
         max_results: int = 30
