@@ -41,20 +41,38 @@ class GeoscienceGate:
         self.llm = llm
         self.model = model
 
+    def _negative_anchors(self) -> list[str]:
+        """Collect negative anchors (multi-discipline), incl. legacy single anchor."""
+        cfg = self.config
+        anchors = list(getattr(cfg, "negative_anchors", None) or [])
+        single = (cfg.negative_anchor or "").strip()
+        if single:
+            anchors.append(single)
+        # De-duplicate while preserving order, dropping blanks.
+        seen: set[str] = set()
+        result: list[str] = []
+        for a in (s.strip() for s in anchors):
+            if a and a not in seen:
+                seen.add(a)
+                result.append(a)
+        return result
+
     def select(self, candidates: list[CandidateWork]) -> list[CandidateWork]:
         """Return the subset of candidates that pass the geoscience gate."""
         if not candidates:
             return []
 
         cfg = self.config
-        use_neg = bool(cfg.negative_anchor.strip())
-        anchors = [cfg.positive_anchor] + ([cfg.negative_anchor] if use_neg else [])
+        negatives = self._negative_anchors()
+        use_neg = bool(negatives)
+        anchors = [cfg.positive_anchor] + negatives
 
         anchor_vecs = _l2norm(self.vectorizer.encode_query(anchors))
         cand_vecs = _l2norm(self.vectorizer.encode([c.content_for_embedding() for c in candidates]))
-        sims = cand_vecs @ anchor_vecs.T  # (n, 1 or 2)
+        sims = cand_vecs @ anchor_vecs.T  # (n, 1 + k)
         sim_pos = sims[:, 0]
-        sim_neg = sims[:, 1] if use_neg else np.zeros(len(candidates), dtype=np.float32)
+        # Reject against the CLOSEST negative anchor, not an averaged one.
+        sim_neg = sims[:, 1:].max(axis=1) if use_neg else np.zeros(len(candidates), dtype=np.float32)
 
         accepted, gray = self._partition(candidates, sim_pos, sim_neg, use_neg)
 
