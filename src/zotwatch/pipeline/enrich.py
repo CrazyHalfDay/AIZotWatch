@@ -315,6 +315,7 @@ class AbstractEnricher:
             llm_temperature=self.config.llm_temperature,
             use_llm_fallback=self.config.use_llm_fallback,
             max_workers=self.config.max_workers,
+            block_resources=self.config.block_resources,
         )
 
         # Callback to cache results immediately as they complete
