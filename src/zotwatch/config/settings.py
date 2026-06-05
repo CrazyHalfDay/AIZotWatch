@@ -87,6 +87,8 @@ class AbstractFallbackConfig(BaseModel):
     use_openalex: bool = True
     use_elsevier: bool = True  # Elsevier Article API for 10.1016/* DOIs (needs key)
     elsevier_api_key: str = ""  # X-ELS-APIKey; aggregators lack fresh Elsevier abstracts
+    use_springer: bool = True  # Springer Nature Meta API for 10.1007/* + 10.1038/* (needs key)
+    springer_api_key: str = ""  # api_key; covers Springer + Nature-branded journals
     mailto: str = "you@example.com"  # Polite-pool email for both APIs
     timeout: float = 15.0  # Per-request timeout in seconds
     max_workers: int = 8  # Concurrent workers for batch fetching

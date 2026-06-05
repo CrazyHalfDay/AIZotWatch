@@ -32,6 +32,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
       ELSEVIER_API_KEY: ${{ secrets.ELSEVIER_API_KEY }}
+      SPRINGER_API_KEY: ${{ secrets.SPRINGER_API_KEY }}
       # Deploy settings - CHANGE THESE TO YOUR VALUES
       GIT_USER_NAME: 'Yan Tang'
       GIT_USER_EMAIL: '360383464@qq.com'
