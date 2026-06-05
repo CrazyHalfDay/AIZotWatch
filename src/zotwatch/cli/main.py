@@ -404,6 +404,27 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
     click.echo(f"  Total: {stats['total']} papers, Must-read: {stats['must_read']}, Consider: {stats['consider']}")
 
 
+@cli.command(name="clear-failed-cache")
+@click.pass_context
+def clear_failed_cache(ctx: click.Context) -> None:
+    """Drop negative-cached (unresolved) abstract DOIs so they are retried.
+
+    Use after fixing an enrichment bug that wrongly recorded failures, which
+    would otherwise be skipped until their TTL expires.
+    """
+    from zotwatch.infrastructure.enrichment.cache import MetadataCache
+
+    base_dir = ctx.obj["base_dir"]
+    cache_path = base_dir / "data" / "metadata.sqlite"
+    if not cache_path.exists():
+        click.echo("No metadata cache found; nothing to clear.")
+        return
+
+    cache = MetadataCache(cache_path)
+    removed = cache.clear_failed()
+    click.echo(f"Cleared {removed} negative-cached DOIs; they will be retried on the next run.")
+
+
 @cli.command()
 @click.option("--top-venues", default=30, help="Number of top library venues to feed the LLM")
 @click.option("--research-focus", default="", help="Optional research focus to steer recommendations")

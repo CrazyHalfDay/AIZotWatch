@@ -215,5 +215,19 @@ class MetadataCache(BaseSQLiteCache):
             cur = conn.execute("SELECT COUNT(*) FROM paper_metadata")
         return cur.fetchone()[0]
 
+    def clear_failed(self) -> int:
+        """Delete negative-cache rows (abstract IS NULL) so they are retried.
+
+        Useful after a bug that caused spurious enrichment failures: the failed
+        DOIs would otherwise be skipped until their TTL expires.
+
+        Returns:
+            Number of rows deleted.
+        """
+        conn = self._connect()
+        with conn:
+            cur = conn.execute("DELETE FROM paper_metadata WHERE abstract IS NULL")
+        return cur.rowcount
+
 
 __all__ = ["MetadataCache"]

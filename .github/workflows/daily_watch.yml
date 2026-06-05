@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 23 * * *"  # UTC 00:25 = Beijing Time 8:25
   workflow_dispatch:  # Supports manual trigger
+    inputs:
+      clear_failed_cache:
+        description: "Drop negative-cached abstract DOIs before running (forces a re-scrape)"
+        type: boolean
+        default: false
 
 # Allow one concurrent deployment
 concurrency:
@@ -81,6 +86,10 @@ jobs:
 
       - name: Install Camoufox browser
         run: uv run python -m camoufox fetch
+
+      - name: Clear failed abstract cache
+        if: ${{ inputs.clear_failed_cache }}
+        run: uv run zotwatch clear-failed-cache
 
       - name: Run ZotWatch
         run: uv run zotwatch watch --report --rss --top 30
