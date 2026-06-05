@@ -398,9 +398,22 @@ class OutputConfig(BaseModel):
         template: str = "report.html"
         include_summaries: bool = True
 
+    class FavoritesConfig(BaseModel):
+        """Cloud favorites (Supabase) configuration for the HTML report.
+
+        The publishable key is safe to embed in the public report page; access
+        is gated by RLS + per-user list_id passphrase. The daily watch syncs
+        favorites into Zotero using the separate (secret) service key.
+        """
+
+        enabled: bool = False
+        supabase_url: str = ""  # e.g. https://xxxx.supabase.co
+        supabase_anon_key: str = ""  # Publishable key (sb_publishable_...), public-safe
+
     timezone: str = "UTC"  # IANA timezone name, e.g., "Asia/Shanghai"
     rss: RSSConfig = Field(default_factory=RSSConfig)
     html: HTMLConfig = Field(default_factory=HTMLConfig)
+    favorites: FavoritesConfig = Field(default_factory=FavoritesConfig)
 
 
 # Profile Configuration

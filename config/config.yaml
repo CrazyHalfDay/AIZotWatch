@@ -430,6 +430,10 @@ output:
   html:
     template: "report.html"
     include_summaries: true
+  favorites:
+    enabled: true
+    supabase_url: "https://ykgdbuldjmvghusbbwkt.supabase.co"
+    supabase_anon_key: "sb_publishable_7C2VjetoK20OvKmDRqB8qw_v4KRT5pm"  # publishable key, public-safe
 
 # Profile analysis configuration
 profile:

@@ -317,6 +317,7 @@ def _output_results(
             flagship_works=result.flagship_works if result.flagship_works else None,
             overall_summaries=result.overall_summaries if result.overall_summaries else None,
             researcher_profile=result.researcher_profile,
+            favorites_config=settings.output.favorites.model_dump(),
         )
         click.echo(f"HTML report: {report_path}")
 
