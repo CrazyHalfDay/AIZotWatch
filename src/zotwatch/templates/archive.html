@@ -320,8 +320,12 @@
           <button class="pill active" data-filter="label" data-value="">全部</button>
           <button class="pill" data-filter="label" data-value="must_read">必读 (<span id="stat-must-read">0</span>)</button>
           <button class="pill" data-filter="label" data-value="consider">推荐 (<span id="stat-consider">0</span>)</button>
+          <button class="pill" data-filter="label" data-value="flagship">顶刊 (<span id="stat-flagship">0</span>)</button>
           <button class="pill" data-filter="label" data-value="followed" id="followed-badge">关注 (<span id="stat-followed">0</span>)</button>
           <button class="pill" data-filter="label" data-value="ignore">参考 (<span id="stat-ignore">0</span>)</button>
+          {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+          <button id="fav-filter-btn" class="pill" data-on="0">★ 只看收藏</button>
+          {% endif %}
         </div>
       </div>
 
@@ -515,6 +519,7 @@
           const rows = await favRpc('get_favorites', { p_list_id: listId });
           FAV.saved = new Set((rows || []).map((r) => r.doi || r.identifier || r.title));
           markAllStars();
+          if (filters.favOnly) debouncedRender();  // refresh if 只看收藏 already active
         } catch (e) { /* offline / unset: leave stars empty */ }
       }
       window.toggleFavorite = async function(btn) {
@@ -550,7 +555,7 @@
       };
 
       // Filter state: single-select per category
-      const filters = { month: '', label: '', domain: '', source: '', author: '', sort: 'newest' };
+      const filters = { month: '', label: '', domain: '', source: '', author: '', sort: 'newest', favOnly: false };
       let archiveData = null;
       let groupStates = new Map();
       let intersectionObserver = null;
@@ -794,6 +799,7 @@
         // Update active state in this row
         const container = document.getElementById(containerId);
         container.querySelectorAll('.pill').forEach(p => {
+          if (p.id === 'fav-filter-btn') return;  // independent toggle, not part of single-select
           p.classList.toggle('active', p.dataset.value === value);
         });
         debouncedRender();
@@ -851,12 +857,22 @@
           .map(([a, c]) => ({ value: a, label: a, count: c }));
         buildPillRow('author-pills', 'author-row', authors, 'author');
 
-        // Label pills: attach click handlers
-        document.querySelectorAll('#label-pills .pill').forEach(btn => {
+        // Label pills: attach click handlers (skip the favorites toggle)
+        document.querySelectorAll('#label-pills .pill[data-filter="label"]').forEach(btn => {
           btn.addEventListener('click', () => {
             setPillFilter('label', btn.dataset.value, 'label-pills');
           });
         });
+
+        // Favorites-only toggle (independent of label single-select)
+        const favBtn = document.getElementById('fav-filter-btn');
+        if (favBtn) {
+          favBtn.addEventListener('click', () => {
+            filters.favOnly = !filters.favOnly;
+            favBtn.classList.toggle('active', filters.favOnly);
+            debouncedRender();
+          });
+        }
 
         // Sort pills: attach click handlers
         document.querySelectorAll('#sort-pills .pill').forEach(btn => {
@@ -876,11 +892,18 @@
         const mustRead = stats.must_read ?? 0;
         const consider = stats.consider ?? 0;
         const followed = stats.followed ?? 0;
+        // Flagship count is not in backend stats; derive it from loaded data.
+        let flagship = 0;
+        if (archiveData) {
+          archiveData.groups.forEach(g => g.works.forEach(w => { if (w.label === 'flagship') flagship++; }));
+        }
         document.getElementById('stat-total').textContent = total;
         document.getElementById('stat-must-read').textContent = mustRead;
         document.getElementById('stat-consider').textContent = consider;
         document.getElementById('stat-followed').textContent = followed;
-        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider - followed);
+        const flagshipEl = document.getElementById('stat-flagship');
+        if (flagshipEl) flagshipEl.textContent = flagship;
+        document.getElementById('stat-ignore').textContent = Math.max(0, total - mustRead - consider - followed - flagship);
 
         const followedAuthors = stats.followed_authors || [];
         if (followedAuthors.length > 0) {
@@ -891,6 +914,7 @@
       // ── Filter & Sort ──
 
       function matchesFilters(work) {
+        if (filters.favOnly && !FAV.saved.has(favKeyOf(work))) return false;
         if (filters.label && work.label !== filters.label) return false;
         if (filters.source && work.source !== filters.source) return false;
         if (filters.domain && work.domain !== filters.domain) return false;
@@ -977,10 +1001,10 @@
 
       function createArticleHTML(work, groupId, idx) {
         const published = work.published ? formatDate(work.published) : formatDate(work.extra?.run_date);
-        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : (work.label === 'followed' ? '关注' : '参考'));
+        const labelText = work.label === 'must_read' ? '必读' : (work.label === 'consider' ? '推荐' : (work.label === 'followed' ? '关注' : (work.label === 'flagship' ? '顶刊' : '参考')));
         const labelClass = work.label === 'must_read'
           ? 'bg-green-100 text-green-700'
-          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : (work.label === 'followed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'));
+          : (work.label === 'consider' ? 'bg-amber-100 text-amber-700' : (work.label === 'followed' ? 'bg-blue-100 text-blue-700' : (work.label === 'flagship' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600')));
         const abstractId = `abs-${groupId}-${idx}`;
         const summaryId = `sum-${groupId}-${idx}`;
 
@@ -1112,8 +1136,8 @@
 
         let titleContent = '';
         if (groupBy === 'label') {
-          const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : (group.name === 'followed' ? 'bg-blue-500' : 'bg-gray-400'));
-          const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : (group.name === 'followed' ? '关注' : '参考'));
+          const dotClass = group.name === 'must_read' ? 'bg-green-500' : (group.name === 'consider' ? 'bg-amber-500' : (group.name === 'followed' ? 'bg-blue-500' : (group.name === 'flagship' ? 'bg-emerald-500' : 'bg-gray-400')));
+          const labelName = group.name === 'must_read' ? '必读' : (group.name === 'consider' ? '推荐' : (group.name === 'followed' ? '关注' : (group.name === 'flagship' ? '顶刊' : '参考')));
           titleContent = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${labelName}`;
         } else if (groupBy === 'author') {
           const isAI = group.name === 'AI 推荐';
