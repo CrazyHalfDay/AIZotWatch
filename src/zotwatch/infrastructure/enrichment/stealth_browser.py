@@ -210,7 +210,7 @@ class StealthBrowser:
                 await asyncio.sleep(3)
 
                 # Check if we passed the challenge
-                html = await page.content()
+                html = await cls._safe_content(page)
                 if not cls._is_cloudflare_challenge(html):
                     logger.info("Cloudflare bypass confirmed!")
                     return True
@@ -218,7 +218,7 @@ class StealthBrowser:
                     logger.warning("Still on challenge page after click, waiting more...")
                     # Wait more and check again
                     await asyncio.sleep(5)
-                    html = await page.content()
+                    html = await cls._safe_content(page)
                     return not cls._is_cloudflare_challenge(html)
             else:
                 logger.warning("Cloudflare interstitial solve failed")
@@ -346,7 +346,7 @@ class StealthBrowser:
             await asyncio.sleep(5)
 
             # Check if challenge is resolved
-            html = await page.content()
+            html = await cls._safe_content(page)
             if not cls._is_cloudflare_challenge(html):
                 logger.info("Turnstile bypassed via manual click!")
                 return True
@@ -368,7 +368,7 @@ class StealthBrowser:
         Returns:
             True if challenge was bypassed, False otherwise.
         """
-        html = await page.content()
+        html = await cls._safe_content(page)
         if not cls._is_cloudflare_challenge(html):
             return True
 
@@ -383,13 +383,13 @@ class StealthBrowser:
             return True
 
         # Re-check if still on challenge page
-        html = await page.content()
+        html = await cls._safe_content(page)
         if not cls._is_cloudflare_challenge(html):
             return True
 
         # Method 2: Try embedded Turnstile widget solver
         if await cls._solve_turnstile_widget(page):
-            html = await page.content()
+            html = await cls._safe_content(page)
             if not cls._is_cloudflare_challenge(html):
                 return True
 
@@ -422,6 +422,25 @@ class StealthBrowser:
             logger.debug("Failed to enable resource blocking: %s", e)
 
     @classmethod
+    async def _safe_content(cls, page, retries: int = 8, delay: float = 0.4) -> str:
+        """Return page HTML, tolerating transient "page is navigating" errors.
+
+        ``page.content()`` raises while the page is mid-navigation, e.g. the
+        ``linkinghub.elsevier.com`` -> ``sciencedirect.com`` client-side
+        redirect. Rather than letting that abort the whole fetch, retry briefly
+        until the navigation settles; return "" if it never does.
+        """
+        for _ in range(retries):
+            try:
+                return await page.content()
+            except Exception as e:
+                if "navigating" in str(e).lower():
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        return ""
+
+    @classmethod
     async def _settle_page(
         cls,
         page,
@@ -439,13 +458,13 @@ class StealthBrowser:
                 await page.wait_for_load_state("networkidle", timeout=int(SETTLE_MAX_WAIT_S * 1000))
             except Exception:
                 pass
-            return await page.content(), page.url
+            return await cls._safe_content(page), page.url
 
         elapsed = 0.0
-        html = await page.content()
+        html = await cls._safe_content(page)
         final_url = page.url
         while elapsed < SETTLE_MAX_WAIT_S:
-            html = await page.content()
+            html = await cls._safe_content(page)
             final_url = page.url
             # Hand off to the Cloudflare handler as soon as a challenge appears
             if cls._is_cloudflare_challenge(html):
@@ -498,7 +517,7 @@ class StealthBrowser:
                     if success:
                         # Wait a bit for page to fully load after bypass
                         await asyncio.sleep(2)
-                        html = await page.content()
+                        html = await cls._safe_content(page)
                         final_url = page.url
 
                         if not cls._is_cloudflare_challenge(html):
