@@ -253,6 +253,8 @@
     body {
       padding-bottom: 4.5rem;
     }
+    .fav-btn.faved { color: #f59e0b; }
+    .fav-btn.faved .fav-icon { fill: #f59e0b; }
   </style>
 </head>
 
@@ -456,6 +458,96 @@
         maxGroupsInitial: 5    // Only render first N groups initially
       };
       const dataUrl = "{{ data_url }}";
+
+      // --- Cloud favorites (Supabase) ---
+      const FAV = {
+        enabled: {{ 'true' if (favorites_config and favorites_config.enabled and favorites_config.supabase_url) else 'false' }},
+        url: {{ (favorites_config.supabase_url or '') | tojson }},
+        key: {{ (favorites_config.supabase_anon_key or '') | tojson }},
+        saved: new Set(),
+      };
+      function favKeyOf(work) { return work.doi || work.identifier || work.title; }
+      function getFavListId(promptIfMissing) {
+        let id = localStorage.getItem('zotwatch_fav_list');
+        if (!id && promptIfMissing) {
+          id = (window.prompt('设置你的收藏口令（只需设一次，所有设备用同一个；也要加到 GitHub secret）：') || '').trim();
+          if (id) localStorage.setItem('zotwatch_fav_list', id);
+        }
+        return id || null;
+      }
+      async function favRpc(fn, payload) {
+        const r = await fetch(FAV.url + '/rest/v1/rpc/' + fn, {
+          method: 'POST',
+          headers: { 'apikey': FAV.key, 'Authorization': 'Bearer ' + FAV.key, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error('RPC ' + fn + ' (' + r.status + ')');
+        const t = await r.text();
+        return t ? JSON.parse(t) : null;
+      }
+      function favButtonHTML(work) {
+        if (!FAV.enabled) return '';
+        const on = FAV.saved.has(favKeyOf(work));
+        const attrs = [
+          ['doi', work.doi], ['identifier', work.identifier], ['title', work.title],
+          ['url', work.url], ['venue', work.venue],
+          ['authors', (work.authors || []).slice(0, 10).join('; ')],
+          ['published', work.published || (work.extra && work.extra.run_date) || ''],
+          ['source', work.source],
+        ].map(([k, v]) => `data-${k}="${escapeHtml(String(v || ''))}"`).join(' ');
+        return `<button type="button" class="fav-btn shrink-0 p-0.5 ${on ? 'faved' : ''} text-text-secondary hover:text-amber-500 transition-colors" onclick="toggleFavorite(this)" aria-pressed="${on}" title="收藏/取消收藏" ${attrs}>
+          <svg class="fav-icon w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5a.56.56 0 011.04 0l2.13 4.31 4.76.69a.56.56 0 01.31.96l-3.44 3.36.81 4.74a.56.56 0 01-.81.59L12 16.9l-4.26 2.24a.56.56 0 01-.81-.59l.81-4.74-3.44-3.36a.56.56 0 01.31-.96l4.76-.69 2.13-4.31z"/></svg>
+        </button>`;
+      }
+      function markAllStars() {
+        document.querySelectorAll('.fav-btn').forEach((b) => {
+          const key = b.getAttribute('data-doi') || b.getAttribute('data-identifier') || b.getAttribute('data-title');
+          const on = FAV.saved.has(key);
+          b.classList.toggle('faved', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+      }
+      async function loadFavoriteSet() {
+        if (!FAV.enabled) return;
+        const listId = getFavListId(false);
+        if (!listId) return;
+        try {
+          const rows = await favRpc('get_favorites', { p_list_id: listId });
+          FAV.saved = new Set((rows || []).map((r) => r.doi || r.identifier || r.title));
+          markAllStars();
+        } catch (e) { /* offline / unset: leave stars empty */ }
+      }
+      window.toggleFavorite = async function(btn) {
+        const listId = getFavListId(true);
+        if (!listId) return;
+        const key = btn.getAttribute('data-doi') || btn.getAttribute('data-identifier') || btn.getAttribute('data-title');
+        const wasOn = btn.classList.contains('faved');
+        btn.classList.toggle('faved', !wasOn);
+        btn.setAttribute('aria-pressed', !wasOn ? 'true' : 'false');
+        try {
+          if (wasOn) {
+            await favRpc('remove_favorite', { p_list_id: listId, p_key: key });
+            FAV.saved.delete(key);
+          } else {
+            await favRpc('add_favorite', {
+              p_list_id: listId,
+              p_doi: btn.getAttribute('data-doi') || null,
+              p_identifier: btn.getAttribute('data-identifier') || null,
+              p_title: btn.getAttribute('data-title'),
+              p_url: btn.getAttribute('data-url') || null,
+              p_venue: btn.getAttribute('data-venue') || null,
+              p_authors: btn.getAttribute('data-authors') || null,
+              p_published: btn.getAttribute('data-published') || null,
+              p_source: btn.getAttribute('data-source') || null,
+            });
+            FAV.saved.add(key);
+          }
+        } catch (e) {
+          btn.classList.toggle('faved', wasOn);
+          btn.setAttribute('aria-pressed', wasOn ? 'true' : 'false');
+          alert('收藏操作失败：' + e.message);
+        }
+      };
 
       // Filter state: single-select per category
       const filters = { month: '', label: '', domain: '', source: '', author: '', sort: 'newest' };
@@ -949,6 +1041,7 @@
                 <span class="text-text-secondary">相似度 ${work.similarity.toFixed(2)}</span>
               </div>
             </div>
+            ${favButtonHTML(work)}
           </div>
         </article>`;
       }
@@ -1293,6 +1386,7 @@
           updateStats(data.stats);
           buildAllFilters(data);
           renderGroups(data);
+          loadFavoriteSet();
         })
         .catch(err => {
           console.error('Failed to load archive data:', err);
