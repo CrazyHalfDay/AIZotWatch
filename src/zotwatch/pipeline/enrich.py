@@ -252,6 +252,7 @@ class AbstractEnricher:
             springer_api_key=self.fallback_config.springer_api_key,
             timeout=self.fallback_config.timeout,
             max_workers=self.fallback_config.max_workers,
+            publisher_max_workers=self.fallback_config.publisher_max_workers,
         )
 
         # Cache each resolved abstract immediately, tagged with its source

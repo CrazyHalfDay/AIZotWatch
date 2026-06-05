@@ -92,6 +92,7 @@ class AbstractFallbackConfig(BaseModel):
     mailto: str = "you@example.com"  # Polite-pool email for both APIs
     timeout: float = 15.0  # Per-request timeout in seconds
     max_workers: int = 8  # Concurrent workers for batch fetching
+    publisher_max_workers: int = 2  # Cap concurrent Elsevier/Springer calls (avoid 429)
     negative_cache_ttl_days: int = 7  # TTL for caching unresolved DOIs
 
 
