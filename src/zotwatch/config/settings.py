@@ -75,7 +75,7 @@ class ScraperConfig(BaseModel):
 
 
 class AbstractFallbackConfig(BaseModel):
-    """API-based abstract fallback (Crossref + OpenAlex).
+    """API-based abstract fallback (Crossref + Elsevier + OpenAlex).
 
     Tried before the browser scraper because these endpoints are fast and free.
     DOIs that no source can resolve are negative-cached for a short period to
@@ -85,6 +85,8 @@ class AbstractFallbackConfig(BaseModel):
     enabled: bool = True
     use_crossref: bool = True
     use_openalex: bool = True
+    use_elsevier: bool = True  # Elsevier Article API for 10.1016/* DOIs (needs key)
+    elsevier_api_key: str = ""  # X-ELS-APIKey; aggregators lack fresh Elsevier abstracts
     mailto: str = "you@example.com"  # Polite-pool email for both APIs
     timeout: float = 15.0  # Per-request timeout in seconds
     max_workers: int = 8  # Concurrent workers for batch fetching

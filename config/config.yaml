@@ -43,6 +43,8 @@ sources:
     enabled: true
     use_crossref: true
     use_openalex: true
+    use_elsevier: true  # Elsevier Article API for 10.1016/* (only reliable source for fresh GCA/ScienceDirect abstracts)
+    elsevier_api_key: "${ELSEVIER_API_KEY}"
     mailto: "${CROSSREF_MAILTO}"
     timeout: 15.0
     max_workers: 8

@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 CROSSREF_WORKS_URL = "https://api.crossref.org/works/{doi}"
 OPENALEX_WORK_URL = "https://api.openalex.org/works/https://doi.org/{doi}"
+ELSEVIER_ARTICLE_URL = "https://api.elsevier.com/content/article/doi/{doi}"
+
+# Elsevier DOIs share this registrant prefix; only these are worth an API call
+ELSEVIER_DOI_PREFIX = "10.1016/"
 
 # Abstracts shorter than this are treated as noise (e.g. stray fragments)
 MIN_ABSTRACT_CHARS = 80
@@ -36,6 +40,8 @@ class ApiAbstractFetcher:
         mailto: str = "",
         use_crossref: bool = True,
         use_openalex: bool = True,
+        use_elsevier: bool = True,
+        elsevier_api_key: str = "",
         timeout: float = 15.0,
         max_workers: int = 8,
     ):
@@ -45,12 +51,16 @@ class ApiAbstractFetcher:
             mailto: Email for Crossref/OpenAlex polite pools.
             use_crossref: Whether to query Crossref.
             use_openalex: Whether to query OpenAlex.
+            use_elsevier: Whether to query the Elsevier Article API.
+            elsevier_api_key: X-ELS-APIKey for the Elsevier Article API.
             timeout: Per-request timeout in seconds.
             max_workers: Concurrent workers for batch fetching.
         """
         self.mailto = mailto.strip()
         self.use_crossref = use_crossref
         self.use_openalex = use_openalex
+        self.elsevier_api_key = elsevier_api_key.strip()
+        self.use_elsevier = use_elsevier and bool(self.elsevier_api_key)
         self.timeout = timeout
         self.max_workers = max(1, max_workers)
         self.session = requests.Session()
@@ -69,13 +79,19 @@ class ApiAbstractFetcher:
         """Fetch an abstract for a single DOI, trying Crossref then OpenAlex.
 
         Returns:
-            Tuple of (abstract, source) where source is "crossref"/"openalex",
-            or (None, None) if no abstract was found.
+            Tuple of (abstract, source) where source is
+            "crossref"/"elsevier"/"openalex", or (None, None) if none found.
         """
         if self.use_crossref:
             abstract = self._fetch_crossref(doi)
             if abstract:
                 return abstract, "crossref"
+        # Elsevier does not deposit abstracts to Crossref and aggregators lag
+        # for fresh articles, so the publisher API is the only reliable source.
+        if self.use_elsevier and doi.lower().startswith(ELSEVIER_DOI_PREFIX):
+            abstract = self._fetch_elsevier(doi)
+            if abstract:
+                return abstract, "elsevier"
         if self.use_openalex:
             abstract = self._fetch_openalex(doi)
             if abstract:
@@ -93,6 +109,30 @@ class ApiAbstractFetcher:
             abstract = clean_html(message.get("abstract"))
         except (requests.RequestException, ValueError) as exc:
             logger.debug("Crossref fallback failed for %s: %s", doi, exc)
+            return None
+        if abstract and len(abstract) >= MIN_ABSTRACT_CHARS:
+            return abstract
+        return None
+
+    def _fetch_elsevier(self, doi: str) -> str | None:
+        """Fetch an abstract from the Elsevier Article API (``view=META_ABS``).
+
+        Elsevier abstracts are absent from Crossref and the open aggregators
+        (licensing + indexing lag), so the publisher API is the only reliable
+        source for freshly published ScienceDirect articles.
+        """
+        url = ELSEVIER_ARTICLE_URL.format(doi=doi)
+        headers = {"X-ELS-APIKey": self.elsevier_api_key, "Accept": "application/json"}
+        try:
+            resp = self.session.get(
+                url, headers=headers, params={"view": "META_ABS"}, timeout=self.timeout
+            )
+            if resp.status_code != 200:
+                return None
+            coredata = resp.json().get("full-text-retrieval-response", {}).get("coredata", {})
+            abstract = clean_html(coredata.get("dc:description"))
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            logger.debug("Elsevier fallback failed for %s: %s", doi, exc)
             return None
         if abstract and len(abstract) >= MIN_ABSTRACT_CHARS:
             return abstract
