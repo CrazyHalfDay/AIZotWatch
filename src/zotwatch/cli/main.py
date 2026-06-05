@@ -398,6 +398,7 @@ def archive(ctx: click.Context, days: int, group_by: str) -> None:
                 sources=sources,
                 template_dir=template_dir if template_dir.exists() else None,
                 timezone_name=settings.output.timezone,
+                favorites_config=settings.output.favorites.model_dump(),
             )
             click.echo(f"Archive page ({view}): {archive_path}")
 

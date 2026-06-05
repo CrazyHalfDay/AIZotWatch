@@ -220,6 +220,7 @@ def render_archive(
     template_dir: Path | None = None,
     template_name: str = "archive.html",
     timezone_name: str = "UTC",
+    favorites_config: dict | None = None,
 ) -> Path:
     """Render archive page with grouped works.
 
@@ -294,6 +295,7 @@ def render_archive(
         stats=stats,
         sources=sources or [],
         data_url=data_filename,
+        favorites_config=favorites_config or {},
     )
 
     path = Path(output_path)
