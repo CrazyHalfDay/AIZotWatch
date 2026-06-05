@@ -313,7 +313,6 @@ def _output_results(
             report_path,
             template_dir=template_dir if template_dir.exists() else None,
             timezone_name=settings.output.timezone,
-            interest_works=result.interest_works if result.interest_works else None,
             followed_works=result.followed_works if result.followed_works else None,
             flagship_works=result.flagship_works if result.flagship_works else None,
             overall_summaries=result.overall_summaries if result.overall_summaries else None,

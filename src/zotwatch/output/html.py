@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from zotwatch.core.models import InterestWork, OverallSummary, RankedWork, ResearcherProfile
+from zotwatch.core.models import OverallSummary, RankedWork, ResearcherProfile
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,6 @@ def render_html(
     template_dir: Path | None = None,
     template_name: str = "report.html",
     timezone_name: str = "UTC",
-    interest_works: list[InterestWork] | None = None,
     followed_works: list[RankedWork] | None = None,
     flagship_works: list[RankedWork] | None = None,
     overall_summaries: dict[str, OverallSummary] | None = None,
@@ -151,7 +150,6 @@ def render_html(
         template_dir: Directory containing templates. If None, uses built-in templates.
         template_name: Name of template file.
         timezone_name: IANA timezone name (e.g., "Asia/Shanghai"). Defaults to "UTC".
-        interest_works: Optional list of interest-based works.
         followed_works: Optional list of followed author works.
         overall_summaries: Optional dict with "interest" and/or "similarity" OverallSummary.
         researcher_profile: Optional researcher profile analysis.
@@ -195,7 +193,6 @@ def render_html(
         works=works,
         generated_at=generated_at,
         timezone_name=timezone_name,
-        interest_works=interest_works or [],
         followed_works=followed_works or [],
         flagship_works=flagship_works or [],
         overall_summaries=overall_summaries or {},

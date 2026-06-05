@@ -14,7 +14,6 @@ from zotwatch.config.settings import Settings
 from zotwatch.core.models import (
     CandidateWork,
     ClusteredProfile,
-    InterestWork,
     OverallSummary,
     RankedWork,
     ResearcherProfile,
@@ -23,12 +22,10 @@ from zotwatch.infrastructure.embedding import (
     CachingEmbeddingProvider,
     EmbeddingCache,
     create_embedding_provider,
-    create_reranker,
 )
 from zotwatch.infrastructure.enrichment.cache import MetadataCache
 from zotwatch.infrastructure.storage import ProfileStorage
 from zotwatch.llm import (
-    InterestRefiner,
     LibraryAnalyzer,
     OverallSummarizer,
     PaperDomainClassifier,
@@ -38,7 +35,7 @@ from zotwatch.llm import (
 )
 from zotwatch.llm.base import BaseLLMProvider
 from zotwatch.llm.factory import create_llm_client
-from zotwatch.pipeline import DedupeEngine, InterestRanker, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
+from zotwatch.pipeline import DedupeEngine, ProfileBuilder, ProfileRanker, ProfileStatsExtractor
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
 from zotwatch.pipeline.flagship_filter import GeoscienceGate
@@ -87,7 +84,6 @@ class WatchStats:
     candidates_after_recent_filter: int = 0
     abstracts_enriched: int = 0
     summaries_generated: int = 0
-    interest_papers_selected: int = 0
 
 
 @dataclass
@@ -95,7 +91,6 @@ class WatchResult:
     """Complete result from watch pipeline execution."""
 
     ranked_works: list[RankedWork] = field(default_factory=list)
-    interest_works: list[InterestWork] = field(default_factory=list)
     followed_works: list[RankedWork] = field(default_factory=list)
     flagship_works: list[RankedWork] = field(default_factory=list)
     researcher_profile: ResearcherProfile | None = None
@@ -404,12 +399,7 @@ class WatchPipeline:
             else:
                 result.stats.candidates_after_llm_filter = len(candidates)
 
-            # 8. Interest-based selection (optional)
-            if interests_config.enabled and interests_config.description.strip():
-                result.interest_works = self._select_interest_papers(candidates, embedding_cache, progress)
-                result.stats.interest_papers_selected = len(result.interest_works)
-
-            # 9. Rank by profile similarity
+            # 8. Rank by profile similarity
             rank_start = time.time()
             progress("rank", "Computing relevance scores...")
             ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
@@ -619,51 +609,6 @@ class WatchPipeline:
 
         return candidates, stats
 
-    def _select_interest_papers(
-        self,
-        candidates: list[CandidateWork],
-        embedding_cache: EmbeddingCache,
-        progress: Callable[[str, str], None],
-    ) -> list[InterestWork]:
-        """Select papers based on user interests."""
-        progress("interest", "Selecting interest-based papers...")
-
-        try:
-            llm_client = self._get_llm_client()
-            if not llm_client:
-                return []
-
-            refiner = InterestRefiner(llm_client, model=self.settings.llm.model)
-            reranker = create_reranker(
-                self.settings.scoring.rerank,
-                self.settings.embedding,
-            )
-
-            # Create cached embedding provider (reuses same cache as ProfileRanker)
-            base_vectorizer = create_embedding_provider(self.settings.embedding)
-            cached_vectorizer = CachingEmbeddingProvider(
-                provider=base_vectorizer,
-                cache=embedding_cache,
-                source_type="candidate",
-                ttl_days=self.settings.embedding.candidate_ttl_days,
-            )
-
-            selector = InterestRanker(
-                settings=self.settings,
-                vectorizer=cached_vectorizer,
-                reranker=reranker,
-                interest_refiner=refiner,
-                base_dir=self.base_dir,
-            )
-            interest_works = selector.select(candidates)
-            progress("interest", f"Selected {len(interest_works)} interest papers")
-            return interest_works
-
-        except Exception as e:
-            logger.warning("Interest selection failed: %s", e)
-            progress("interest", f"Interest selection skipped (error: {e})")
-            return []
-
     def _generate_summaries(
         self,
         result: WatchResult,
@@ -698,24 +643,6 @@ class WatchPipeline:
             if work.identifier in summary_map:
                 work.summary = summary_map[work.identifier]
 
-        # Summarize interest works
-        if result.interest_works:
-            progress("summary", f"Generating summaries for {len(result.interest_works)} interest papers...")
-            interest_result = summarizer.summarize_batch(result.interest_works, max_workers=max_workers)
-            result.stats.summaries_generated += interest_result.success_count
-
-            if interest_result.failed_ids:
-                logger.warning(
-                    "Failed to summarize %d interest papers: %s",
-                    interest_result.failure_count,
-                    interest_result.failed_ids[:5],
-                )
-
-            interest_map = {s.paper_id: s for s in interest_result.summaries}
-            for work in result.interest_works:
-                if work.identifier in interest_map:
-                    work.summary = interest_map[work.identifier]
-
         # Summarize followed works
         if result.followed_works:
             progress("summary", f"Generating summaries for {len(result.followed_works)} followed author papers...")
@@ -742,11 +669,6 @@ class WatchPipeline:
         progress("summary", "Generating overall summaries...")
         overall_summarizer = OverallSummarizer(llm_client, model=self.settings.llm.model)
 
-        if result.interest_works:
-            result.overall_summaries["interest"] = overall_summarizer.summarize_section(
-                result.interest_works, "interest"
-            )
-
         if result.ranked_works:
             result.overall_summaries["similarity"] = overall_summarizer.summarize_section(
                 result.ranked_works, "similarity"
@@ -768,7 +690,6 @@ class WatchPipeline:
 
         all_works = (
             result.ranked_works
-            + (result.interest_works or [])
             + (result.followed_works or [])
             + (result.flagship_works or [])
         )
@@ -781,10 +702,6 @@ class WatchPipeline:
         translations = translator.translate_batch(all_works)
 
         for work in result.ranked_works:
-            if work.identifier in translations:
-                work.translated_title = translations[work.identifier]
-
-        for work in result.interest_works or []:
             if work.identifier in translations:
                 work.translated_title = translations[work.identifier]
 
@@ -811,7 +728,6 @@ class WatchPipeline:
 
         all_works = (
             result.ranked_works
-            + (result.interest_works or [])
             + (result.followed_works or [])
             + (result.flagship_works or [])
         )
@@ -835,10 +751,6 @@ class WatchPipeline:
 
         # Apply classifications to works
         for work in result.ranked_works:
-            if work.identifier in classifications:
-                work.domain = classifications[work.identifier]
-
-        for work in result.interest_works or []:
             if work.identifier in classifications:
                 work.domain = classifications[work.identifier]
 

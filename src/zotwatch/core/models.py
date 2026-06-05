@@ -125,20 +125,6 @@ class RankedWork(CandidateWork):
     matched_cluster_id: int | None = None  # Best matching cluster ID
 
 
-class InterestWork(RankedWork):
-    """Interest-based paper with rerank score."""
-
-    rerank_score: float
-
-
-class RefinedInterests(BaseModel):
-    """LLM-refined research interests."""
-
-    refined_query: str
-    include_keywords: list[str] = Field(default_factory=list)
-    exclude_keywords: list[str] = Field(default_factory=list)
-
-
 @dataclass
 class ProfileArtifacts:
     """Paths to profile artifact files."""
@@ -353,8 +339,6 @@ __all__ = [
     "ZoteroItem",
     "CandidateWork",
     "RankedWork",
-    "InterestWork",
-    "RefinedInterests",
     "ProfileArtifacts",
     "BulletSummary",
     "DetailedAnalysis",

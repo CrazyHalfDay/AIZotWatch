@@ -4,7 +4,6 @@ import json
 import logging
 
 from zotwatch.core.models import (
-    InterestWork,
     OverallSummary,
     RankedWork,
     TopicSummary,
@@ -30,7 +29,7 @@ class OverallSummarizer:
 
     def summarize_section(
         self,
-        works: list[RankedWork | InterestWork],
+        works: list[RankedWork],
         section_type: str,
     ) -> OverallSummary:
         """Generate overall summary for a section of papers.
@@ -76,7 +75,7 @@ class OverallSummarizer:
 
     def _format_papers_list(
         self,
-        works: list[RankedWork | InterestWork],
+        works: list[RankedWork],
         max_papers: int = 10,
     ) -> str:
         """Format papers list for prompt."""

@@ -4,7 +4,7 @@ import json
 import logging
 from typing import TypeVar
 
-from zotwatch.core.models import InterestWork, RankedWork
+from zotwatch.core.models import RankedWork
 from zotwatch.infrastructure.storage import ProfileStorage
 
 from .base import BaseLLMProvider
@@ -12,7 +12,7 @@ from .prompts import TITLE_TRANSLATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
-WorkType = TypeVar("WorkType", RankedWork, InterestWork)
+WorkType = TypeVar("WorkType", bound=RankedWork)
 
 # Language code to display name mapping
 LANGUAGE_NAMES = {
@@ -52,7 +52,7 @@ class TitleTranslator:
         """Translate titles for multiple papers.
 
         Args:
-            works: List of RankedWork or InterestWork objects.
+            works: List of RankedWork objects.
             force: If True, skip cache and re-translate all titles.
 
         Returns:
