@@ -246,6 +246,8 @@ class AbstractEnricher:
             mailto=self.fallback_config.mailto,
             use_crossref=self.fallback_config.use_crossref,
             use_openalex=self.fallback_config.use_openalex,
+            use_elsevier=self.fallback_config.use_elsevier,
+            elsevier_api_key=self.fallback_config.elsevier_api_key,
             timeout=self.fallback_config.timeout,
             max_workers=self.fallback_config.max_workers,
         )
