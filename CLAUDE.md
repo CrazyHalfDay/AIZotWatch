@@ -33,6 +33,9 @@ uv run zotwatch watch --top 50
 # Push top recommendations back to Zotero
 uv run zotwatch watch --push
 
+# Send a daily WeChat push (Server酱) after the run
+uv run zotwatch watch --notify
+
 # Generate target journal whitelist from library venues (LLM + Crossref)
 uv run zotwatch journals
 
@@ -55,6 +58,23 @@ uv run zotwatch journals --no-merge
 5. **Scoring** (`pipeline/score.py`): Ranks candidates using weighted combination of similarity, recency, citations, journal quality, and whitelist bonuses
 6. **Summarization** (`llm/summarizer.py`): Generates AI summaries via OpenRouter API
 7. **Output** (`output/rss.py`, `output/html.py`): Generates RSS feed and/or HTML report
+8. **Notify** (`output/notify.py`): Optionally pushes a compact daily digest (top papers + link to the full report) to WeChat via Server酱
+
+### Daily Push Notification (`output.notify`)
+
+When `output.notify.enabled: true` (or `zotwatch watch --notify`), a compact
+"today's new papers" digest is sent after each run. It is built from the
+structured `RankedWork` results (no HTML parsing) and links back to the full
+report (`report_url`, falling back to `rss.link`).
+
+- `provider`: only `"serverchan"` (WeChat push via `sctapi.ftqq.com`)
+- `sendkey`: Server酱 SendKey, supplied via `${SERVERCHAN_SENDKEY}` (a GitHub Secret)
+- `top_n`: max papers listed per section (default 10)
+- `include_flagship`: include the flagship geoscience section (default true)
+
+The push is best-effort: a failure logs a warning but never fails the watch
+run. The daily workflow (`daily_watch.yml`) passes `--notify` and the
+`SERVERCHAN_SENDKEY` secret.
 
 ### Directory Structure
 
@@ -292,6 +312,7 @@ Required:
 
 Optional:
 - `CROSSREF_MAILTO`: Crossref polite pool email
+- `SERVERCHAN_SENDKEY`: Server酱 SendKey for the daily WeChat push (required only when `output.notify.enabled: true`)
 
 ## Key Constraints
 

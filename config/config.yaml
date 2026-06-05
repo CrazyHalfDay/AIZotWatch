@@ -434,6 +434,13 @@ output:
     enabled: true
     supabase_url: "https://ykgdbuldjmvghusbbwkt.supabase.co"
     supabase_anon_key: "sb_publishable_7C2VjetoK20OvKmDRqB8qw_v4KRT5pm"  # publishable key, public-safe
+  notify:
+    enabled: true            # Send a daily WeChat push after each watch run
+    provider: "serverchan"   # WeChat push via Server酱 (sctapi.ftqq.com)
+    sendkey: "${SERVERCHAN_SENDKEY}"  # Server酱 SendKey, set as a GitHub Secret
+    top_n: 10                # Max papers listed per section in the push
+    report_url: ""           # Full-report link; empty falls back to rss.link
+    include_flagship: true   # Include the flagship geoscience section
 
 # Profile analysis configuration
 profile:

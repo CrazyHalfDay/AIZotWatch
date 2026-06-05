@@ -12,6 +12,7 @@ from zotwatch.infrastructure.embedding import EmbeddingCache, create_embedding_p
 from zotwatch.infrastructure.storage import ArchiveStorage, ProfileStorage
 from zotwatch.llm import JournalRecommender, create_llm_client
 from zotwatch.output import render_archive, render_html, write_rss
+from zotwatch.output.notify import send_notification
 from zotwatch.output.push import ZoteroPusher
 from zotwatch.pipeline import (
     CrossrefJournalVerifier,
@@ -191,6 +192,7 @@ def profile(ctx: click.Context, full: bool) -> None:
 @click.option("--report", is_flag=True, help="Generate HTML report only")
 @click.option("--top", type=int, default=None, help="Number of top results (default: from config)")
 @click.option("--push", is_flag=True, help="Push recommendations to Zotero")
+@click.option("--notify", is_flag=True, help="Send daily push notification (Server酱)")
 @click.pass_context
 def watch(
     ctx: click.Context,
@@ -198,6 +200,7 @@ def watch(
     report: bool,
     top: int | None,
     push: bool,
+    notify: bool,
 ) -> None:
     """Fetch, score, and output paper recommendations.
 
@@ -212,6 +215,10 @@ def watch(
     settings = _get_settings(ctx)
     base_dir = ctx.obj["base_dir"]
     embedding_cache = _get_cache(ctx)
+
+    # --notify forces notifications on regardless of the config default
+    if notify:
+        settings.output.notify.enabled = True
 
     # Build pipeline config from settings + CLI overrides
     config = WatchConfig(
@@ -282,6 +289,14 @@ def watch(
         if result.flagship_works:
             saved_flagship = archive.save_batch(result.flagship_works)
             click.echo(f"Saved {saved_flagship} flagship geoscience works to archive")
+
+    # Send daily push notification (best-effort; never fail the whole run)
+    if settings.output.notify.enabled:
+        try:
+            if send_notification(result, settings):
+                click.echo("Sent daily push notification")
+        except Exception as exc:  # noqa: BLE001 - notification is non-critical
+            click.echo(f"Notification failed: {exc}", err=True)
 
 
 def _output_results(
