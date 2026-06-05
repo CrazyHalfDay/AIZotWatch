@@ -21,9 +21,13 @@ logger = logging.getLogger(__name__)
 CROSSREF_WORKS_URL = "https://api.crossref.org/works/{doi}"
 OPENALEX_WORK_URL = "https://api.openalex.org/works/https://doi.org/{doi}"
 ELSEVIER_ARTICLE_URL = "https://api.elsevier.com/content/article/doi/{doi}"
+SPRINGER_META_URL = "https://api.springernature.com/meta/v2/json"
 
 # Elsevier DOIs share this registrant prefix; only these are worth an API call
 ELSEVIER_DOI_PREFIX = "10.1016/"
+
+# Springer Nature registrant prefixes (Springer journals + Nature-branded titles)
+SPRINGER_DOI_PREFIXES = ("10.1007/", "10.1038/")
 
 # Abstracts shorter than this are treated as noise (e.g. stray fragments)
 MIN_ABSTRACT_CHARS = 80
@@ -42,6 +46,8 @@ class ApiAbstractFetcher:
         use_openalex: bool = True,
         use_elsevier: bool = True,
         elsevier_api_key: str = "",
+        use_springer: bool = True,
+        springer_api_key: str = "",
         timeout: float = 15.0,
         max_workers: int = 8,
     ):
@@ -53,6 +59,8 @@ class ApiAbstractFetcher:
             use_openalex: Whether to query OpenAlex.
             use_elsevier: Whether to query the Elsevier Article API.
             elsevier_api_key: X-ELS-APIKey for the Elsevier Article API.
+            use_springer: Whether to query the Springer Nature Meta API.
+            springer_api_key: api_key for the Springer Nature Meta API.
             timeout: Per-request timeout in seconds.
             max_workers: Concurrent workers for batch fetching.
         """
@@ -61,6 +69,8 @@ class ApiAbstractFetcher:
         self.use_openalex = use_openalex
         self.elsevier_api_key = elsevier_api_key.strip()
         self.use_elsevier = use_elsevier and bool(self.elsevier_api_key)
+        self.springer_api_key = springer_api_key.strip()
+        self.use_springer = use_springer and bool(self.springer_api_key)
         self.timeout = timeout
         self.max_workers = max(1, max_workers)
         self.session = requests.Session()
@@ -80,18 +90,23 @@ class ApiAbstractFetcher:
 
         Returns:
             Tuple of (abstract, source) where source is
-            "crossref"/"elsevier"/"openalex", or (None, None) if none found.
+            "crossref"/"elsevier"/"springer"/"openalex", or (None, None).
         """
         if self.use_crossref:
             abstract = self._fetch_crossref(doi)
             if abstract:
                 return abstract, "crossref"
-        # Elsevier does not deposit abstracts to Crossref and aggregators lag
-        # for fresh articles, so the publisher API is the only reliable source.
+        # Commercial publishers do not deposit abstracts to Crossref and
+        # aggregators lag for fresh articles, so the publisher API is the only
+        # reliable source. Route each DOI by its registrant prefix.
         if self.use_elsevier and doi.lower().startswith(ELSEVIER_DOI_PREFIX):
             abstract = self._fetch_elsevier(doi)
             if abstract:
                 return abstract, "elsevier"
+        if self.use_springer and doi.lower().startswith(SPRINGER_DOI_PREFIXES):
+            abstract = self._fetch_springer(doi)
+            if abstract:
+                return abstract, "springer"
         if self.use_openalex:
             abstract = self._fetch_openalex(doi)
             if abstract:
@@ -133,6 +148,27 @@ class ApiAbstractFetcher:
             abstract = clean_html(coredata.get("dc:description"))
         except (requests.RequestException, ValueError, AttributeError) as exc:
             logger.debug("Elsevier fallback failed for %s: %s", doi, exc)
+            return None
+        if abstract and len(abstract) >= MIN_ABSTRACT_CHARS:
+            return abstract
+        return None
+
+    def _fetch_springer(self, doi: str) -> str | None:
+        """Fetch an abstract from the Springer Nature Meta API.
+
+        Covers both Springer (10.1007) and Nature-branded (10.1038) journals,
+        including subscription titles whose abstracts are absent from Crossref
+        and lag in the open aggregators. The free key returns metadata only.
+        """
+        params = {"q": f"doi:{doi}", "api_key": self.springer_api_key}
+        try:
+            resp = self.session.get(SPRINGER_META_URL, params=params, timeout=self.timeout)
+            if resp.status_code != 200:
+                return None
+            records = resp.json().get("records") or []
+            abstract = clean_html(records[0].get("abstract")) if records else None
+        except (requests.RequestException, ValueError, AttributeError, IndexError) as exc:
+            logger.debug("Springer fallback failed for %s: %s", doi, exc)
             return None
         if abstract and len(abstract) >= MIN_ABSTRACT_CHARS:
             return abstract

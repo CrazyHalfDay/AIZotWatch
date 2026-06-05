@@ -248,6 +248,8 @@ class AbstractEnricher:
             use_openalex=self.fallback_config.use_openalex,
             use_elsevier=self.fallback_config.use_elsevier,
             elsevier_api_key=self.fallback_config.elsevier_api_key,
+            use_springer=self.fallback_config.use_springer,
+            springer_api_key=self.fallback_config.springer_api_key,
             timeout=self.fallback_config.timeout,
             max_workers=self.fallback_config.max_workers,
         )
