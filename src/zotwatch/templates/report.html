@@ -38,6 +38,9 @@
     @media (min-width: 640px) { .cluster-graph-container { height: 320px; } }
     @media (min-width: 768px) { .cluster-graph-container { height: 350px; } }
     #cluster-graph svg { overflow: visible; }
+    .fav-btn.faved { color: #f59e0b; }
+    .fav-btn.faved .fav-icon { fill: #f59e0b; }
+    #fav-only-btn.active { color: #f59e0b; border-color: #f59e0b; background: rgba(245,158,11,0.08); }
   </style>
 </head>
 <body class="bg-bg-primary min-h-screen text-text-primary">
@@ -1011,6 +1014,11 @@
                 class="px-2.5 py-1 rounded border border-accent bg-accent/10 text-accent font-medium">按相似度</button>
         <button id="sort-similarity-date" onclick="sortSimilarityWorks('date')"
                 class="px-2.5 py-1 rounded border border-border-color text-text-secondary hover:text-accent transition-colors">按日期</button>
+        {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+        <span class="text-text-secondary ml-2">·</span>
+        <button id="fav-only-btn" onclick="toggleFavOnly(this)" data-on="0"
+                class="px-2.5 py-1 rounded border border-border-color text-text-secondary hover:text-amber-500 transition-colors">★ 只看收藏</button>
+        {% endif %}
       </div>
       <div id="similarity-list" class="space-y-4 md:space-y-5">
         {% for work in works %}
@@ -1028,6 +1036,19 @@
                 <span class="text-xs text-text-secondary">·</span>
                 <span class="text-xs text-text-secondary">{{ work.source }}</span>
                 <span class="text-xs text-text-secondary md:hidden">· {{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</span>
+                {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+                <button type="button" class="fav-btn ml-auto flex-shrink-0 p-0.5 text-text-secondary hover:text-amber-500 transition-colors"
+                        onclick="toggleFavorite(this)" aria-pressed="false" title="收藏/取消收藏"
+                        data-doi="{{ work.doi or '' }}" data-identifier="{{ work.identifier or '' }}"
+                        data-title="{{ work.title }}" data-url="{{ work.url or '' }}"
+                        data-venue="{{ work.venue or '' }}" data-authors="{{ work.authors[:10] | join('; ') }}"
+                        data-published="{{ work.published.strftime('%Y-%m-%d') if work.published else '' }}"
+                        data-source="{{ work.source }}">
+                  <svg class="fav-icon w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5a.56.56 0 011.04 0l2.13 4.31 4.76.69a.56.56 0 01.31.96l-3.44 3.36.81 4.74a.56.56 0 01-.81.59L12 16.9l-4.26 2.24a.56.56 0 01-.81-.59l.81-4.74-3.44-3.36a.56.56 0 01.31-.96l4.76-.69 2.13-4.31z"/>
+                  </svg>
+                </button>
+                {% endif %}
               </div>
               <div class="flex items-start justify-between gap-3 md:gap-4">
                 <div class="flex-1">
@@ -1220,5 +1241,95 @@
       }
     }
   </script>
+
+  {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+  <script>
+    // Cloud favorites via Supabase. The publishable key is public-safe; access
+    // is gated by RLS + a per-user list_id passphrase kept only in localStorage.
+    const FAV = {
+      url: {{ favorites_config.supabase_url | tojson }},
+      key: {{ favorites_config.supabase_anon_key | tojson }},
+    };
+
+    function favKey(btn) {
+      return btn.getAttribute('data-doi') || btn.getAttribute('data-identifier') || btn.getAttribute('data-title');
+    }
+
+    function getListId(promptIfMissing) {
+      let id = localStorage.getItem('zotwatch_fav_list');
+      if (!id && promptIfMissing) {
+        id = (window.prompt('设置你的收藏口令（只需设一次，所有设备用同一个；也要加到 GitHub secret）：') || '').trim();
+        if (id) localStorage.setItem('zotwatch_fav_list', id);
+      }
+      return id || null;
+    }
+
+    async function favRpc(fn, payload) {
+      const r = await fetch(FAV.url + '/rest/v1/rpc/' + fn, {
+        method: 'POST',
+        headers: { 'apikey': FAV.key, 'Authorization': 'Bearer ' + FAV.key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error('RPC ' + fn + ' failed (' + r.status + ')');
+      const t = await r.text();
+      return t ? JSON.parse(t) : null;
+    }
+
+    function setStar(btn, on) {
+      btn.classList.toggle('faved', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const art = btn.closest('article');
+      if (art) art.setAttribute('data-faved', on ? '1' : '0');
+    }
+
+    async function toggleFavorite(btn) {
+      const listId = getListId(true);
+      if (!listId) return;
+      const wasOn = btn.classList.contains('faved');
+      setStar(btn, !wasOn);  // optimistic
+      try {
+        if (wasOn) {
+          await favRpc('remove_favorite', { p_list_id: listId, p_key: favKey(btn) });
+        } else {
+          await favRpc('add_favorite', {
+            p_list_id: listId,
+            p_doi: btn.getAttribute('data-doi') || null,
+            p_identifier: btn.getAttribute('data-identifier') || null,
+            p_title: btn.getAttribute('data-title'),
+            p_url: btn.getAttribute('data-url') || null,
+            p_venue: btn.getAttribute('data-venue') || null,
+            p_authors: btn.getAttribute('data-authors') || null,
+            p_published: btn.getAttribute('data-published') || null,
+            p_source: btn.getAttribute('data-source') || null,
+          });
+        }
+      } catch (e) {
+        setStar(btn, wasOn);  // revert on failure
+        alert('收藏操作失败：' + e.message);
+      }
+    }
+
+    async function loadFavorites() {
+      const listId = getListId(false);
+      if (!listId) return;
+      let rows;
+      try { rows = await favRpc('get_favorites', { p_list_id: listId }); }
+      catch (e) { return; }
+      const saved = new Set((rows || []).map((r) => r.doi || r.identifier || r.title));
+      document.querySelectorAll('.fav-btn').forEach((b) => { if (saved.has(favKey(b))) setStar(b, true); });
+    }
+
+    function toggleFavOnly(btn) {
+      const on = btn.getAttribute('data-on') !== '1';
+      btn.setAttribute('data-on', on ? '1' : '0');
+      btn.classList.toggle('active', on);
+      document.querySelectorAll('#similarity-list > article').forEach((a) => {
+        a.style.display = (!on || a.getAttribute('data-faved') === '1') ? '' : 'none';
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', loadFavorites);
+  </script>
+  {% endif %}
 </body>
 </html>

@@ -141,6 +141,7 @@ def render_html(
     flagship_works: list[RankedWork] | None = None,
     overall_summaries: dict[str, OverallSummary] | None = None,
     researcher_profile: ResearcherProfile | None = None,
+    favorites_config: dict | None = None,
 ) -> Path:
     """Render HTML report from ranked works.
 
@@ -199,6 +200,7 @@ def render_html(
         researcher_profile=researcher_profile,
         profile_generated_at=profile_generated_at,
         cluster_links=cluster_links,
+        favorites_config=favorites_config or {},
     )
 
     path = Path(output_path)
