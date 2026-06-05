@@ -4,7 +4,6 @@ from .cluster_labeler import ClusterLabeler
 from .deepseek import DeepSeekClient
 from .domain_classifier import DEFAULT_DOMAINS, PaperDomainClassifier
 from .factory import create_llm_client
-from .interest_refiner import InterestRefiner
 from .journal_recommender import GeneratedJournal, JournalRecommender
 from .kimi import KimiClient
 from .library_analyzer import LibraryAnalyzer
@@ -21,7 +20,6 @@ __all__ = [
     "KimiClient",
     "OpenRouterClient",
     "PaperSummarizer",
-    "InterestRefiner",
     "JournalRecommender",
     "GeneratedJournal",
     "OverallSummarizer",

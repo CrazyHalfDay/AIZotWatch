@@ -7,7 +7,6 @@ from .fetch import fetch_candidates
 from .filters import filter_recent, filter_without_abstract, limit_preprints
 from .flagship_filter import GeoscienceGate
 from .ingest import ingest_zotero
-from .interest_ranker import InterestRanker
 from .journal_builder import (
     BuildResult,
     CrossrefJournalVerifier,
@@ -31,7 +30,6 @@ __all__ = [
     "enrich_candidates",
     "DedupeEngine",
     "ProfileRanker",
-    "InterestRanker",
     "JournalScorer",
     "JournalWhitelistBuilder",
     "CrossrefJournalVerifier",

@@ -501,33 +501,6 @@ class Settings(BaseModel):
     profile: ProfileConfig = Field(default_factory=ProfileConfig)
     watch: WatchPipelineConfig = Field(default_factory=WatchPipelineConfig)
 
-    @model_validator(mode="after")
-    def validate_embedding_rerank_coupling(self) -> "Settings":
-        """Ensure embedding and rerank use the same provider when interests are enabled.
-
-        This constraint is only enforced when interests.enabled=true because:
-        - The reranker is only used for interest-based recommendations
-        - If interests are disabled, rerank configuration is ignored
-        - This prevents confusing validation errors for unused configurations
-        """
-        if self.scoring.interests.enabled:
-            if self.scoring.rerank.provider != self.embedding.provider:
-                raise ValueError(
-                    f"Configuration error: When interests.enabled=true, "
-                    f"rerank provider '{self.scoring.rerank.provider}' "
-                    f"must match embedding provider '{self.embedding.provider}'. "
-                    f"Update config.yaml to use the same provider for both.\n\n"
-                    f"Example:\n"
-                    f"  embedding:\n"
-                    f'    provider: "{self.embedding.provider}"\n'
-                    f"  scoring:\n"
-                    f"    rerank:\n"
-                    f'      provider: "{self.embedding.provider}"\n\n'
-                    f"Alternatively, set scoring.interests.enabled=false if you don't need "
-                    f"interest-based recommendations."
-                )
-        return self
-
 
 def load_settings(base_dir: Path | str) -> Settings:
     """Load settings from configuration file."""

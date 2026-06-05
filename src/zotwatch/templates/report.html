@@ -45,7 +45,7 @@
     <div class="content-container py-6 md:py-8">
       <h1 class="text-xl md:text-2xl font-bold text-text-primary">ZotWatch 文献推荐</h1>
       <p class="text-xs md:text-sm text-text-secondary mt-1">
-        共 {{ works|length + (interest_works|length if interest_works else 0) + (followed_works|length if followed_works else 0) + (flagship_works|length if flagship_works else 0) }} 篇论文 ·
+        共 {{ works|length + (followed_works|length if followed_works else 0) + (flagship_works|length if flagship_works else 0) }} 篇论文 ·
         生成于 {{ generated_at.strftime('%Y-%m-%d %H:%M') }} {{ timezone_name }}
       </p>
     </div>
@@ -699,36 +699,6 @@
 
       <div id="overall-summaries" class="section-expand expanded">
       <div class="space-y-4 md:space-y-6">
-        {% if overall_summaries.interest %}
-        <div class="bg-bg-card rounded-lg border border-border-color p-4 md:p-5">
-          <h3 class="text-base font-semibold text-text-primary mb-3 flex items-center gap-2">
-            <svg class="w-4 h-4 text-accent" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
-            </svg>
-            精选推荐总结
-          </h3>
-          <div class="text-sm text-text-primary leading-relaxed space-y-3">
-            <p>{{ overall_summaries.interest.overview }}</p>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {% for topic in overall_summaries.interest.topics %}
-              <div class="border border-border-color rounded-lg p-3 bg-bg-hover/50">
-                <div class="flex items-center justify-between mb-1">
-                  <span class="text-accent font-semibold">{{ topic.topic_name }}</span>
-                  <span class="text-xs text-text-secondary">
-                    {{ topic.paper_count }} 篇
-                    {% if overall_summaries.interest.paper_count %}
-                    · {{ '%.0f'|format((topic.paper_count / overall_summaries.interest.paper_count) * 100) }}%
-                    {% endif %}
-                  </span>
-                </div>
-                <p class="text-sm text-text-primary">{{ topic.description }}</p>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-        </div>
-        {% endif %}
-
         {% if overall_summaries.similarity %}
         <div class="bg-bg-card rounded-lg border border-border-color p-4 md:p-5">
           <h3 class="text-base font-semibold text-text-primary mb-3 flex items-center gap-2">
@@ -764,167 +734,6 @@
   </section>
   {% endif %}
 
-  {% if interest_works %}
-  <section class="py-5 md:py-8 border-b border-border-color">
-    <div class="content-container">
-      <div class="mb-3 md:mb-4">
-        <button id="btn-interest-works" onclick="toggleSection('interest-works')"
-                class="w-full text-left text-lg md:text-xl font-bold text-text-primary flex items-center justify-between group hover:text-accent transition-colors">
-          <span class="flex items-center gap-2 flex-1 min-w-0">
-            <svg class="w-5 h-5 flex-shrink-0 text-accent" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
-            </svg>
-            <span class="truncate">精选推荐</span>
-          </span>
-          <span class="flex items-center gap-1 md:gap-2 flex-shrink-0 ml-2">
-            <span class="hidden md:inline text-xs font-normal text-text-secondary">基于研究兴趣匹配，共 {{ interest_works|length }} 篇</span>
-            <span class="hidden md:inline text-sm font-normal text-text-secondary group-hover:text-accent" id="hint-interest-works">点击收起</span>
-            <svg class="w-5 h-5 md:w-4 md:h-4 text-text-secondary group-hover:text-accent transform transition-transform rotate-180" id="icon-interest-works" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-          </span>
-        </button>
-        <p class="text-xs text-text-secondary mt-1 ml-7 md:hidden">基于研究兴趣匹配，共 {{ interest_works|length }} 篇</p>
-      </div>
-
-      <div id="interest-works" class="section-expand expanded">
-      <div class="space-y-4 md:space-y-5">
-        {% for work in interest_works %}
-        <article class="bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors">
-          <div class="p-4 md:p-5">
-            <div class="mb-3">
-              <div class="flex items-center gap-2 mb-2 flex-wrap">
-                <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-accent/10 text-accent border border-accent/30">
-                  匹配度 {{ '%.0f'|format(work.rerank_score * 100) }}%
-                </span>
-                <span class="text-xs text-text-secondary">{{ work.source }}</span>
-                <span class="text-xs text-text-secondary md:hidden">· {{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</span>
-              </div>
-              <div class="flex items-start justify-between gap-3 md:gap-4">
-                <div class="flex-1">
-                  <h2 class="text-base md:text-lg font-semibold text-text-primary leading-tight">
-                    <a href="{{ work.url or '#' }}" target="_blank" rel="noopener" class="hover:text-accent transition-colors">
-                      {{ work.title }}
-                    </a>
-                  </h2>
-                  {% if work.translated_title %}
-                  <p class="text-sm text-text-secondary mt-0.5 leading-snug">{{ work.translated_title }}</p>
-                  {% endif %}
-                </div>
-                <div class="hidden md:block text-right text-sm text-text-secondary flex-shrink-0">
-                  <div class="font-medium">{{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</div>
-                </div>
-              </div>
-              <div class="mt-1 text-xs text-text-secondary" title="{{ work.venue or '' }}">
-                {{ work.venue or '未知来源' }}
-                {% if work.is_chinese_core %}
-                  <span class="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">中文核心</span>
-                {% elif work.impact_factor %}
-                  <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
-                {% endif %}
-              </div>
-            </div>
-
-            <p class="text-sm text-text-secondary mb-3">
-              {{ work.authors[:5] | join('，') }}{% if work.authors|length > 5 %} 等{% endif %}
-            </p>
-
-            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary mb-4">
-              {% if work.doi %}
-              <span class="flex items-center">
-                <span class="font-medium mr-1">DOI:</span>
-                <a href="https://doi.org/{{ work.doi }}" target="_blank" rel="noopener" class="text-accent hover:text-accent-hover hover:underline">{{ work.doi }}</a>
-              </span>
-              {% elif work.identifier %}
-              <span class="flex items-center">
-                <span class="font-medium mr-1">ID:</span>
-                <span>{{ work.identifier }}</span>
-              </span>
-              {% endif %}
-            </div>
-
-            {% if work.abstract %}
-            <div class="bg-bg-hover/50 rounded-lg p-4 mb-4 border border-border-color">
-              <button id="btn-interest-abstract-{{ loop.index }}" onclick="toggleSection('interest-abstract-{{ loop.index }}')"
-                      class="w-full text-left text-sm font-medium text-text-primary flex items-center justify-between">
-                <span class="flex items-center">
-                  <svg class="w-4 h-4 mr-1.5 text-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                  </svg>
-                  原文摘要
-                </span>
-                <svg class="w-4 h-4 text-text-secondary transform transition-transform" id="icon-interest-abstract-{{ loop.index }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                </svg>
-              </button>
-              <div id="interest-abstract-{{ loop.index }}" class="section-expand collapsed">
-                <p class="text-sm text-text-secondary mt-3 leading-relaxed">{{ work.abstract }}</p>
-              </div>
-            </div>
-            {% endif %}
-
-            {% if work.summary %}
-            <div class="bg-accent/10 rounded-lg p-4 mb-4 border border-accent/30">
-              <h3 class="text-sm font-semibold text-accent mb-3 flex items-center">
-                <svg class="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1H2a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"/>
-                </svg>
-                AI 总结
-              </h3>
-              <div class="space-y-2 text-sm text-text-primary">
-                <p><span class="font-medium text-accent">研究问题：</span>{{ work.summary.bullets.research_question }}</p>
-                <p><span class="font-medium text-accent">研究方法：</span>{{ work.summary.bullets.methodology }}</p>
-                <p><span class="font-medium text-accent">主要发现：</span>{{ work.summary.bullets.key_findings }}</p>
-                <p><span class="font-medium text-accent">创新点：</span>{{ work.summary.bullets.innovation }}</p>
-                {% if work.summary.bullets.relevance_note %}
-                <p><span class="font-medium text-accent">相关性：</span>{{ work.summary.bullets.relevance_note }}</p>
-                {% endif %}
-              </div>
-
-              <div class="mt-3 pt-3 border-t border-accent/30">
-                <button id="btn-interest-detail-{{ loop.index }}" onclick="toggleSection('interest-detail-{{ loop.index }}')"
-                        class="text-xs text-accent hover:text-accent-hover font-medium flex items-center">
-                  <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                  </svg>
-                  查看详细分析
-                </button>
-                <div id="interest-detail-{{ loop.index }}" class="section-expand collapsed mt-3">
-                  <div class="bg-bg-card rounded-lg p-4 text-sm text-text-primary space-y-3 border border-border-color">
-                    <p><span class="font-medium text-text-primary">研究背景：</span>{{ work.summary.detailed.background }}</p>
-                    <p><span class="font-medium text-text-primary">方法详情：</span>{{ work.summary.detailed.methodology_details }}</p>
-                    <p><span class="font-medium text-text-primary">研究结果：</span>{{ work.summary.detailed.results }}</p>
-                    <p><span class="font-medium text-text-primary">局限性：</span>{{ work.summary.detailed.limitations }}</p>
-                    {% if work.summary.detailed.future_directions %}
-                    <p><span class="font-medium text-text-primary">未来方向：</span>{{ work.summary.detailed.future_directions }}</p>
-                    {% endif %}
-                    <p class="text-accent"><span class="font-medium">研究相关性：</span>{{ work.summary.detailed.relevance_to_interests }}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% endif %}
-
-            <div class="pt-4 border-t border-border-color">
-              <div class="flex flex-wrap gap-3 text-xs">
-                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">相似度 {{ '%.2f'|format(work.similarity) }}</span>
-                <span class="px-2 py-1 bg-bg-hover rounded text-text-secondary">
-                  期刊影响力 {{ '%.2f'|format(work.impact_factor_score) }}
-                  {% if work.is_chinese_core %}
-                    <span class="ml-1 text-amber-600">(中文核心期刊)</span>
-                  {% elif work.impact_factor %}
-                    <span class="ml-1 text-blue-600">(IF: {{ '%.1f'|format(work.impact_factor) }})</span>
-                  {% endif %}
-                </span>
-              </div>
-            </div>
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-    </div>
-  </section>
-  {% endif %}
 
   {% if flagship_works %}
   <section class="py-5 md:py-8 border-b border-border-color">
