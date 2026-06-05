@@ -33,6 +33,8 @@ jobs:
       CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
       ELSEVIER_API_KEY: ${{ secrets.ELSEVIER_API_KEY }}
       SPRINGER_API_KEY: ${{ secrets.SPRINGER_API_KEY }}
+      # WeChat daily push (Server酱)
+      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
       # Deploy settings - CHANGE THESE TO YOUR VALUES
       GIT_USER_NAME: 'Yan Tang'
       GIT_USER_EMAIL: '360383464@qq.com'
@@ -94,7 +96,7 @@ jobs:
         run: uv run zotwatch clear-failed-cache
 
       - name: Run ZotWatch
-        run: uv run zotwatch watch --report --rss --top 30
+        run: uv run zotwatch watch --report --rss --notify --top 30
 
       - name: Generate Archive Page
         run: uv run zotwatch archive --days 90

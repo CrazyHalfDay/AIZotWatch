@@ -410,10 +410,25 @@ class OutputConfig(BaseModel):
         supabase_url: str = ""  # e.g. https://xxxx.supabase.co
         supabase_anon_key: str = ""  # Publishable key (sb_publishable_...), public-safe
 
+    class NotifyConfig(BaseModel):
+        """Daily push notification configuration (WeChat via Server酱).
+
+        Sends a compact "today's new papers" digest after each watch run.
+        The sendkey is a secret; supply it via ${SERVERCHAN_SENDKEY}.
+        """
+
+        enabled: bool = False
+        provider: str = "serverchan"  # currently only "serverchan"
+        sendkey: str = ""  # Server酱 SendKey, e.g. "${SERVERCHAN_SENDKEY}"
+        top_n: int = 10  # Max papers listed per section in the push
+        report_url: str = ""  # Link to the full report; falls back to rss.link
+        include_flagship: bool = True  # Include the flagship geoscience section
+
     timezone: str = "UTC"  # IANA timezone name, e.g., "Asia/Shanghai"
     rss: RSSConfig = Field(default_factory=RSSConfig)
     html: HTMLConfig = Field(default_factory=HTMLConfig)
     favorites: FavoritesConfig = Field(default_factory=FavoritesConfig)
+    notify: NotifyConfig = Field(default_factory=NotifyConfig)
 
 
 # Profile Configuration
