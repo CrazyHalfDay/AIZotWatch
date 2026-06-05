@@ -352,22 +352,18 @@ class ProfileRanker:
 
         return ranked
 
-    def rank(self, candidates: list[CandidateWork]) -> list[RankedWork]:
-        """Rank candidates by embedding similarity.
+    def _score_candidates(
+        self, candidates: list[CandidateWork]
+    ) -> list[
+        tuple[CandidateWork, float, float, float, float | None, bool, float | None, float | None, int | None]
+    ]:
+        """Encode candidates and compute their scores against the profile.
 
-        Always use micro k-NN + macro cluster fusion:
-        - similarity = α * S_micro + (1 - α) * S_macro
-        - score = sim_weight * similarity + if_weight * IF
-        Fallback to single-neighbor when clusters or temporal weights are unavailable;
-        fallback to random when the profile is empty.
+        Returns one tuple per candidate:
+        (candidate, score, similarity, if_score, raw_if, is_cn, micro, macro, top_cluster).
+        Assumes a non-empty profile and candidate list. Shared by rank() and
+        score_works() so the scoring math lives in one place.
         """
-        if not candidates:
-            return []
-
-        # Check for empty profile - use random recommendation
-        if self._is_empty_profile():
-            return self._random_rank(candidates)
-
         # Encode candidates using unified interface (caching handled automatically)
         texts = [c.content_for_embedding() for c in candidates]
         vectors = self.vectorizer.encode(texts)
@@ -377,7 +373,6 @@ class ProfileRanker:
         final_weights = self.settings.scoring.final_weights
         use_fusion = self._cluster_scorer is not None
 
-        # First pass: compute all scores
         scores_data: list[
             tuple[CandidateWork, float, float, float, float | None, bool, float | None, float | None, int | None]
         ] = []
@@ -414,17 +409,7 @@ class ProfileRanker:
                 )
 
                 scores_data.append(
-                    (
-                        candidate,
-                        score,
-                        similarity,
-                        if_score,
-                        raw_if,
-                        is_cn,
-                        micro,
-                        macro,
-                        top_cluster,
-                    )
+                    (candidate, score, similarity, if_score, raw_if, is_cn, micro, macro, top_cluster)
                 )
 
         else:
@@ -439,18 +424,62 @@ class ProfileRanker:
                     + final_weights.impact_factor_weight * if_score
                 )
                 scores_data.append(
-                    (
-                        candidate,
-                        score,
-                        similarity,
-                        if_score,
-                        raw_if,
-                        is_cn,
-                        None,
-                        None,
-                        None,
-                    )
+                    (candidate, score, similarity, if_score, raw_if, is_cn, None, None, None)
                 )
+
+        return scores_data
+
+    def score_works(self, candidates: list[CandidateWork], *, label: str) -> list[RankedWork]:
+        """Score candidates against the profile, returning RankedWork with a fixed label.
+
+        Unlike rank(), this applies no similarity gate and no threshold-based
+        relabeling — used for tracks surfaced regardless of library similarity
+        (e.g. the flagship geoscience track), which still benefit from showing a
+        real score/similarity instead of zeros.
+        """
+        if not candidates:
+            return []
+        if self._is_empty_profile():
+            return [
+                RankedWork(**c.model_dump(), score=0.0, similarity=0.0, label=label)
+                for c in candidates
+            ]
+        works: list[RankedWork] = []
+        for candidate, score, similarity, if_score, raw_if, is_cn, micro, macro, top_cluster in self._score_candidates(candidates):
+            works.append(
+                RankedWork(
+                    **candidate.model_dump(),
+                    score=score,
+                    similarity=similarity,
+                    impact_factor_score=if_score,
+                    impact_factor=raw_if,
+                    is_chinese_core=is_cn,
+                    label=label,
+                    micro_score=micro,
+                    macro_score=macro,
+                    matched_cluster_id=top_cluster,
+                )
+            )
+        return works
+
+    def rank(self, candidates: list[CandidateWork]) -> list[RankedWork]:
+        """Rank candidates by embedding similarity.
+
+        Always use micro k-NN + macro cluster fusion:
+        - similarity = α * S_micro + (1 - α) * S_macro
+        - score = sim_weight * similarity + if_weight * IF
+        Fallback to single-neighbor when clusters or temporal weights are unavailable;
+        fallback to random when the profile is empty.
+        """
+        if not candidates:
+            return []
+
+        # Check for empty profile - use random recommendation
+        if self._is_empty_profile():
+            return self._random_rank(candidates)
+
+        scores_data = self._score_candidates(candidates)
+        fusion_config = self.settings.scoring.fusion
 
         # Apply similarity gate: filter out low-relevance candidates early
         if fusion_config.similarity_gate_enabled:

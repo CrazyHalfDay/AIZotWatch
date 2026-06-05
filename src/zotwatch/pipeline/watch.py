@@ -39,7 +39,6 @@ from zotwatch.pipeline import DedupeEngine, ProfileBuilder, ProfileRanker, Profi
 from zotwatch.pipeline.enrich import AbstractEnricher, EnrichmentStats
 from zotwatch.pipeline.fetch import CandidateFetcher
 from zotwatch.pipeline.flagship_filter import GeoscienceGate
-from zotwatch.pipeline.journal_scorer import JournalScorer
 from zotwatch.pipeline.filters import (
     exclude_by_keywords,
     filter_by_interest_similarity,
@@ -804,30 +803,19 @@ class WatchPipeline:
         gate = GeoscienceGate(cfg, vectorizer, llm=llm, model=self.settings.llm.model)
         accepted = gate.select(flagship_cands)
 
+        # Score against the profile for a real similarity/score (display only —
+        # flagship articles are surfaced regardless of how close to the library).
+        ranker = ProfileRanker(self.base_dir, self.settings, embedding_cache=embedding_cache)
+        flagship_works = ranker.score_works(accepted, label="flagship")
+
         # Keep only recent articles, newest first, capped by max_results.
-        accepted = filter_recent(
-            [self._to_flagship_work(c) for c in accepted], days=self.config.recent_days
-        )
+        accepted = filter_recent(flagship_works, days=self.config.recent_days)
         accepted.sort(key=lambda w: (w.published is not None, w.published), reverse=True)
         if cfg.max_results and len(accepted) > cfg.max_results:
             accepted = accepted[: cfg.max_results]
 
         progress("flagship", f"Flagship geoscience: {len(accepted)} articles")
         return accepted, remaining
-
-    def _to_flagship_work(self, candidate: CandidateWork) -> RankedWork:
-        """Convert a flagship candidate into a RankedWork (no personal scoring)."""
-        scorer = JournalScorer(self.base_dir, self.settings.scoring.journal)
-        if_score, raw_if, is_cn = scorer.compute_score(candidate)
-        return RankedWork(
-            **candidate.model_dump(),
-            score=0.0,
-            similarity=0.0,
-            impact_factor_score=if_score,
-            impact_factor=raw_if,
-            is_chinese_core=is_cn,
-            label="flagship",
-        )
 
     def _fetch_followed_authors(
         self,
