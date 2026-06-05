@@ -50,6 +50,7 @@ sources:
     mailto: "${CROSSREF_MAILTO}"
     timeout: 15.0
     max_workers: 8
+    publisher_max_workers: 2  # Cap concurrent Elsevier/Springer requests (avoid 429 rate-limit drops)
     negative_cache_ttl_days: 7  # Skip re-fetching unresolved DOIs for N days
   # Followed authors (OpenAlex API)
   # Fetches all papers by specified authors. First run = full pull, then daily incremental.

@@ -8,6 +8,7 @@ often covered by OpenAlex, which makes OpenAlex the more valuable fallback.
 """
 
 import logging
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -50,6 +51,7 @@ class ApiAbstractFetcher:
         springer_api_key: str = "",
         timeout: float = 15.0,
         max_workers: int = 8,
+        publisher_max_workers: int = 2,
     ):
         """Initialize the API fetcher.
 
@@ -63,6 +65,9 @@ class ApiAbstractFetcher:
             springer_api_key: api_key for the Springer Nature Meta API.
             timeout: Per-request timeout in seconds.
             max_workers: Concurrent workers for batch fetching.
+            publisher_max_workers: Max concurrent publisher-API (Elsevier/
+                Springer) requests. Kept low to avoid rate-limit (429) drops
+                that would otherwise fall through to the browser scraper.
         """
         self.mailto = mailto.strip()
         self.use_crossref = use_crossref
@@ -73,6 +78,10 @@ class ApiAbstractFetcher:
         self.use_springer = use_springer and bool(self.springer_api_key)
         self.timeout = timeout
         self.max_workers = max(1, max_workers)
+        # Throttle publisher APIs independently of the pool: Crossref/OpenAlex
+        # stay fully parallel while Elsevier/Springer are capped to a few
+        # in-flight requests so a burst does not trip their rate limits.
+        self._publisher_semaphore = threading.Semaphore(max(1, publisher_max_workers))
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": self._user_agent()})
 
@@ -139,9 +148,10 @@ class ApiAbstractFetcher:
         url = ELSEVIER_ARTICLE_URL.format(doi=doi)
         headers = {"X-ELS-APIKey": self.elsevier_api_key, "Accept": "application/json"}
         try:
-            resp = self.session.get(
-                url, headers=headers, params={"view": "META_ABS"}, timeout=self.timeout
-            )
+            with self._publisher_semaphore:
+                resp = self.session.get(
+                    url, headers=headers, params={"view": "META_ABS"}, timeout=self.timeout
+                )
             if resp.status_code != 200:
                 return None
             coredata = resp.json().get("full-text-retrieval-response", {}).get("coredata", {})
@@ -162,7 +172,8 @@ class ApiAbstractFetcher:
         """
         params = {"q": f"doi:{doi}", "api_key": self.springer_api_key}
         try:
-            resp = self.session.get(SPRINGER_META_URL, params=params, timeout=self.timeout)
+            with self._publisher_semaphore:
+                resp = self.session.get(SPRINGER_META_URL, params=params, timeout=self.timeout)
             if resp.status_code != 200:
                 return None
             records = resp.json().get("records") or []
