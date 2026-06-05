@@ -773,6 +773,19 @@
                 </span>
                 <span class="text-xs text-text-secondary">{{ work.source }}</span>
                 <span class="text-xs text-text-secondary md:hidden">· {{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</span>
+                {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+                <button type="button" class="fav-btn ml-auto flex-shrink-0 p-0.5 text-text-secondary hover:text-amber-500 transition-colors"
+                        onclick="toggleFavorite(this)" aria-pressed="false" title="收藏/取消收藏"
+                        data-doi="{{ work.doi or '' }}" data-identifier="{{ work.identifier or '' }}"
+                        data-title="{{ work.title }}" data-url="{{ work.url or '' }}"
+                        data-venue="{{ work.venue or '' }}" data-authors="{{ work.authors[:10] | join('; ') }}"
+                        data-published="{{ work.published.strftime('%Y-%m-%d') if work.published else '' }}"
+                        data-source="{{ work.source }}">
+                  <svg class="fav-icon w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5a.56.56 0 011.04 0l2.13 4.31 4.76.69a.56.56 0 01.31.96l-3.44 3.36.81 4.74a.56.56 0 01-.81.59L12 16.9l-4.26 2.24a.56.56 0 01-.81-.59l.81-4.74-3.44-3.36a.56.56 0 01.31-.96l4.76-.69 2.13-4.31z"/>
+                  </svg>
+                </button>
+                {% endif %}
               </div>
               <div class="flex items-start justify-between gap-3 md:gap-4">
                 <div class="flex-1">
@@ -898,6 +911,19 @@
                 {% endif %}
                 <span class="text-xs text-text-secondary">{{ work.source }}</span>
                 <span class="text-xs text-text-secondary md:hidden">· {{ work.published.strftime('%Y-%m-%d') if work.published else '未知' }}</span>
+                {% if favorites_config and favorites_config.enabled and favorites_config.supabase_url %}
+                <button type="button" class="fav-btn ml-auto flex-shrink-0 p-0.5 text-text-secondary hover:text-amber-500 transition-colors"
+                        onclick="toggleFavorite(this)" aria-pressed="false" title="收藏/取消收藏"
+                        data-doi="{{ work.doi or '' }}" data-identifier="{{ work.identifier or '' }}"
+                        data-title="{{ work.title }}" data-url="{{ work.url or '' }}"
+                        data-venue="{{ work.venue or '' }}" data-authors="{{ work.authors[:10] | join('; ') }}"
+                        data-published="{{ work.published.strftime('%Y-%m-%d') if work.published else '' }}"
+                        data-source="{{ work.source }}">
+                  <svg class="fav-icon w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5a.56.56 0 011.04 0l2.13 4.31 4.76.69a.56.56 0 01.31.96l-3.44 3.36.81 4.74a.56.56 0 01-.81.59L12 16.9l-4.26 2.24a.56.56 0 01-.81-.59l.81-4.74-3.44-3.36a.56.56 0 01.31-.96l4.76-.69 2.13-4.31z"/>
+                  </svg>
+                </button>
+                {% endif %}
               </div>
               <div class="flex items-start justify-between gap-3 md:gap-4">
                 <div class="flex-1">
