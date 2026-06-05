@@ -1196,9 +1196,16 @@
       </div>
 
       <div id="similarity-works" class="section-expand expanded">
-      <div class="space-y-4 md:space-y-5">
+      <div class="flex items-center gap-2 mb-3 text-xs">
+        <span class="text-text-secondary">排序：</span>
+        <button id="sort-similarity-score" onclick="sortSimilarityWorks('score')"
+                class="px-2.5 py-1 rounded border border-accent bg-accent/10 text-accent font-medium">按相似度</button>
+        <button id="sort-similarity-date" onclick="sortSimilarityWorks('date')"
+                class="px-2.5 py-1 rounded border border-border-color text-text-secondary hover:text-accent transition-colors">按日期</button>
+      </div>
+      <div id="similarity-list" class="space-y-4 md:space-y-5">
         {% for work in works %}
-        <article class="bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors">
+        <article data-score="{{ work.score }}" data-date="{{ work.published.strftime('%Y-%m-%d') if work.published else '' }}" class="bg-bg-card rounded-lg border border-border-color overflow-hidden hover:border-accent/50 transition-colors">
           <div class="p-4 md:p-5">
             <div class="mb-3">
               <div class="flex items-center gap-2 mb-2 flex-wrap">
@@ -1369,6 +1376,38 @@
         }
         if (hint) hint.textContent = '点击展开';
         if (icon) icon.style.transform = 'rotate(0deg)';
+      }
+    }
+
+    // Reorder the similarity recommendations in place by score or by date.
+    // Keeps both orderings available client-side without re-running the pipeline.
+    function sortSimilarityWorks(by) {
+      const list = document.getElementById('similarity-list');
+      if (!list) return;
+      const items = Array.prototype.slice.call(list.querySelectorAll(':scope > article'));
+      items.sort((a, b) => {
+        const sa = parseFloat(a.getAttribute('data-score')) || 0;
+        const sb = parseFloat(b.getAttribute('data-score')) || 0;
+        if (by === 'date') {
+          const da = a.getAttribute('data-date') || '';
+          const db = b.getAttribute('data-date') || '';
+          if (da !== db) {
+            if (!da) return 1;   // unknown dates sink to the bottom
+            if (!db) return -1;
+            return db.localeCompare(da);  // newest first
+          }
+          return sb - sa;  // tie-break by score
+        }
+        return sb - sa;  // highest score first
+      });
+      items.forEach((it) => list.appendChild(it));
+      const active = 'px-2.5 py-1 rounded border border-accent bg-accent/10 text-accent font-medium';
+      const inactive = 'px-2.5 py-1 rounded border border-border-color text-text-secondary hover:text-accent transition-colors';
+      const scoreBtn = document.getElementById('sort-similarity-score');
+      const dateBtn = document.getElementById('sort-similarity-date');
+      if (scoreBtn && dateBtn) {
+        scoreBtn.className = by === 'date' ? inactive : active;
+        dateBtn.className = by === 'date' ? active : inactive;
       }
     }
   </script>
