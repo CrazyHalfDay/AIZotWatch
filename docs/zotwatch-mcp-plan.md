@@ -35,18 +35,26 @@ WeChat ClawBot  <->  small Python service (iLink long-poll + command router)  <-
   session locked to `aizotwatch` gets "Access denied" and has no `add_repo` tool.
   Next session: select **both** repos, then say "开建 zotwatch-mcp".
 
-## Phase 1 — lightweight bot (deliverable in `zotwatch-mcp`)
+## Phase 1 — lightweight bot (✅ SHIPPED in `zotwatch-mcp`)
+Delivered on branch `claude/focused-einstein-xls3P`. Final layout:
 ```
 zotwatch-mcp/
-├── pyproject.toml          # deps: zotwatch (git) + requests
-├── README.md               # setup + deployment
-├── src/zotwatch_bot/
-│   ├── ilink.py            # iLink long-poll client (receive + reply)
-│   ├── actions.py          # thin wrappers over zotwatch (the 4 capabilities)
-│   ├── router.py           # command parsing + optional LLM intent fallback
-│   └── main.py             # loop: poll -> route -> reply
-└── examples/.env.example
+├── pyproject.toml          # deps: zotwatch (git) + requests + numpy + qrcode
+├── README.md               # setup + commands + Phase 2 deploy notes
+├── examples/.env.example
+└── src/zotwatch_bot/
+    ├── ilink.py            # iLink client: QR login, getupdates, sendmessage
+    ├── actions.py          # thin wrappers over zotwatch (all capabilities)
+    ├── render.py           # plain-text list/result rendering for WeChat
+    ├── router.py           # command parsing + per-chat last-list + LLM fallback
+    ├── config.py           # env-driven BotConfig (ZOTWATCH_DIR, token file, …)
+    └── main.py             # loop: poll -> route -> reply (slow ops off-thread)
 ```
+All capabilities are thin wrappers over existing zotwatch components (no
+duplicated pipeline): `今天`→ArchiveStorage, `抓取`→WatchPipeline, `搜`→FAISS
+library + semantic re-rank of recent archived candidates, `收藏`→ZoteroPusher,
+`总结`→PaperSummarizer, free text→LLM client. The action layer is WeChat-agnostic
+so a future MCP wrapper can reuse it.
 Capabilities / commands (all 4 requested):
 - `今天` / `today` -> today's recommendations (read ArchiveStorage)
 - `抓取` / `trigger` -> run a fresh watch (slow; reply "处理中" then result)
@@ -55,14 +63,23 @@ Capabilities / commands (all 4 requested):
 - `总结 <n>` / `<n>` -> AI summary / Q&A about a paper
 - anything else -> LLM Q&A fallback (reuse zotwatch's LLM client)
 
-### Implementation notes / research items for next session
-- Nail down the iLink connection/auth flow: does `openclaw-weixin-cli install`
-  run a local daemon to talk to, or just register + hand back a token to poll
-  directly? Read the protocol doc + community impl before coding.
-- Per-chat state: remember the "last shown list" so `收藏 3` / `总结 2` can map
-  an index back to a paper (simple in-memory dict keyed by user).
-- 5s reply window: fast queries reply synchronously; slow ops (`trigger`) reply
-  "处理中…" then send the result when ready (verify iLink supports async send).
+### Implementation notes (resolved during Phase 1)
+- iLink flow: no local daemon needed. QR login (`get_bot_qrcode` →
+  `get_qrcode_status`) hands back a `bot_token` + `baseurl`; we then long-poll
+  `ilink/bot/getupdates` (cursor `get_updates_buf`) and reply via
+  `ilink/bot/sendmessage`, echoing the inbound `context_token`. Implemented in
+  `ilink.py` from the community impl; **field names still need live
+  verification in Phase 2.**
+- Per-chat state: implemented as an in-memory `{user_id: [RankedWork]}` dict in
+  `router.py`; `收藏 N` / `总结 N` map the index back to the last shown list.
+- Async send: slow `抓取` replies "处理中…" immediately and pushes the result
+  from a worker thread (`main.py`), so the poll loop never stalls. Reuses the
+  inbound `context_token` for the follow-up send.
+
+### Remaining for next session / Phase 2
+- Verify the iLink field names against a live link (run the QR login once).
+- `uv sync` + smoke test against a real ZotWatch `data/` (couldn't install the
+  3.13 + faiss/voyage deps in the build session; code is source-verified only).
 
 ## References
 - Protocol doc: https://github.com/hao-ji-xing/openclaw-weixin/blob/main/weixin-bot-api.md
@@ -84,10 +101,13 @@ Capabilities / commands (all 4 requested):
   confirmed, but that's the other direction.) If it fails, the bot is
   WeChat-only and has no fallback — would need a CN-located host.
 
-## Done so far (in aizotwatch)
+## Done so far
 - Daily WeChat push via Server酱 (`output/notify.py`, `watch --notify`) — shipped.
 - Flagship real score/similarity — shipped.
+- **Phase 1 lightweight bot in `zotwatch-mcp`** — shipped (see above).
 
 ## Next action
-Start a web session with **both** `aizotwatch` and `zotwatch-mcp` in scope, then
-say "开建 zotwatch-mcp".
+Phase 2: deploy on a VPS. `uv sync` next to a ZotWatch install with built
+`data/` artifacts, run `zotwatch-bot`, scan the QR once, and verify the iLink
+field names against the live link. Then sort out artifact sync (GitHub Actions
+cache vs. running the pipeline on the VPS) and test the cross-border 风控 path.
