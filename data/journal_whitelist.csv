@@ -1,4 +1,5 @@
 issn,title,category,impact_factor
+0028-0836,Nature,MULTIDISCIPLINARY,64.8
 1476-4687,Nature,GENERAL,50.5
 1095-9203,Science,GENERAL,44.7
 2662-138X,Nature Reviews Earth & Environment,GEOSCIENCES,37.2
@@ -11,12 +12,14 @@ issn,title,category,impact_factor
 1752-0894,Nature Geoscience,MULTIDISCIPLINARY,13.6
 1545-4495,Annual Review of Earth and Planetary Sciences,GEOSCIENCES,13
 2375-2548,Science Advances,GENERAL,11.7
+0027-8424,Proceedings of the National Academy of Sciences,MULTIDISCIPLINARY,11.1
 0084-6597,Annual Review of Earth and Planetary Sciences,MULTIDISCIPLINARY,11
 1872-6828,Earth-Science Reviews,GEOSCIENCES,10.8
 0012-8252,Earth-Science Reviews,GEOLOGY,10.8
 1529-6466,Reviews in Mineralogy and Geochemistry,MINERALOGY & GEOCHEMISTRY,9.5
 1943-2666,Reviews in Mineralogy and Geochemistry,MINERALOGY & GEOCHEMISTRY,9.5
 1091-6490,Proceedings of the National Academy of Sciences (PNAS),GENERAL,9.4
+1674-9871,Geoscience Frontiers,GEOSCIENCES,8.9
 2468-6050,Geoscience Frontiers,GEOSCIENCES,8.5
 2328-4277,Earth's Future,GEOSCIENCES,8.2
 2662-4435,Communications Earth & Environment,GEOSCIENCES,8.1
@@ -38,6 +41,7 @@ issn,title,category,impact_factor
 0016-7606,Geological Society of America Bulletin,GEOLOGY,4.5
 0024-4937,Lithos,PETROLOGY,4.5
 1811-5217,Elements,GEOSCIENCES,4.2
+1944-9194,Tectonics,GEOSCIENCES,4.2
 1872-6364,Global and Planetary Change,GEOSCIENCES,4
 1432-1866,Mineralium Deposita,ECONOMIC GEOLOGY,4
 1943-2674,GSA Bulletin,GEOSCIENCES,3.9
