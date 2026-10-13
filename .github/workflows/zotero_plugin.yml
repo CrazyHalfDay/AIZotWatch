@@ -1,0 +1,83 @@
+name: Zotero Plugin
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["zotero-plugin-v*"]
+    paths:
+      - "zotero-plugin/**"
+      - ".github/workflows/zotero_plugin.yml"
+  pull_request:
+    paths:
+      - "zotero-plugin/**"
+      - ".github/workflows/zotero_plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: zotero-plugin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: zotero-plugin/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: zotwatch-xpi
+          path: |
+            zotero-plugin/build/*.xpi
+            zotero-plugin/build/zotwatch-update.json
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/zotero-plugin-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check tag matches package version
+        run: |
+          VERSION=$(node -p "require('./zotero-plugin/package.json').version")
+          if [ "zotero-plugin-v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Download plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: zotwatch-xpi
+          path: dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ZotWatch for Zotero ${{ github.ref_name }}
+          files: |
+            dist/*.xpi
+            dist/zotwatch-update.json

@@ -288,7 +288,9 @@ async function setStatus(work, status) {
 async function dismissVisible() {
   const works = visibleWorks();
   if (!works.length) return;
-  if (!Services.prompt.confirm(window, "ZotWatch", `将当前列表中的 ${works.length} 篇推荐全部标记为已忽略？`)) return;
+  const message = `将当前列表中的 ${works.length} 篇推荐全部标记为已忽略？`;
+  const ok = typeof Services !== "undefined" ? Services.prompt.confirm(window, "ZotWatch", message) : window.confirm(message);
+  if (!ok) return;
   for (const w of works) await api().setStatus(w.id, "dismissed");
   await refresh();
 }

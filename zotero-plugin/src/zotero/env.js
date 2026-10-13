@@ -85,7 +85,7 @@ function itemToPlain(item) {
   return {
     key: item.key,
     itemType: item.itemType,
-    title: field("title"),
+    title: field("title", true),
     abstract: field("abstractNote"),
     doi: normalizeDoi(field("DOI")) || extractDoi(field("extra")),
     issn: field("ISSN"),

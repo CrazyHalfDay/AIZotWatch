@@ -172,7 +172,7 @@ function createEnvironment({ dataDir, items, http }) {
           ...data,
           isRegularItem: () => data.itemType !== "note",
           getField(name, unformatted, baseMapped) {
-            if (name === "publicationTitle") assert.equal(baseMapped, true);
+            if (name === "publicationTitle" || name === "title") assert.equal(baseMapped, true);
             return { title: data.title, abstractNote: data.abstract, DOI: data.doi, ISSN: data.issn, publicationTitle: data.venue, extra: "" }[name] ?? "";
           },
         }));

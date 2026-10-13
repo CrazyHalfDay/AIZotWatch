@@ -43,6 +43,10 @@ ZotWatch 是一个基于 Zotero 文库构建个人研究兴趣画像，并持续
 - **文献导出**：支持导出为 RIS、BibTeX 格式，导入 Zotero/EndNote/Mendeley
 - **推送到 Zotero**：将推荐论文直接推送到 Zotero 文库
 
+### Zotero 插件版
+
+不想部署 GitHub Actions？[`zotero-plugin/`](zotero-plugin/README.md) 是同一套推荐算法的 Zotero 7+ 插件：直接读取本地文库、每天在 Zotero 内自动抓取并推荐新文献、一键加入文库，支持 AI 摘要与标题翻译。安装与使用见 [插件说明](zotero-plugin/README.md)。
+
 ## 快速开始
 
 ### 1. 克隆仓库并安装依赖

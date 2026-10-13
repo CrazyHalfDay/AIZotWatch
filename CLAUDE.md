@@ -302,6 +302,25 @@ DEEPSEEK_API_KEY=your_deepseek_api_key_here
 - `DeepSeekClient` (`llm/deepseek.py`): DeepSeek API client for LLM calls
 - `LLMSummarizer` (`llm/summarizer.py`): Generates structured paper summaries
 
+## Zotero Plugin (`zotero-plugin/`)
+
+A standalone Node project that ports the watch pipeline to a Zotero 7+ plugin
+(bootstrapped, plain JS bundled with esbuild). It reads the local Zotero library
+directly, so no Zotero Web API key is needed.
+
+```bash
+cd zotero-plugin
+npm install     # esbuild is the only dev dependency
+npm test        # node:test, includes a simulated-Zotero lifecycle test
+npm run build   # build/zotwatch-<version>.xpi
+```
+
+- `src/engine.js`: pipeline (profile -> journals -> fetch -> dedupe -> filters -> embed -> rank -> inbox), Zotero-independent; HTTP, storage and library are injected
+- `src/core/`: pure algorithms mirroring the Python modules (`scoring.js` = profile_ranker + cluster_scorer + journal_scorer, `kmeans.js` = profile_clusterer, `dedupe.js`, `filters.js`)
+- `src/zotero/`: the only code touching Zotero globals (HTTP transport, IOUtils storage, library adapter, item creation, menus, scheduler); exposed as `Zotero.ZotWatch`
+- `addon/`: manifest, bootstrap, default prefs (`extensions.zotwatch.*`), preference pane and recommendations window
+- Keep scoring changes in sync with the Python pipeline; the workflow `.github/workflows/zotero_plugin.yml` tests/builds on changes and releases on `zotero-plugin-v*` tags
+
 ## Environment Variables
 
 Required:
