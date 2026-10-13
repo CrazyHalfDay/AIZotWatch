@@ -39,7 +39,7 @@ export async function buildClusters(matrix, weights, { minClusters = 5, maxClust
     assignments = new Int32Array(n);
     k = 1;
   } else {
-    ({ assignments } = await sphericalKMeans(matrix, k, { iterations, seed, yieldEvery: 1 }));
+    ({ assignments } = await sphericalKMeans(matrix, k, { iterations, seed, cooperative: true }));
   }
 
   const dim = matrix.dim;
@@ -131,8 +131,7 @@ export class ProfileRanker {
   }
 
   /** k-NN similarity weighted by temporal weights. */
-  microScore(vec) {
-    const neighbors = this.matrix.topK(vec, this.cfg.knn);
+  microScore(vec, neighbors = this.matrix.topK(vec, this.cfg.knn)) {
     if (!neighbors.length) return 0;
     let num = 0;
     let den = 1e-8;
@@ -159,14 +158,14 @@ export class ProfileRanker {
     return { macro: best / this.maxLogSize, cluster: bestIdx };
   }
 
-  scoreVector(vec) {
+  scoreVector(vec, neighbors) {
     if (this.clusters.length) {
-      const micro = this.microScore(vec);
+      const micro = this.microScore(vec, neighbors);
       const { macro, cluster } = this.macroScore(vec);
       const a = this.cfg.microWeight;
       return { similarity: a * micro + (1 - a) * macro, micro, macro, cluster };
     }
-    const [top] = this.matrix.topK(vec, 1);
+    const [top] = neighbors || this.matrix.topK(vec, 1);
     return { similarity: top ? top.score : 0, micro: null, macro: null, cluster: null };
   }
 
@@ -186,18 +185,21 @@ export class ProfileRanker {
       };
     }
 
+    // Neighbours are searched in small blocks; yielding between blocks keeps Zotero responsive
     const scored = [];
-    const chunk = 40;
-    for (let i = 0; i < works.length; i++) {
-      const w = works[i];
-      const sim = this.scoreVector(w.vector);
-      const js = journalScore(w, this.journals, this.cfg.journal);
-      const score = this.cfg.similarityWeight * sim.similarity + this.cfg.ifWeight * js.ifScore;
-      scored.push({ ...w, ...sim, ...js, score });
-      if ((i + 1) % chunk === 0) {
-        onProgress?.(i + 1, works.length);
-        await yieldToEventLoop();
-      }
+    const block = 8;
+    const k = this.clusters.length ? this.cfg.knn : 1;
+    for (let start = 0; start < works.length; start += block) {
+      const slice = works.slice(start, start + block);
+      const neighbors = this.matrix.topKBlock(slice.map((w) => w.vector), k);
+      slice.forEach((w, j) => {
+        const sim = this.scoreVector(w.vector, neighbors[j]);
+        const js = journalScore(w, this.journals, this.cfg.journal);
+        const score = this.cfg.similarityWeight * sim.similarity + this.cfg.ifWeight * js.ifScore;
+        scored.push({ ...w, ...sim, ...js, score });
+      });
+      onProgress?.(scored.length, works.length);
+      await yieldToEventLoop();
     }
 
     let kept = scored;

@@ -2,7 +2,7 @@
 // Quality is below neural embeddings, but it lets the plugin work out of the
 // box. IDF is fitted on the library each run, so vectors are never cached.
 
-import { normalizeInPlace } from "../core/vector.js";
+import { normalizeInPlace, yieldToEventLoop } from "../core/vector.js";
 
 const STOPWORDS = new Set(
   (
@@ -80,16 +80,19 @@ export function createLocalEmbedder({ dim = 1024 } = {}) {
     },
 
     async embed(texts) {
-      return texts.map((t) => {
+      const out = [];
+      for (let i = 0; i < texts.length; i++) {
+        if (i > 0 && i % 250 === 0) await yieldToEventLoop();
         const vec = new Float32Array(dim);
-        for (const [f, tf] of features(t)) {
+        for (const [f, tf] of features(texts[i])) {
           const idf = Math.log((docCount + 1) / ((docFreq.get(f) || 0) + 1)) + 1;
           const h = fnv1a(f);
           const sign = h & 0x80000000 ? -1 : 1;
           vec[h % dim] += sign * (1 + Math.log(tf)) * idf;
         }
-        return normalizeInPlace(vec);
-      });
+        out.push(normalizeInPlace(vec));
+      }
+      return out;
     },
   };
 }

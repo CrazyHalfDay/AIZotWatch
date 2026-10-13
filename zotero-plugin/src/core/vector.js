@@ -89,11 +89,53 @@ export class Matrix {
     return best;
   }
 
+  /**
+   * Top-k rows for a block of query vectors at once. Each library row is read
+   * once per block instead of once per query, which keeps the scan cache-friendly.
+   * @returns {Array<Array<{index, score}>>}
+   */
+  topKBlock(queries, k) {
+    const { rows, dim, data } = this;
+    const q = queries.length;
+    const best = queries.map(() => []);
+    const sums = new Float64Array(q);
+    for (let r = 0; r < rows; r++) {
+      const off = r * dim;
+      sums.fill(0);
+      for (let j = 0; j < q; j++) {
+        const vec = queries[j];
+        let s0 = 0;
+        let s1 = 0;
+        let d = 0;
+        for (; d + 1 < dim; d += 2) {
+          s0 += data[off + d] * vec[d];
+          s1 += data[off + d + 1] * vec[d + 1];
+        }
+        if (d < dim) s0 += data[off + d] * vec[d];
+        sums[j] = s0 + s1;
+      }
+      for (let j = 0; j < q; j++) insertTopK(best[j], r, sums[j], k);
+    }
+    return best;
+  }
+
   selectRows(indices) {
     const m = new Matrix(indices.length, this.dim);
     indices.forEach((idx, i) => m.data.set(this.row(idx), i * this.dim));
     return m;
   }
+}
+
+/** Insert into a descending top-k list in place. */
+function insertTopK(list, index, score, k) {
+  if (list.length === k && score <= list[k - 1].score) return;
+  let pos = list.length < k ? list.length : k - 1;
+  if (list.length < k) list.push(null);
+  while (pos > 0 && list[pos - 1].score < score) {
+    list[pos] = list[pos - 1];
+    pos--;
+  }
+  list[pos] = { index, score };
 }
 
 /** Deterministic PRNG (mulberry32) so clustering is reproducible. */

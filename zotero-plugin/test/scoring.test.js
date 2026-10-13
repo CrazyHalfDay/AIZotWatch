@@ -165,3 +165,18 @@ test("local embedder separates topics", async () => {
   assert.ok(dot(a, b) > dot(a, c) + 0.1);
   assert.ok(Math.abs(dot(a, a) - 1) < 1e-5);
 });
+
+test("block top-k matches single-query top-k", () => {
+  const rng = createRng(4);
+  const rows = Array.from({ length: 50 }, () => normalizeInPlace(Float32Array.from({ length: 33 }, () => gaussian(rng))));
+  const m = Matrix.fromRows(rows);
+  const queries = rows.slice(0, 5).map((r) => Float32Array.from(r, (x) => x + 0.1 * gaussian(rng)));
+  const block = m.topKBlock(queries, 4);
+  queries.forEach((q, i) => {
+    const single = m.topK(q, 4);
+    assert.deepEqual(block[i].map((n) => n.index), single.map((n) => n.index));
+    block[i].forEach((n, j) => assert.ok(Math.abs(n.score - single[j].score) < 1e-5));
+  });
+  assert.deepEqual(m.topKBlock([queries[0]], 100).length, 1);
+  assert.equal(m.topKBlock([queries[0]], 100)[0].length, 50);
+});

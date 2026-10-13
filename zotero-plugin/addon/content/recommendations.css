@@ -63,7 +63,6 @@ body {
 }
 
 button,
-select,
 input {
   font: inherit;
   color: inherit;
@@ -104,7 +103,6 @@ button.link {
   padding: 2px 6px;
 }
 
-select,
 input[type="search"] {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -232,6 +230,31 @@ input[type="search"] {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented .seg {
+  border: none;
+  border-radius: 0;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.segmented .seg + .seg {
+  border-left: 1px solid var(--border);
+}
+
+.segmented .seg.active {
+  background: var(--consider-bg);
+  color: var(--consider);
+  font-weight: 600;
 }
 
 #search {

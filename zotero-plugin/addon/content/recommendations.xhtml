@@ -36,15 +36,15 @@
       <button type="button" class="tab" data-tab="dismissed">已忽略 <span id="count-dismissed">0</span></button>
     </div>
     <div class="filters">
-      <select id="label-filter" title="按标签筛选">
-        <option value="all">全部</option>
-        <option value="must_read">只看必读</option>
-        <option value="latest">本次新增</option>
-      </select>
-      <select id="sort" title="排序">
-        <option value="score">按推荐分数</option>
-        <option value="date">按发表日期</option>
-      </select>
+      <div class="segmented" id="label-filter">
+        <button type="button" class="seg active" data-value="all">全部</button>
+        <button type="button" class="seg" data-value="must_read">必读</button>
+        <button type="button" class="seg" data-value="latest">本次新增</button>
+      </div>
+      <div class="segmented" id="sort">
+        <button type="button" class="seg active" data-value="score">按分数</button>
+        <button type="button" class="seg" data-value="date">按日期</button>
+      </div>
       <input id="search" type="search" placeholder="搜索标题、作者、期刊…"/>
       <button id="dismiss-visible" type="button" class="link">全部忽略</button>
     </div>

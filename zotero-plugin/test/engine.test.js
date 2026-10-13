@@ -202,6 +202,34 @@ test("LLM translation and summaries are stored in the inbox", async () => {
   assert.equal(best.summary.methodology, "方法");
 });
 
+test("user actions during a run are not overwritten by the run", async () => {
+  let releaseLlm;
+  const llmGate = new Promise((resolve) => (releaseLlm = resolve));
+  let llmCalls = 0;
+  const llm = async (req) => {
+    llmCalls++;
+    await llmGate;
+    const prompt = JSON.parse(req.body).messages[0].content;
+    if (prompt.includes("翻译")) return { choices: [{ message: { content: '["标题"]' } }] };
+    return { choices: [{ message: { content: '{"research_question":"q"}' } }] };
+  };
+  const { engine } = setup({
+    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.summaryTopN": "5" },
+    llm,
+  });
+  const running = engine.run();
+  // Wait until the run has merged its results and is blocked in the LLM step
+  while (llmCalls === 0) await new Promise((r) => setTimeout(r, 5));
+  const inbox = await engine.loadInbox();
+  const target = Object.keys(inbox.works)[0];
+  await engine.updateWork(target, { status: "dismissed" });
+  releaseLlm();
+  await running;
+  const after = await engine.loadInbox();
+  assert.equal(after.works[target].status, "dismissed");
+  assert.ok(after.lastRun.finishedAt);
+});
+
 test("LLM helpers", async () => {
   assert.deepEqual(parseJsonReply('<think>hmm {"a":1}</think>Result: {"a": "x}y", "b": [1,2]} trailing'), { a: "x}y", b: [1, 2] });
   assert.deepEqual(parseJsonReply("```json\n[\"a\"]\n```"), ["a"]);

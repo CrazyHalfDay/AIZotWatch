@@ -24,6 +24,8 @@ const CANDIDATE_CACHE_TTL = 30 * DAY;
 const JOURNAL_CACHE_TTL = 90 * DAY;
 const MIN_ABSTRACT_ITEMS = 10;
 const INBOX_FILE = "inbox.json";
+// One write queue per storage backend, shared by all engine instances
+const inboxLocks = new WeakMap();
 
 export class CancelledError extends Error {
   constructor() {
@@ -294,28 +296,51 @@ export class ZotWatchEngine {
     return inbox && inbox.works ? inbox : { version: 1, works: {}, lastRun: null };
   }
 
-  async saveInbox(inbox) {
-    await this.storage.writeJSON(INBOX_FILE, inbox);
+  /**
+   * Locked read-modify-write of the inbox. Runs and UI actions (add, dismiss,
+   * summarize) may overlap, so every write goes through here; the mutator must
+   * not do slow work such as network calls.
+   */
+  async withInbox(mutator) {
+    const previous = inboxLocks.get(this.storage) || Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => (release = resolve));
+    inboxLocks.set(this.storage, previous.then(() => current));
+    await previous;
+    try {
+      const inbox = await this.loadInbox();
+      const result = await mutator(inbox);
+      await this.storage.writeJSON(INBOX_FILE, inbox);
+      return result;
+    } finally {
+      release();
+    }
   }
 
   async updateWork(id, patch) {
-    const inbox = await this.loadInbox();
-    const work = inbox.works[id];
-    if (!work) throw new Error(`Unknown recommendation: ${id}`);
-    Object.assign(work, patch, patch.status ? { statusAt: this.now() } : {});
-    await this.saveInbox(inbox);
-    return work;
+    return this.withInbox((inbox) => {
+      const work = inbox.works[id];
+      if (!work) throw new Error(`Unknown recommendation: ${id}`);
+      Object.assign(work, patch, patch.status ? { statusAt: this.now() } : {});
+      return work;
+    });
   }
 
   /** Generate (and store) an AI summary for one recommendation. */
   async summarize(id) {
-    const inbox = await this.loadInbox();
-    const work = inbox.works[id];
+    const work = (await this.loadInbox()).works[id];
     if (!work) throw new Error(`Unknown recommendation: ${id}`);
     const llm = createLlmClient(this.settings.llm, this.http, { retry: this.retry });
-    work.summary = await summarizePaper(llm, work);
-    await this.saveInbox(inbox);
-    return work.summary;
+    const summary = await summarizePaper(llm, work);
+    await this.updateWork(id, { summary });
+    return summary;
+  }
+
+  /** Set a field on several works at once (skipping ones removed meanwhile). */
+  async patchWorks(patches) {
+    await this.withInbox((inbox) => {
+      for (const [id, patch] of patches) if (inbox.works[id]) Object.assign(inbox.works[id], patch);
+    });
   }
 
   mergeIntoInbox(inbox, ranked, { runId, runAt, libraryDois }) {
@@ -386,11 +411,11 @@ export class ZotWatchEngine {
     stats.perSource = fetched.perSource;
     checkpoint();
 
-    const inbox = await this.loadInbox();
+    const snapshot = await this.loadInbox();
     // Works the user already added or dismissed are never recommended again
     const handledIds = new Set();
     const handledDois = [];
-    for (const w of Object.values(inbox.works)) {
+    for (const w of Object.values(snapshot.works)) {
       if (w.status === "new") continue;
       handledIds.add(w.id);
       if (w.doi) handledDois.push(w.doi);
@@ -443,27 +468,29 @@ export class ZotWatchEngine {
     checkpoint();
 
     const libraryDois = new Set(items.map((i) => normalizeDoi(i.doi)).filter(Boolean));
-    const known = new Set(Object.keys(inbox.works));
-    this.mergeIntoInbox(inbox, ranked, { runId, runAt, libraryDois });
-    stats.newRecommendations = ranked.filter((w) => !known.has(w.id)).length;
     stats.mustRead = ranked.filter((w) => w.label === "must_read").length;
-
-    // Persist before the (slow, optional) LLM step so results are never lost
     const lastRun = { runId, runAt, stats, thresholds, errors, signature: embedder.signature, finishedAt: null };
-    inbox.lastRun = lastRun;
-    await this.saveInbox(inbox);
+    // Persist before the (slow, optional) LLM step so results are never lost
+    await this.withInbox((inbox) => {
+      const known = new Set(Object.keys(inbox.works));
+      this.mergeIntoInbox(inbox, ranked, { runId, runAt, libraryDois });
+      stats.newRecommendations = ranked.filter((w) => !known.has(w.id)).length;
+      inbox.lastRun = lastRun;
+    });
 
     if (this.settings.llm.enabled && ranked.length) {
-      await this.runLlmTasks(inbox, ranked.map((w) => w.id), { progress, errors, checkpoint });
+      await this.runLlmTasks(ranked.map((w) => w.id), { progress, errors, checkpoint });
     }
 
     lastRun.finishedAt = this.now();
-    await this.saveInbox(inbox);
+    await this.withInbox((inbox) => {
+      inbox.lastRun = lastRun;
+    });
     progress("done", `完成：${stats.recommended} 篇推荐（新增 ${stats.newRecommendations}）`);
     return lastRun;
   }
 
-  async runLlmTasks(inbox, ids, { progress, errors, checkpoint }) {
+  async runLlmTasks(ids, { progress, errors, checkpoint }) {
     let llm;
     try {
       llm = createLlmClient(this.settings.llm, this.http, { retry: this.retry });
@@ -471,17 +498,15 @@ export class ZotWatchEngine {
       errors.push({ stage: "llm", message: e.message });
       return;
     }
+    const inbox = await this.loadInbox();
     const works = ids.map((id) => inbox.works[id]).filter((w) => w && w.status === "new");
 
     if (this.settings.llm.translateTitles) {
-      const todo = works.filter((w) => !w.translatedTitle && !/[一-鿿]/.test(w.title));
+      const todo = works.filter((w) => !w.translatedTitle && !/[\u4e00-\u9fff]/.test(w.title));
       if (todo.length) {
         progress("llm", `翻译 ${todo.length} 个标题…`);
         const translated = await translateTitles(llm, todo.map((w) => w.title));
-        todo.forEach((w, i) => {
-          if (translated[i]) w.translatedTitle = translated[i];
-        });
-        await this.saveInbox(inbox);
+        await this.patchWorks(todo.map((w, i) => [w.id, translated[i] ? { translatedTitle: translated[i] } : {}]));
       }
     }
 
@@ -493,8 +518,8 @@ export class ZotWatchEngine {
       checkpoint();
       progress("llm", `生成 AI 摘要 ${i + 1}/${toSummarize.length}…`, { current: i + 1, total: toSummarize.length });
       try {
-        toSummarize[i].summary = await summarizePaper(llm, toSummarize[i]);
-        await this.saveInbox(inbox);
+        const summary = await summarizePaper(llm, toSummarize[i]);
+        await this.patchWorks([[toSummarize[i].id, { summary }]]);
       } catch (e) {
         errors.push({ stage: "llm", message: `摘要失败：${e.message}` });
         if (i === 0) break; // likely a configuration problem; don't repeat it N times

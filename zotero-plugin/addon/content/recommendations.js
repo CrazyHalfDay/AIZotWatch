@@ -126,6 +126,9 @@ function renderHeader() {
   if (errors.length) {
     notice.hidden = false;
     notice.textContent = `上次运行有 ${errors.length} 个问题：${errors.map((e) => `${e.source || e.stage}：${e.message}`).join("；")}`;
+  } else if (run && !run.stats.fetched) {
+    notice.hidden = false;
+    notice.textContent = "上次运行没有抓取到任何文献：请在「设置 → 关注期刊」中确认期刊列表（或开启 arXiv / EarthArXiv），并检查网络连接。";
   } else if (view.provider === "local" && view.works.length) {
     notice.hidden = false;
     notice.textContent = "提示：当前使用本地向量化（无需 API Key），推荐质量有限。在「设置」中配置 DashScope 或 Voyage 可显著提升效果。";
@@ -200,7 +203,7 @@ function card(work) {
       "div",
       { class: "card-meta" },
       el("span", { class: `badge ${label.cls}`, text: label.text }),
-      el("span", { class: "score", title: `相似度 ${(work.similarity * 100).toFixed(1)}`, text: `${Math.round(work.score * 100)} 分` }),
+      el("span", { class: "score", title: `相似度 ${((work.similarity || 0) * 100).toFixed(1)}`, text: `${Math.round(work.score * 100)} 分` }),
       isLatest && work.status === "new" ? el("span", { class: "badge fresh", text: "新" }) : null,
       el("span", { class: "muted", text: meta.join(" · ") }),
     ),
@@ -290,6 +293,18 @@ async function dismissVisible() {
   await refresh();
 }
 
+/** Wire a group of .seg buttons as a single-choice control. */
+function segmented(id, onSelect) {
+  const group = $(id);
+  for (const button of group.querySelectorAll(".seg")) {
+    button.addEventListener("click", () => {
+      for (const b of group.querySelectorAll(".seg")) b.classList.toggle("active", b === button);
+      onSelect(button.dataset.value);
+      renderList();
+    });
+  }
+}
+
 function onAddonEvent(event) {
   if (event.type === "progress") {
     renderProgress(true, event.progress);
@@ -322,14 +337,8 @@ window.addEventListener("load", () => {
       render();
     });
   }
-  $("label-filter").addEventListener("change", (e) => {
-    state.filter = e.target.value;
-    renderList();
-  });
-  $("sort").addEventListener("change", (e) => {
-    state.sort = e.target.value;
-    renderList();
-  });
+  segmented("label-filter", (value) => (state.filter = value));
+  segmented("sort", (value) => (state.sort = value));
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value;
     renderList();

@@ -3,8 +3,12 @@
 
 import { Matrix, createRng, dot, gaussian, normalizeInPlace, yieldToEventLoop } from "./vector.js";
 
+// Long loops yield to the event loop roughly every this many dot products,
+// so clustering never freezes the Zotero UI for long.
+const WORK_PER_SLICE = 2e7;
+
 /** k-means++ seeding on the unit sphere (distance = 1 - cosine). */
-function seedCentroids(matrix, k, rng) {
+async function seedCentroids(matrix, k, rng, cooperative) {
   const { rows, dim } = matrix;
   const centroids = new Float32Array(k * dim);
   const first = Math.floor(rng() * rows);
@@ -31,14 +35,17 @@ function seedCentroids(matrix, k, rng) {
       pick = Math.floor(rng() * rows);
     }
     centroids.set(matrix.row(pick), c * dim);
+    if (cooperative) await yieldToEventLoop();
   }
   return centroids;
 }
 
-function assign(matrix, centroids, k, assignments) {
+async function assign(matrix, centroids, k, assignments, cooperative) {
   const { rows, dim } = matrix;
+  const rowsPerSlice = Math.max(1, Math.floor(WORK_PER_SLICE / (k * dim)));
   let changed = 0;
   for (let i = 0; i < rows; i++) {
+    if (cooperative && i > 0 && i % rowsPerSlice === 0) await yieldToEventLoop();
     let best = 0;
     let bestScore = -Infinity;
     for (let c = 0; c < k; c++) {
@@ -60,15 +67,15 @@ function assign(matrix, centroids, k, assignments) {
  * Run spherical k-means.
  * @returns {{ centroids: Float32Array, assignments: Int32Array, k: number }}
  */
-export async function sphericalKMeans(matrix, k, { iterations = 20, seed = 42, yieldEvery = 0 } = {}) {
+export async function sphericalKMeans(matrix, k, { iterations = 20, seed = 42, cooperative = false } = {}) {
   const { rows, dim } = matrix;
   k = Math.max(1, Math.min(k, rows));
   const rng = createRng(seed);
-  const centroids = seedCentroids(matrix, k, rng);
+  const centroids = await seedCentroids(matrix, k, rng, cooperative);
   const assignments = new Int32Array(rows).fill(-1);
 
   for (let iter = 0; iter < iterations; iter++) {
-    const changed = assign(matrix, centroids, k, assignments);
+    const changed = await assign(matrix, centroids, k, assignments, cooperative);
     if (changed === 0 && iter > 0) break;
 
     centroids.fill(0);
@@ -88,9 +95,9 @@ export async function sphericalKMeans(matrix, k, { iterations = 20, seed = 42, y
         normalizeInPlace(centroids, c * dim, dim);
       }
     }
-    if (yieldEvery && iter % yieldEvery === 0) await yieldToEventLoop();
+    if (cooperative) await yieldToEventLoop();
   }
-  assign(matrix, centroids, k, assignments);
+  await assign(matrix, centroids, k, assignments, cooperative);
   return { centroids, assignments, k };
 }
 
@@ -122,13 +129,15 @@ export function silhouetteFromDistances(distances, n, labels, k) {
 }
 
 /** Random Gaussian projection to `targetDim` dims (re-normalised), used to speed up k search. */
-export function randomProjection(matrix, targetDim, seed = 7) {
+export async function randomProjection(matrix, targetDim, seed = 7) {
   if (matrix.dim <= targetDim) return matrix;
   const rng = createRng(seed);
   const proj = new Float32Array(matrix.dim * targetDim);
   for (let i = 0; i < proj.length; i++) proj[i] = gaussian(rng);
   const out = new Matrix(matrix.rows, targetDim);
+  const rowsPerSlice = Math.max(1, Math.floor(WORK_PER_SLICE / (matrix.dim * targetDim)));
   for (let r = 0; r < matrix.rows; r++) {
+    if (r > 0 && r % rowsPerSlice === 0) await yieldToEventLoop();
     const rowOff = r * matrix.dim;
     for (let t = 0; t < targetDim; t++) {
       let s = 0;
@@ -173,11 +182,13 @@ export async function chooseClusterCount(
     }
     sample = matrix.selectRows(idx.slice(0, sampleSize));
   }
-  sample = randomProjection(sample, searchDim, seed);
+  sample = await randomProjection(sample, searchDim, seed);
 
   const n = sample.rows;
   const distances = new Float32Array(n * n);
+  const rowsPerSlice = Math.max(1, Math.floor(WORK_PER_SLICE / (n * sample.dim)));
   for (let i = 0; i < n; i++) {
+    if (i > 0 && i % rowsPerSlice === 0) await yieldToEventLoop();
     for (let j = i; j < n; j++) {
       const d = i === j ? 0 : Math.max(0, 1 - dot(sample.data, sample.data, i * sample.dim, j * sample.dim, sample.dim));
       distances[i * n + j] = d;
