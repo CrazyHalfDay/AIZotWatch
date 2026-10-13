@@ -59,11 +59,10 @@ export function collapseWhitespace(value) {
 /** Strip HTML/JATS markup and entities; returns null for empty input. */
 export function cleanHtml(value) {
   if (!value) return null;
-  let text = String(value).replace(/<[^>]+>/g, " ");
-  text = decodeEntities(text);
-  text = collapseWhitespace(text);
-  // Crossref JATS abstracts usually start with an "Abstract" heading
-  text = text.replace(/^(abstract|summary)\s*[:.\-—]?\s+/i, "");
+  // Crossref JATS abstracts usually start with an "Abstract" heading element
+  let text = String(value).replace(/<([\w:]*title)\b[^>]*>\s*(abstract|summary)\s*<\/\1>/gi, " ");
+  text = text.replace(/<[^>]+>/g, " ");
+  text = collapseWhitespace(decodeEntities(text));
   return text || null;
 }
 

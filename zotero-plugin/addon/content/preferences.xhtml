@@ -1,0 +1,133 @@
+<vbox id="zw-prefs-root" class="zw-prefs" onload="ZotWatchPrefs.init()">
+  <groupbox>
+    <label><html:h2>运行</html:h2></label>
+    <html:p class="zw-hint">ZotWatch 根据你的 Zotero 文库构建研究画像，每天从 Crossref / arXiv / EarthArXiv 抓取新文献并按相关性推荐。推荐结果在「工具 → ZotWatch 文献推荐」中查看。</html:p>
+    <checkbox label="每天自动检查新文献（Zotero 运行时在后台进行）" preference="extensions.zotwatch.schedule.autoRun"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-interval">检查间隔（小时）</html:label>
+      <html:input type="number" id="zw-interval" min="1" preference="extensions.zotwatch.schedule.intervalHours"/>
+    </html:div>
+    <hbox class="zw-buttons">
+      <button id="zw-run" label="立即运行并查看推荐"/>
+      <button id="zw-test" label="测试连接"/>
+      <button id="zw-status-refresh" label="刷新状态"/>
+    </hbox>
+    <html:pre id="zw-output" class="zw-output"></html:pre>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>向量化服务（语义相似度）</html:h2></label>
+    <html:div class="zw-grid">
+      <html:label for="zw-embedding-provider">服务商</html:label>
+      <menulist id="zw-embedding-provider" native="true" preference="extensions.zotwatch.embedding.provider">
+        <menupopup>
+          <menuitem label="本地模式（无需 API Key，效果一般）" value="local"/>
+          <menuitem label="阿里云 DashScope（推荐，text-embedding-v4）" value="dashscope"/>
+          <menuitem label="Voyage AI（voyage-3.5）" value="voyage"/>
+          <menuitem label="OpenAI 兼容接口（OpenAI / 硅基流动 / Ollama …）" value="openai"/>
+        </menupopup>
+      </menulist>
+      <html:label for="zw-embedding-key">API Key</html:label>
+      <html:input type="password" id="zw-embedding-key" preference="extensions.zotwatch.embedding.apiKey"/>
+      <html:label for="zw-embedding-model">模型（留空用默认）</html:label>
+      <html:input type="text" id="zw-embedding-model" preference="extensions.zotwatch.embedding.model"/>
+      <html:label for="zw-embedding-baseurl">接口地址（仅 OpenAI 兼容）</html:label>
+      <html:input type="text" id="zw-embedding-baseurl" placeholder="https://api.openai.com/v1" preference="extensions.zotwatch.embedding.baseURL"/>
+    </html:div>
+    <html:p class="zw-hint">更换服务商或模型后，首次运行会重新向量化整个文库。向量缓存保存在 Zotero 数据目录的 zotwatch 文件夹中。</html:p>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>文献来源</html:h2></label>
+    <checkbox label="Crossref（按关注期刊 ISSN 抓取正式发表论文）" preference="extensions.zotwatch.sources.crossref.enabled"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-mailto">Crossref 联系邮箱（礼貌池，推荐填写）</html:label>
+      <html:input type="email" id="zw-mailto" preference="extensions.zotwatch.sources.crossref.mailto"/>
+      <html:label for="zw-crossref-days">回溯天数</html:label>
+      <html:input type="number" id="zw-crossref-days" min="1" preference="extensions.zotwatch.sources.crossref.daysBack"/>
+    </html:div>
+    <checkbox label="arXiv 预印本" preference="extensions.zotwatch.sources.arxiv.enabled"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-arxiv-cats">arXiv 分类（逗号分隔）</html:label>
+      <html:input type="text" id="zw-arxiv-cats" placeholder="physics.geo-ph, astro-ph.EP" preference="extensions.zotwatch.sources.arxiv.categories"/>
+    </html:div>
+    <checkbox label="EarthArXiv 地学预印本" preference="extensions.zotwatch.sources.eartharxiv.enabled"/>
+    <checkbox label="摘要缺失时从 OpenAlex 补全" preference="extensions.zotwatch.sources.openalexAbstracts"/>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>关注期刊</html:h2></label>
+    <checkbox label="自动关注文库中最常见的期刊" preference="extensions.zotwatch.journals.autoFromLibrary"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-auto-top">自动关注的期刊数量</html:label>
+      <html:input type="number" id="zw-auto-top" min="1" preference="extensions.zotwatch.journals.autoTopN"/>
+    </html:div>
+    <html:p class="zw-hint">期刊白名单（CSV：issn,title,category,impact_factor）。影响因子参与打分（权重 20%），未列出的期刊按默认分计算。</html:p>
+    <html:textarea id="zw-whitelist" class="zw-textarea" rows="8" spellcheck="false" preference="extensions.zotwatch.journals.whitelist"></html:textarea>
+    <hbox class="zw-buttons">
+      <button id="zw-journals-suggest" label="从文库生成期刊列表"/>
+      <button id="zw-journals-import" label="导入 CSV 文件…"/>
+      <button id="zw-journals-preset" label="载入地学期刊示例"/>
+    </hbox>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>推荐与过滤</html:h2></label>
+    <html:div class="zw-grid">
+      <html:label for="zw-topk">每次推荐数量</html:label>
+      <html:input type="number" id="zw-topk" min="1" preference="extensions.zotwatch.scoring.topK"/>
+      <html:label for="zw-recent">只保留最近 N 天发表</html:label>
+      <html:input type="number" id="zw-recent" min="0" preference="extensions.zotwatch.scoring.recentDays"/>
+      <html:label for="zw-minsim">最低相似度（留空自动）</html:label>
+      <html:input type="text" id="zw-minsim" placeholder="自动" preference="extensions.zotwatch.scoring.minSimilarity"/>
+      <html:label for="zw-preprint">预印本最大占比（0–1）</html:label>
+      <html:input type="text" id="zw-preprint" preference="extensions.zotwatch.scoring.maxPreprintRatio"/>
+    </html:div>
+    <checkbox label="排除没有摘要的文献" preference="extensions.zotwatch.scoring.requireAbstract"/>
+    <html:label for="zw-include" class="zw-block-label">必须包含的关键词（任一命中即保留，留空不限）</html:label>
+    <html:textarea id="zw-include" class="zw-textarea" rows="2" spellcheck="false" preference="extensions.zotwatch.scoring.includeKeywords"></html:textarea>
+    <html:label for="zw-exclude" class="zw-block-label">排除关键词（逗号或换行分隔）</html:label>
+    <html:textarea id="zw-exclude" class="zw-textarea" rows="2" spellcheck="false" preference="extensions.zotwatch.scoring.excludeKeywords"></html:textarea>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>AI 摘要与标题翻译（可选）</html:h2></label>
+    <checkbox label="启用大模型（OpenAI 兼容接口：OpenRouter / DeepSeek / Kimi / 通义千问 …）" preference="extensions.zotwatch.llm.enabled"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-llm-preset">快速填写</html:label>
+      <menulist id="zw-llm-preset" native="true">
+        <menupopup>
+          <menuitem label="选择服务商…" value=""/>
+          <menuitem label="OpenRouter" value="openrouter"/>
+          <menuitem label="DeepSeek" value="deepseek"/>
+          <menuitem label="Kimi（Moonshot）" value="kimi"/>
+          <menuitem label="阿里云百炼（通义千问）" value="dashscope"/>
+        </menupopup>
+      </menulist>
+      <html:label for="zw-llm-url">接口地址</html:label>
+      <html:input type="text" id="zw-llm-url" preference="extensions.zotwatch.llm.baseURL"/>
+      <html:label for="zw-llm-key">API Key</html:label>
+      <html:input type="password" id="zw-llm-key" preference="extensions.zotwatch.llm.apiKey"/>
+      <html:label for="zw-llm-model">模型</html:label>
+      <html:input type="text" id="zw-llm-model" preference="extensions.zotwatch.llm.model"/>
+      <html:label for="zw-llm-topn">每次自动生成摘要的篇数</html:label>
+      <html:input type="number" id="zw-llm-topn" min="0" preference="extensions.zotwatch.llm.summaryTopN"/>
+    </html:div>
+    <checkbox label="将英文标题翻译为中文" preference="extensions.zotwatch.llm.translateTitles"/>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>加入 Zotero</html:h2></label>
+    <html:div class="zw-grid">
+      <html:label for="zw-collection">保存到分类</html:label>
+      <html:input type="text" id="zw-collection" preference="extensions.zotwatch.output.collection"/>
+      <html:label for="zw-tag">添加标签</html:label>
+      <html:input type="text" id="zw-tag" preference="extensions.zotwatch.output.tag"/>
+    </html:div>
+    <checkbox label="通过 DOI / arXiv 号抓取完整元数据（与「通过标识符添加条目」相同）" preference="extensions.zotwatch.output.useTranslator"/>
+    <checkbox label="把 AI 摘要保存为子笔记" preference="extensions.zotwatch.output.summaryNote"/>
+    <hbox class="zw-buttons">
+      <button id="zw-reset" label="清除 ZotWatch 缓存与推荐记录…"/>
+    </hbox>
+  </groupbox>
+</vbox>

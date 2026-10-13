@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <ListRecords>
+    <record>
+      <header><identifier>oai:eartharxiv.org:id:7002</identifier></header>
+      <metadata>
+        <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <dc:title>Sulfur degassing at mid-ocean ridges</dc:title>
+          <dc:creator>Brown, Tom</dc:creator>
+          <dc:description>Volatile budgets.</dc:description>
+          <dc:date>2024-10-06T08:30:00Z</dc:date>
+          <dc:identifier>7002</dc:identifier>
+        </oai_dc:dc>
+      </metadata>
+    </record>
+    <resumptionToken/>
+  </ListRecords>
+</OAI-PMH>

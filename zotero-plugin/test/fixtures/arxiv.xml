@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <title type="html">ArXiv Query</title>
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2410.01234v2</id>
+    <published>2024-10-02T17:59:59Z</published>
+    <title>Mantle   plumes and
+      &lt;i&gt;subduction&lt;/i&gt; zone dynamics</title>
+    <summary>  We model the interaction of mantle plumes with
+  subducting slabs &amp; arc magmatism.
+    </summary>
+    <author><name>Jane Q. Doe</name></author>
+    <author><name>Wei Zhang</name></author>
+    <arxiv:doi>10.1000/EXAMPLE.42</arxiv:doi>
+    <link href="http://arxiv.org/abs/2410.01234v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2410.01234v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category term="physics.geo-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="physics.geo-ph" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2410.05678v1</id>
+    <published>2024-10-03T10:00:00Z</published>
+    <title>A cross-listed astrophysics paper</title>
+    <summary>Not geophysics.</summary>
+    <author><name>Someone Else</name></author>
+    <link href="http://arxiv.org/abs/2410.05678v1" rel="alternate" type="text/html"/>
+    <arxiv:primary_category term="astro-ph.GA" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="physics.geo-ph" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

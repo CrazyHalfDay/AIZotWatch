@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <responseDate>2024-10-10T00:00:00Z</responseDate>
+  <request verb="ListRecords">https://eartharxiv.org/api/oai/</request>
+  <ListRecords>
+    <record>
+      <header>
+        <identifier>oai:eartharxiv.org:id:7001</identifier>
+        <datestamp>2024-10-05</datestamp>
+      </header>
+      <metadata>
+        <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <dc:title>Copper isotopes in arc magmas</dc:title>
+          <dc:creator>Smith, Anna</dc:creator>
+          <dc:creator>Li, Ming</dc:creator>
+          <dc:description><![CDATA[Chalcophile <element> behaviour in arcs.]]></dc:description>
+          <dc:date>2024-10-05</dc:date>
+          <dc:identifier>https://doi.org/10.31223/X5ABC1</dc:identifier>
+          <dc:identifier>7001</dc:identifier>
+          <dc:subject>Geochemistry</dc:subject>
+        </oai_dc:dc>
+      </metadata>
+    </record>
+    <record>
+      <header status="deleted">
+        <identifier>oai:eartharxiv.org:id:6999</identifier>
+      </header>
+    </record>
+    <resumptionToken cursor="0" completeListSize="2">page2token</resumptionToken>
+  </ListRecords>
+</OAI-PMH>

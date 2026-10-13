@@ -21,7 +21,7 @@ export function reconstructAbstract(inverted) {
  * @returns {Promise<number>} number of abstracts added
  */
 export async function enrichAbstracts(http, works, { mailto = "", batchSize = 50, concurrency = 2, retry = {}, log = () => {} } = {}) {
-  const missing = works.filter((w) => !w.abstract && w.doi && !/[|,]/.test(w.doi));
+  const missing = works.filter((w) => !w.abstract && normalizeDoi(w.doi) && !/[|,]/.test(w.doi));
   if (!missing.length) return 0;
   const batches = [];
   for (let i = 0; i < missing.length; i += batchSize) batches.push(missing.slice(i, i + batchSize));
@@ -47,7 +47,7 @@ export async function enrichAbstracts(http, works, { mailto = "", batchSize = 50
       if (abstract) byDoi.set(normalizeDoi(r.doi), abstract);
     }
     for (const w of batch) {
-      const abstract = byDoi.get(normalizeDoi(w.doi));
+      const abstract = byDoi.get(normalizeDoi(w.doi)) || null;
       if (abstract) {
         w.abstract = abstract;
         added++;

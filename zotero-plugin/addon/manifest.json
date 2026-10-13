@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "ZotWatch",
+  "version": "__VERSION__",
+  "description": "根据你的 Zotero 文库自动推荐最新文献（Crossref / arXiv / EarthArXiv），支持 AI 摘要与一键入库",
+  "homepage_url": "https://github.com/CrazyHalfDay/AIZotWatch",
+  "author": "CrazyHalfDay",
+  "icons": {
+    "48": "content/icons/icon.svg",
+    "96": "content/icons/icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "zotwatch@crazyhalfday.github.io",
+      "update_url": "https://github.com/CrazyHalfDay/AIZotWatch/releases/latest/download/zotwatch-update.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "10.*"
+    }
+  }
+}

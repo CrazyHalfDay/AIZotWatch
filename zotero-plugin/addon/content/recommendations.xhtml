@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" windowtype="zotwatch:recommendations">
+<head>
+  <meta charset="utf-8"/>
+  <title>ZotWatch 文献推荐</title>
+  <link rel="stylesheet" href="chrome://zotwatch/content/recommendations.css"/>
+  <script src="chrome://zotwatch/content/recommendations.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="chrome://zotwatch/content/icons/icon.svg" alt="" width="28" height="28"/>
+      <div>
+        <h1>ZotWatch 文献推荐</h1>
+        <p id="subtitle" class="muted">正在加载…</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="run" class="primary" type="button">立即检查</button>
+      <button id="prefs" type="button">设置</button>
+    </div>
+  </header>
+
+  <section id="progress" class="progress" hidden="hidden">
+    <div class="progress-text"><span id="progress-text">准备中…</span><button id="cancel" type="button" class="link">取消</button></div>
+    <div class="bar"><div id="progress-bar"></div></div>
+  </section>
+
+  <section id="notice" class="notice" hidden="hidden"></section>
+
+  <nav class="toolbar">
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="new">待查看 <span id="count-new">0</span></button>
+      <button type="button" class="tab" data-tab="added">已加入 <span id="count-added">0</span></button>
+      <button type="button" class="tab" data-tab="dismissed">已忽略 <span id="count-dismissed">0</span></button>
+    </div>
+    <div class="filters">
+      <select id="label-filter" title="按标签筛选">
+        <option value="all">全部</option>
+        <option value="must_read">只看必读</option>
+        <option value="latest">本次新增</option>
+      </select>
+      <select id="sort" title="排序">
+        <option value="score">按推荐分数</option>
+        <option value="date">按发表日期</option>
+      </select>
+      <input id="search" type="search" placeholder="搜索标题、作者、期刊…"/>
+      <button id="dismiss-visible" type="button" class="link">全部忽略</button>
+    </div>
+  </nav>
+
+  <main id="list" class="list"></main>
+</body>
+</html>
