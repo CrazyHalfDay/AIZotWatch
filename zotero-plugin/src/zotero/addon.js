@@ -22,7 +22,8 @@ import {
 } from "./env.js";
 
 const PANE_ID = "zotwatch-prefpane";
-const HELP_URL = "https://github.com/CrazyHalfDay/AIZotWatch/blob/main/zotero-plugin/README.md";
+// README of the installed release (each release is tagged zotero-plugin-v<version>)
+const helpURL = (version) => `https://github.com/CrazyHalfDay/AIZotWatch/blob/zotero-plugin-v${version}/zotero-plugin/README.md`;
 const DIALOG_URL = "chrome://zotwatch/content/recommendations.xhtml";
 const DIALOG_TYPE = "zotwatch:recommendations";
 const MENU_ICON = "chrome://zotwatch/content/icons/menu.svg";
@@ -110,7 +111,7 @@ export class ZotWatchAddon {
       scripts: ["chrome://zotwatch/content/preferences.js"],
       stylesheets: ["chrome://zotwatch/content/preferences.css"],
       image: MENU_ICON,
-      helpURL: HELP_URL,
+      helpURL: helpURL(version),
     });
 
     this.registerMenus();

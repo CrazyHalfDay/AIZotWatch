@@ -61,10 +61,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check tag matches package version
+        id: version
         run: |
           VERSION=$(node -p "require('./zotero-plugin/package.json').version")
           if [ "zotero-plugin-v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
             echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes
+        run: |
+          # The section of zotero-plugin/CHANGELOG.md for this version
+          awk -v v="${{ steps.version.outputs.version }}" '
+            /^## / { found = ($2 == v) ; next }
+            found { print }
+          ' zotero-plugin/CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "zotero-plugin/CHANGELOG.md has no section for ${{ steps.version.outputs.version }}" >&2
             exit 1
           fi
 
@@ -77,7 +91,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: ZotWatch for Zotero ${{ github.ref_name }}
+          name: ZotWatch for Zotero ${{ steps.version.outputs.version }}
+          body_path: notes.md
           # The plugin's update_url points at releases/latest
           make_latest: "true"
           files: |

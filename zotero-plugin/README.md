@@ -137,7 +137,8 @@ zotero-plugin/
 ### 发布
 
 1. 修改 `package.json` 中的 `version`
-2. 推送标签 `zotero-plugin-v<version>`（如 `zotero-plugin-v0.1.0`）
-3. GitHub Actions 会运行测试、构建并创建 Release（标记为 latest），附带 `.xpi` 与 `zotwatch-update.json`；已安装的插件会通过 `manifest.json` 中的 `update_url` 自动检查更新
+2. 在 `CHANGELOG.md` 中新增 `## <version>` 一节（会作为 Release 说明，缺少时发布会失败）
+3. 推送标签 `zotero-plugin-v<version>`（如 `zotero-plugin-v0.1.0`）
+4. GitHub Actions 会运行测试、构建并创建 Release（标记为 latest），附带 `.xpi` 与 `zotwatch-update.json`；已安装的插件会通过 `manifest.json` 中的 `update_url` 自动检查更新
 
 兼容的 Zotero 版本范围由 `addon/manifest.json` 的 `strict_min_version` / `strict_max_version`（当前 `10.*`）决定，构建时会同步写入 `zotwatch-update.json`（Zotero 会把更新清单里的范围当作兼容性更新应用，两处必须一致）。新的 Zotero 大版本发布并测试通过后，只需提高 manifest 中的上限。
