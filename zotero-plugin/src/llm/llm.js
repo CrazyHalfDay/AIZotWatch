@@ -93,8 +93,9 @@ export async function translateTitles(llm, titles, { batchSize = 20 } = {}) {
       arr.slice(0, batch.length).forEach((t, i) => {
         if (typeof t === "string" && t.trim()) out[start + i] = t.trim();
       });
-    } catch {
-      // Translation is best-effort; leave titles untranslated on failure
+    } catch (e) {
+      // Translation is best-effort; leave titles untranslated on failure, but never swallow a cancel
+      if (e?.cancelled) throw e;
     }
   }
   return out;

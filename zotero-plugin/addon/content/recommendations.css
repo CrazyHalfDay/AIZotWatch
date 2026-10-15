@@ -1,42 +1,45 @@
 :root {
-  /* Zotero's theme tokens (chrome://zotero-platform/content/zotero.css) with standalone fallbacks */
-  --bg: var(--material-sidepane, #f6f7f9);
-  --panel: var(--material-background, #ffffff);
-  --text: var(--fill-primary, #1d2129);
-  --muted: var(--fill-secondary, #6b7280);
-  --border: var(--fill-quarternary, #e3e6eb);
-  --accent: var(--accent-blue, #2f6fde);
+  /* Zotero's base UI size; Zotero.UIProperties scales the body from it. Zotero's
+     own zotero.css is not loaded: its global rules target ids and class names
+     such as .tabs, .toolbar and #progress-bar that this window also uses. */
+  font-size: 13px;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1d2129;
+  --muted: #6b7280;
+  --border: #e3e6eb;
+  --accent: #2f6fde;
   --accent-text: #ffffff;
   --must: #d9480f;
   --must-bg: #fff1e8;
-  --consider: var(--accent-blue, #2f6fde);
-  --consider-bg: var(--accent-blue10, #eaf1fe);
-  --ignore: var(--fill-secondary, #6b7280);
-  --ignore-bg: var(--fill-quinary, #f0f1f3);
+  --consider: #2f6fde;
+  --consider-bg: #eaf1fe;
+  --ignore: #6b7280;
+  --ignore-bg: #f0f1f3;
   --fresh: #2b8a3e;
   --fresh-bg: #e6f6ea;
-  --summary-bg: var(--fill-quinary, #f4f7fb);
+  --summary-bg: #f4f7fb;
   --error: #c92a2a;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: var(--material-sidepane, #1b1d21);
-    --panel: var(--material-background, #24272c);
-    --text: var(--fill-primary, #e8eaed);
-    --muted: var(--fill-secondary, #9aa1ab);
-    --border: var(--fill-quarternary, #363a41);
-    --accent: var(--accent-blue, #5b8ef0);
+    --bg: #1b1d21;
+    --panel: #24272c;
+    --text: #e8eaed;
+    --muted: #9aa1ab;
+    --border: #363a41;
+    --accent: #5b8ef0;
     --must: #ff8a4c;
     --must-bg: #3a2418;
-    --consider: var(--accent-blue, #7aa5f5);
-    --consider-bg: var(--accent-blue10, #1f2b40);
-    --ignore: var(--fill-secondary, #9aa1ab);
-    --ignore-bg: var(--fill-quinary, #2d3036);
+    --consider: #7aa5f5;
+    --consider-bg: #1f2b40;
+    --ignore: #9aa1ab;
+    --ignore-bg: #2d3036;
     --fresh: #69db7c;
     --fresh-bg: #1d3323;
-    --summary-bg: var(--fill-quinary, #1f2329);
+    --summary-bg: #1f2329;
     --error: #ff8787;
   }
 }
@@ -57,6 +60,7 @@ body {
   background: var(--bg);
   color: var(--text);
   /* Zotero.UIProperties sets the body font size from Zotero's font-size preference */
+  font-size: 1rem;
   font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   line-height: 1.5;
 }

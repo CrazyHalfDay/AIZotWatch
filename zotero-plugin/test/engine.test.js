@@ -230,6 +230,40 @@ test("user actions during a run are not overwritten by the run", async () => {
   assert.ok(after.lastRun.finishedAt);
 });
 
+test("a cancel during best-effort steps is reported as a cancel", async () => {
+  const { CancelledRequestError } = await import("../src/core/http.js");
+  // Journal lookup: venues without ISSN trigger Crossref /journals requests
+  const items = libraryItems().map((i) => ({ ...i, issn: "" }));
+  let lookups = 0;
+  const http = mockHttp([
+    ["https://api.crossref.org/journals", () => {
+      lookups++;
+      throw new CancelledRequestError();
+    }],
+  ]);
+  const settings = loadSettings((k) => ({ "embedding.provider": "local" })[k]);
+  const engine = new ZotWatchEngine({ http, storage: createMemoryStorage(), library: { getItems: async () => items }, settings, now: () => NOW, retry: noSleep });
+  await assert.rejects(engine.resolveJournals(items), (e) => e.cancelled === true);
+  assert.equal(lookups, 1, "no further lookups after the cancel");
+
+  // First AI summary cancelled: the run must not finish as a success
+  const llm = () => {
+    throw new CancelledRequestError();
+  };
+  const { engine: llmEngine } = setup({
+    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.translateTitles": false },
+    llm,
+  });
+  await assert.rejects(llmEngine.run(), (e) => e.cancelled === true);
+
+  // Title translation cancelled
+  const { engine: trEngine } = setup({
+    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.summaryTopN": "0" },
+    llm,
+  });
+  await assert.rejects(trEngine.run(), (e) => e.cancelled === true);
+});
+
 test("LLM helpers", async () => {
   assert.deepEqual(parseJsonReply('<think>hmm {"a":1}</think>Result: {"a": "x}y", "b": [1,2]} trailing'), { a: "x}y", b: [1, 2] });
   assert.deepEqual(parseJsonReply("```json\n[\"a\"]\n```"), ["a"]);

@@ -38,6 +38,7 @@ export async function enrichAbstracts(http, works, { mailto = "", batchSize = 50
     try {
       data = await getJson(http, url, retry);
     } catch (e) {
+      if (e?.cancelled) throw e;
       log(`OpenAlex batch failed: ${e.message}`);
       return;
     }

@@ -30,8 +30,10 @@ export function getOrCreateCollection(libraryID, name) {
   const lockKey = `${libraryID}\u0000${name}`;
   if (!collectionLocks.has(lockKey)) {
     const pending = (async () => {
-      // Recursive: also find the collection if the user moved it under another one
-      const existing = Zotero.Collections.getByLibrary(libraryID, true).find((c) => c.name === name);
+      // Prefer a top-level collection; otherwise accept one the user moved under another
+      const existing =
+        Zotero.Collections.getByLibrary(libraryID).find((c) => c.name === name) ||
+        Zotero.Collections.getByLibrary(libraryID, true).find((c) => c.name === name);
       if (existing) return existing;
       const collection = new Zotero.Collection({ name, libraryID });
       await collection.saveTx();

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CancelledRequestError, getJson, retryAfterMs } from "../src/core/http.js";
+import { CancelledRequestError, createCancelSignal, getJson, mapWithConcurrency, retryAfterMs } from "../src/core/http.js";
 import { fetchArxiv, parseArxivFeed } from "../src/sources/arxiv.js";
 import { fetchCrossref, parseCrossrefItem, resolveJournalIssns } from "../src/sources/crossref.js";
 import { fetchEartharxiv, parseOaiPage } from "../src/sources/eartharxiv.js";
@@ -169,4 +169,44 @@ test("retries honour Retry-After and never retry a cancelled request", async () 
   };
   await assert.rejects(getJson(cancelling, "https://x.test/b", { sleep: async () => {} }), (e) => e.cancelled === true);
   assert.equal(calls, 1);
+});
+
+test("cancelling ends a retry wait and blocks later requests", async () => {
+  const signal = createCancelSignal();
+  let calls = 0;
+  const transport = {
+    signal,
+    async request() {
+      signal.throwIfCancelled();
+      calls++;
+      return { status: 429, data: null, retryAfter: "30" };
+    },
+  };
+  // A real (long) sleep: only the cancel can end it
+  const pending = getJson(transport, "https://x.test/c", { sleep: (ms) => new Promise((r) => setTimeout(r, ms)) });
+  await new Promise((r) => setTimeout(r, 10));
+  signal.cancel();
+  await assert.rejects(pending, (e) => e.cancelled === true);
+  assert.equal(calls, 1);
+  await assert.rejects(getJson(transport, "https://x.test/d"), (e) => e.cancelled === true);
+  assert.equal(calls, 1, "no request after cancel");
+
+  const late = [];
+  signal.onCancel(() => late.push("ran"));
+  assert.deepEqual(late, ["ran"], "listeners added after cancel run immediately");
+});
+
+test("mapWithConcurrency stops handing out work after a failure", async () => {
+  const started = [];
+  await assert.rejects(
+    mapWithConcurrency([1, 2, 3, 4, 5, 6], 2, async (n) => {
+      started.push(n);
+      await new Promise((r) => setTimeout(r, n === 1 ? 1 : 20));
+      if (n === 1) throw new Error("boom");
+      return n;
+    }),
+    /boom/,
+  );
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(started, [1, 2]);
 });

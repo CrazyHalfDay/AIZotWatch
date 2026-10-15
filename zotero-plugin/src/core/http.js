@@ -42,6 +42,59 @@ export class CancelledRequestError extends Error {
   }
 }
 
+/**
+ * Cancellation signal shared by every request of one run (AbortController is
+ * not available in Zotero's plugin sandbox). Once cancelled, in-flight requests
+ * are aborted through their registered cancellers, retry waits end early and
+ * new requests fail immediately.
+ */
+export function createCancelSignal() {
+  const listeners = new Set();
+  const signal = {
+    cancelled: false,
+    cancel() {
+      if (signal.cancelled) return;
+      signal.cancelled = true;
+      for (const fn of [...listeners]) {
+        try {
+          fn();
+        } catch {
+          // A failing canceller must not stop the others
+        }
+      }
+      listeners.clear();
+    },
+    /** Register `fn` to run on cancel; returns an unregister function. */
+    onCancel(fn) {
+      if (signal.cancelled) {
+        fn();
+        return () => {};
+      }
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    throwIfCancelled() {
+      if (signal.cancelled) throw new CancelledRequestError();
+    },
+  };
+  return signal;
+}
+
+/** Sleep that ends early with CancelledRequestError when `signal` is cancelled. */
+async function cancellableSleep(sleep, ms, signal) {
+  if (!signal) return sleep(ms);
+  signal.throwIfCancelled();
+  let unregister = () => {};
+  const cancelled = new Promise((_, reject) => {
+    unregister = signal.onCancel(() => reject(new CancelledRequestError()));
+  });
+  try {
+    await Promise.race([sleep(ms), cancelled]);
+  } finally {
+    unregister();
+  }
+}
+
 /** Parse a Retry-After header (seconds or HTTP date) into milliseconds. */
 export function retryAfterMs(value, now = Date.now()) {
   if (value === undefined || value === null || value === "") return null;
@@ -59,13 +112,15 @@ const MAX_RETRY_AFTER = 60000;
  * Resolves with `data` for 2xx responses, throws HttpError otherwise.
  */
 export async function request(transport, options, { retries = 2, baseDelay = 2000, sleep = defaultSleep } = {}) {
+  const { signal } = transport;
   let lastError;
   let serverDelay = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) {
       const backoff = baseDelay * 2 ** (attempt - 1);
-      await sleep(serverDelay !== null ? Math.min(Math.max(serverDelay, backoff), MAX_RETRY_AFTER) : backoff);
+      await cancellableSleep(sleep, serverDelay !== null ? Math.min(Math.max(serverDelay, backoff), MAX_RETRY_AFTER) : backoff, signal);
     }
+    signal?.throwIfCancelled();
     let res;
     try {
       res = await transport.request({ method: "GET", responseType: "json", timeout: 60000, ...options });
@@ -106,14 +161,23 @@ export function postJson(transport, url, body, { headers = {}, timeout, ...retry
   );
 }
 
-/** Run async tasks with bounded concurrency, preserving result order. */
+/**
+ * Run async tasks with bounded concurrency, preserving result order. After the
+ * first failure no new items are started (running ones finish on their own).
+ */
 export async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;
+  let failed = false;
   const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (next < items.length) {
+    while (!failed && next < items.length) {
       const idx = next++;
-      results[idx] = await fn(items[idx], idx);
+      try {
+        results[idx] = await fn(items[idx], idx);
+      } catch (e) {
+        failed = true;
+        throw e;
+      }
     }
   });
   await Promise.all(workers);

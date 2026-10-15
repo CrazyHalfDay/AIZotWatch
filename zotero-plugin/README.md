@@ -18,7 +18,7 @@
 
 ## 安装
 
-支持 **Zotero 7、8、9、10**（已对照 Zotero 10.0 源码逐项核对所用接口）。在 Zotero 8 及以上版本中，菜单通过官方的 `Zotero.MenuManager` 注册，菜单项会显示待查看推荐的数量；Zotero 7 上则直接插入「工具」菜单。
+支持 **Zotero 7、8、9、10**（已对照 Zotero 7.0 / 10.0 源码逐项核对所用接口）。在 Zotero 9 及以上版本中，菜单通过官方的 `Zotero.MenuManager` 注册（带图标，随界面语言显示中文或英文）；Zotero 7、8 上则直接在「工具」菜单中插入纯文本菜单项（这两个版本里插件的本地化文件会影响主窗口其他文字的语言，所以不使用）。两种方式下菜单项都会显示待查看推荐的数量。
 
 1. 下载 `.xpi` 文件：
    - 正式版本：仓库的 [Releases](https://github.com/CrazyHalfDay/AIZotWatch/releases) 页面（`zotero-plugin-v*` 标签）
@@ -71,7 +71,7 @@ Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 
 
 算法细节与 AIZotWatch 的 [docs/algorithm.md](../docs/algorithm.md) 一致：聚类采用球面 k-means，按 Silhouette 系数在 `[max(5, √N/3), min(35, √N)]` 范围内选择 k（偏向更细粒度）；宏观分为 `max_k(sim_k × ln(1+E_k)) / max_k ln(1+E_k)`；动态阈值取当批分数的第 95 / 70 百分位并设下限。
 
-为了不阻塞 Zotero 界面，聚类和打分计算会分段让出主线程（单次阻塞 < 100 ms）。点击「取消」或停用/升级插件时，正在进行的网络请求会被立即中止。
+为了不阻塞 Zotero 界面，聚类和打分计算会分段让出主线程（单次阻塞 < 100 ms）。点击「取消」或停用/升级插件时，本次运行中正在进行和正在等待重试的网络请求都会被立即中止，之后也不会再发出新请求；你手动发起的操作（如单篇 AI 摘要、测试连接）不受影响。
 
 后台自动运行发现新推荐时会弹出提示。Zotero 10 的提示框依附于主窗口（不再置顶），所以如果当时 Zotero 不在前台，提示会等到你切回 Zotero 时再显示，并一直保留到点击为止。
 
@@ -132,7 +132,7 @@ zotero-plugin/
 └── scripts/build.mjs       # 打包 + 生成 .xpi（零依赖 zip 实现）
 ```
 
-`src/engine.js` 的所有外部依赖（HTTP、存储、文库）都通过参数注入，因此核心流程可以完全在 Node 中测试；`test/addon.test.js` 则用模拟的 Zotero API 加载真正打包出来的插件，分别按 Zotero 10（MenuManager、设置面板脚本运行在独立沙箱）和 Zotero 7（直接插入菜单）走完「启动 → 注册设置面板 → 添加菜单 → 运行 → 取消 → 加入文库 → 关闭」的完整流程。
+`src/engine.js` 的所有外部依赖（HTTP、存储、文库）都通过参数注入，因此核心流程可以完全在 Node 中测试；`test/addon.test.js` 则用模拟的 Zotero API 加载真正打包出来的插件，分别按 Zotero 10（MenuManager、设置面板脚本运行在独立沙箱）、Zotero 8 和 Zotero 7（直接插入菜单）走完「启动 → 注册设置面板 → 添加菜单 → 运行 → 取消 → 加入文库 → 关闭」的完整流程，并验证关闭插件时会先等待正在进行的运行结束。
 
 ### 发布
 

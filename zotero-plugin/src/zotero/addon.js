@@ -3,6 +3,7 @@
 
 /* global Zotero, Services */
 
+import { createCancelSignal } from "../core/http.js";
 import { libraryVenues, parseWhitelist, serializeWhitelist } from "../core/journals.js";
 import { CancelledError, ZotWatchEngine } from "../engine.js";
 import { createEmbedder } from "../embedding/providers.js";
@@ -32,6 +33,10 @@ const CHECK_INTERVAL = 30 * 60 * 1000;
 const RETRY_AFTER_FAILURE = 2 * 3600 * 1000;
 const SHUTDOWN_GRACE = 5000;
 const QUIT_GRACE = 1500;
+// Zotero 9 registers plugin Fluent files with a per-file fallback. On 7/8 a
+// main-window FTL missing for the UI locale would switch the whole window to
+// English, so older versions get plain-text menu labels instead.
+const MIN_FLUENT_MENU_VERSION = 9;
 const DOM_MENU_IDS = ["zotwatch-menu-separator", "zotwatch-menu-open", "zotwatch-menu-run"];
 
 /** Wait for `promise` to settle, but at most `ms` milliseconds (leaves no timer behind). */
@@ -39,6 +44,20 @@ async function settleWithin(promise, ms) {
   let timer;
   await Promise.race([promise.catch(() => {}), new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
   clearTimeout(timer);
+}
+
+/** Plain-text menu labels for Zotero 7/8 (no Fluent in the main window there). */
+export function plainMenuLabels(count, locale) {
+  if (/^zh/i.test(locale || "")) {
+    return {
+      open: count > 0 ? `ZotWatch 文献推荐（${count} 篇待查看）…` : "ZotWatch 文献推荐…",
+      run: "ZotWatch：立即检查新文献",
+    };
+  }
+  return {
+    open: count > 0 ? `ZotWatch Recommendations (${count} new)…` : "ZotWatch Recommendations…",
+    run: "ZotWatch: Check for New Papers",
+  };
 }
 
 /** ProgressWindow parses its text as markup; keep arbitrary messages inert. */
@@ -52,14 +71,18 @@ export class ZotWatchAddon {
     this.version = null;
     this.rootURI = null;
     this.running = null;
+    this.runSignal = null;
     this.progress = null;
-    this.cancelled = false;
     this.listeners = new Set();
     this.timers = [];
     this.storage = null;
+    // Requests made for UI actions (manual summary, connection test, ...) use
+    // their own signal, so cancelling a run never aborts them
+    this.uiSignal = null;
     this.transport = null;
-    this.cancellers = new Set();
+    this.shutdownGraceMs = SHUTDOWN_GRACE;
     this.whitelist = "";
+    this.whitelistError = null;
     this.pendingCount = 0;
     this.menuKey = null;
     this.windowHooks = new Map();
@@ -74,7 +97,8 @@ export class ZotWatchAddon {
     this.rootURI = rootURI;
     await Zotero.initializationPromise;
     this.storage = createZoteroStorage();
-    this.transport = createZoteroTransport({ cancellers: this.cancellers });
+    this.uiSignal = createCancelSignal();
+    this.transport = createZoteroTransport({ signal: this.uiSignal });
     await this.loadWhitelist();
     Zotero.ZotWatch = this;
 
@@ -95,7 +119,7 @@ export class ZotWatchAddon {
     }
     await this.refreshPendingCount().catch((e) => Zotero.logError(e));
     this.startScheduler();
-    log(`started ${version}${this.menuKey ? " (MenuManager)" : ""}`);
+    log(`started ${version} on Zotero ${Zotero.version}${this.menuKey ? " (MenuManager)" : ""}`);
   }
 
   /**
@@ -105,7 +129,8 @@ export class ZotWatchAddon {
   async shutdown({ appShutdown = false } = {}) {
     this.stopScheduler();
     this.cancelRun();
-    if (this.running) await settleWithin(this.running, appShutdown ? QUIT_GRACE : SHUTDOWN_GRACE);
+    this.uiSignal?.cancel();
+    if (this.running) await settleWithin(this.running, appShutdown ? QUIT_GRACE : this.shutdownGraceMs);
     if (appShutdown) return;
 
     if (this.menuKey) {
@@ -122,9 +147,10 @@ export class ZotWatchAddon {
 
   // ------------------------------------------------------------------ menus
 
-  /** Zotero 8+: register the Tools menu items through Zotero.MenuManager. */
+  /** Zotero 9+: register the Tools menu items through Zotero.MenuManager. */
   registerMenus() {
     if (typeof Zotero.MenuManager?.registerMenu !== "function") return;
+    if (Number.parseInt(Zotero.version, 10) < MIN_FLUENT_MENU_VERSION) return;
     const key = Zotero.MenuManager.registerMenu({
       menuID: "zotwatch-tools",
       pluginID: this.id,
@@ -134,7 +160,7 @@ export class ZotWatchAddon {
         {
           menuType: "menuitem",
           l10nID: "zotwatch-menu-open",
-          l10nArgs: this.menuArgs(),
+          // l10nArgs is set in onShowing (Zotero 8 only accepted objects here)
           icon: MENU_ICON,
           onShowing: (event, context) => context.setL10nArgs(this.menuArgs()),
           onCommand: () => this.openRecommendations(),
@@ -162,28 +188,32 @@ export class ZotWatchAddon {
 
   addToWindow(win) {
     const doc = win.document;
-    win.MozXULElement?.insertFTLIfNeeded(MAIN_WINDOW_FTL);
-    if (this.menuKey || this.windowHooks.has(win)) return;
+    if (this.menuKey) {
+      // MenuManager items are labelled through this Fluent file
+      win.MozXULElement?.insertFTLIfNeeded(MAIN_WINDOW_FTL);
+      return;
+    }
+    if (this.windowHooks.has(win)) return;
 
-    // Zotero 7: inject the menu items into the Tools menu ourselves
+    // Zotero 7/8: inject plain-text menu items into the Tools menu ourselves
     const popup = doc.getElementById("menu_ToolsPopup");
     if (!popup || doc.getElementById(DOM_MENU_IDS[1])) return;
+    const labels = () => plainMenuLabels(this.pendingCount, Services.locale?.appLocaleAsBCP47);
     const separator = doc.createXULElement("menuseparator");
     separator.id = DOM_MENU_IDS[0];
     const open = doc.createXULElement("menuitem");
     open.id = DOM_MENU_IDS[1];
-    open.setAttribute("data-l10n-id", "zotwatch-menu-open");
-    open.setAttribute("data-l10n-args", this.menuArgs());
+    open.setAttribute("label", labels().open);
     open.addEventListener("command", () => this.openRecommendations());
     const run = doc.createXULElement("menuitem");
     run.id = DOM_MENU_IDS[2];
-    run.setAttribute("data-l10n-id", "zotwatch-menu-run");
+    run.setAttribute("label", labels().run);
     run.addEventListener("command", () => this.runFromMenu());
     popup.append(separator, open, run);
 
     const onShowing = (event) => {
       if (event.target !== popup) return;
-      open.setAttribute("data-l10n-args", this.menuArgs());
+      open.setAttribute("label", labels().open);
       run.disabled = !!this.running;
     };
     popup.addEventListener("popupshowing", onShowing);
@@ -240,9 +270,9 @@ export class ZotWatchAddon {
     return settings;
   }
 
-  createEngine(settings = this.getSettings()) {
+  createEngine(settings = this.getSettings(), http = this.transport) {
     return new ZotWatchEngine({
-      http: this.transport,
+      http,
       storage: this.storage,
       library: createZoteroLibrary(),
       settings,
@@ -273,9 +303,11 @@ export class ZotWatchAddon {
   /** Run the watch pipeline once (concurrent calls share the same run). */
   runNow({ background = false } = {}) {
     if (this.running) return this.running;
-    this.cancelled = false;
     setPref("schedule.lastAttempt", String(Date.now()));
-    const engine = this.createEngine();
+    // Each run gets its own signal: cancelling it aborts only this run's requests
+    const signal = createCancelSignal();
+    this.runSignal = signal;
+    const engine = this.createEngine(this.getSettings(), createZoteroTransport({ signal }));
 
     this.running = (async () => {
       this.emit({ type: "start" });
@@ -285,7 +317,7 @@ export class ZotWatchAddon {
             this.progress = p;
             this.emit({ type: "progress", progress: p });
           },
-          isCancelled: () => this.cancelled,
+          isCancelled: () => signal.cancelled,
         });
         setPref("schedule.lastRun", String(Date.now()));
         await this.refreshPendingCount().catch(() => {});
@@ -299,7 +331,7 @@ export class ZotWatchAddon {
         }
         return result;
       } catch (e) {
-        if (e instanceof CancelledError || e?.cancelled || this.cancelled) {
+        if (e instanceof CancelledError || e?.cancelled || signal.cancelled) {
           this.emit({ type: "cancelled" });
           return null;
         }
@@ -309,24 +341,18 @@ export class ZotWatchAddon {
         throw e;
       } finally {
         this.running = null;
+        this.runSignal = null;
         this.progress = null;
+        // Results may have been merged into the inbox before a cancel or failure
+        await this.refreshPendingCount().catch(() => {});
       }
     })();
     return this.running;
   }
 
-  /** Stop the current run: set the flag checked between stages and abort open requests. */
+  /** Stop the current run: abort its open requests, end retry waits and stop at the next stage. */
   cancelRun() {
-    if (!this.running) return;
-    this.cancelled = true;
-    for (const cancel of [...this.cancellers]) {
-      try {
-        cancel();
-      } catch (e) {
-        Zotero.logError(e);
-      }
-    }
-    this.cancellers.clear();
+    this.runSignal?.cancel();
   }
 
   /**
@@ -450,14 +476,25 @@ export class ZotWatchAddon {
    */
   async loadWhitelist() {
     const legacy = getPref("journals.whitelist");
-    const stored = await this.storage.readText(WHITELIST_FILE);
-    if (stored === null && typeof legacy === "string" && legacy.trim()) {
-      await this.storage.writeText(WHITELIST_FILE, legacy);
-      this.whitelist = legacy;
-    } else {
-      this.whitelist = stored || "";
+    this.whitelistError = null;
+    let stored = null;
+    try {
+      stored = await this.storage.readText(WHITELIST_FILE);
+    } catch (e) {
+      // e.g. the CSV was re-saved as GBK/ANSI in Excel; keep the plugin usable
+      this.whitelistError = `无法读取 ${WHITELIST_FILE}（请以 UTF-8 编码保存）：${e.message || e}`;
+      Zotero.logError(e);
     }
-    if (legacy) setPref("journals.whitelist", "");
+    try {
+      if (stored === null && !this.whitelistError && typeof legacy === "string" && legacy.trim()) {
+        await this.storage.writeText(WHITELIST_FILE, legacy);
+        stored = legacy;
+      }
+      if (legacy && !this.whitelistError) setPref("journals.whitelist", "");
+    } catch (e) {
+      Zotero.logError(e);
+    }
+    this.whitelist = stored ?? (typeof legacy === "string" ? legacy : "");
     return this.whitelist;
   }
 
@@ -467,9 +504,10 @@ export class ZotWatchAddon {
 
   async setJournalWhitelist(text) {
     const value = String(text ?? "");
-    if (value === this.whitelist) return;
+    if (value === this.whitelist && !this.whitelistError) return;
     this.whitelist = value;
     await this.storage.writeText(WHITELIST_FILE, value);
+    this.whitelistError = null;
   }
 
   // ------------------------------------------------- preference pane helpers
@@ -512,6 +550,7 @@ export class ZotWatchAddon {
     const last = inbox.lastRun;
     const library = Zotero.Libraries.get(profileLibraryID());
     return [
+      ...(this.whitelistError ? [`⚠️ ${this.whitelistError}`] : []),
       `文库：${library?.name || "我的文库"}，${items.length} 个条目（含摘要 ${withAbstract}）`,
       `待查看推荐：${pending}`,
       last ? `上次运行：${new Date(last.runAt).toLocaleString()}，推荐 ${last.stats.recommended} 篇，抓取 ${last.stats.fetched} 篇` : "尚未运行",
@@ -525,7 +564,8 @@ export class ZotWatchAddon {
     const engine = this.createEngine({ ...settings, journals: { ...settings.journals, autoFromLibrary: true } });
     const items = await createZoteroLibrary().getItems();
     const { venues } = await engine.resolveJournals(items);
-    const merged = parseWhitelist(settings.journals.whitelist);
+    // Merge into the list as it is now, not as it was before the (slow) lookups
+    const merged = parseWhitelist(this.whitelist);
     for (const v of venues.length ? venues : libraryVenues(items).slice(0, settings.journals.autoTopN)) {
       for (const issn of v.issns) {
         if (!merged.has(issn)) merged.set(issn, { issn, title: v.title, category: `library:${v.count}`, impactFactor: null });

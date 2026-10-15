@@ -182,6 +182,7 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
   };
 
   const Zotero = {
+    version: { 7: "7.0.25", 8: "8.0.4", 10: "10.0.2" }[zoteroVersion],
     initializationPromise: Promise.resolve(),
     isMac: false,
     debug() {},
@@ -331,6 +332,7 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     },
     Services: {
       io: { newURI: (spec) => ({ spec }) },
+      locale: { appLocaleAsBCP47: "zh-CN" },
       wm: {
         getMostRecentWindow: (type) => {
           assert.equal(type, "zotwatch:recommendations");
@@ -570,33 +572,52 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.match(await addon.getStatus(), /我的文库/);
   env.prefs.set("extensions.zotwatch.profile.libraryID", "");
 
-  // --- cancelling aborts in-flight requests
+  // --- cancelling aborts in-flight requests, but not requests made for the UI
   let release;
   const gate = new Promise((r) => (release = r));
-  Object.assign(env, { gate });
-  const slow = standardHttp(counter, { gate });
+  let slow = standardHttp(counter, { gate });
+  const inFlight = new Set();
+  let hangCrossref = false;
   Zotero.HTTP.request = ((original) => async (method, url, options) => {
     if (url.startsWith("https://api.crossref.org/works")) {
       let cancel;
       const cancelled = new Promise((_, reject) => (cancel = () => reject(new Zotero.HTTP.CancelledException())));
-      options.cancellerReceiver(cancel);
-      const res = await Promise.race([slow.request({ method, url }), cancelled]);
-      return { status: res.status, response: res.data, channel: null, getResponseHeader: () => null };
+      // A hung request ignores cancellation, like code that never yields
+      if (!hangCrossref) options.cancellerReceiver(cancel);
+      inFlight.add(url);
+      try {
+        const res = await Promise.race([hangCrossref ? new Promise(() => {}) : slow.request({ method, url }), cancelled]);
+        return { status: res.status, response: res.data, channel: null, getResponseHeader: () => null };
+      } finally {
+        inFlight.delete(url);
+      }
     }
     return original(method, url, options);
   })(Zotero.HTTP.request);
+  const waitForCrossref = async () => {
+    while (!inFlight.size) await new Promise((r) => setTimeout(r, 5));
+  };
+
   env.prefs.set("extensions.zotwatch.schedule.lastRun", "0");
   const running = addon.runNow();
-  while (!addon.cancellers.size) await new Promise((r) => setTimeout(r, 5));
+  await waitForCrossref();
   addon.cancelRun();
   assert.equal(await running, null);
   assert.ok(events.includes("cancelled"));
+  assert.equal(inFlight.size, 0, "the gated request was aborted");
   release();
+  const status = await addon.testConnections();
+  assert.match(status, /✅ Crossref/, "UI requests still work after a run was cancelled");
 
-  // --- shutdown waits for a run, then cleans up
+  // --- shutdown cancels a run and waits for it before tearing anything down
+  slow = standardHttp(counter, { gate: new Promise(() => {}) });
+  const settledWith = [];
   const pending = addon.runNow();
+  pending.then(() => settledWith.push({ addon: !!Zotero.ZotWatch, chrome: !env.chromeRegistrations[0].destroyed }));
+  await waitForCrossref();
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(await pending, null);
+  assert.deepEqual(settledWith, [{ addon: true, chrome: true }], "run settled before teardown");
   assert.deepEqual(plain(menus.unregistered), ["menu-key-1"]);
   assert.equal(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
   assert.equal(Zotero.ZotWatch, undefined);
@@ -604,6 +625,19 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.equal(env.chromeRegistrations[0].destroyed, true);
   assert.equal(mainWindow.opened[0].closed, true);
   assert.deepEqual(Zotero.errors.map(String), []);
+
+  // --- a run that ignores cancellation does not block shutdown beyond the grace period
+  const env2 = createEnvironment({ dataDir: mkdtempSync(join(tmpdir(), "zotwatch-")), items: libraryItems(), http: standardHttp(counter), zoteroVersion: 10 });
+  t.after(env2.cleanup);
+  const addon2 = await boot(env2);
+  addon2.shutdownGraceMs = 50;
+  env2.Zotero.HTTP.request = async () => new Promise(() => {});
+  addon2.runNow().catch(() => {});
+  await new Promise((r) => setTimeout(r, 20));
+  const started = Date.now();
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env2.context);
+  assert.ok(Date.now() - started < 1000, "teardown after the grace period");
+  assert.equal(env2.Zotero.ZotWatch, undefined);
 });
 
 test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
@@ -616,7 +650,9 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
   const addon = await boot(env);
   const menu = mainWindow.document.getElementById("menu_ToolsPopup");
   assert.deepEqual(menu.children.map((c) => c.id), ["zotwatch-menu-separator", "zotwatch-menu-open", "zotwatch-menu-run"]);
-  assert.equal(menu.children[1].attributes["data-l10n-id"], "zotwatch-menu-open");
+  assert.equal(menu.children[1].attributes.label, "ZotWatch 文献推荐…");
+  assert.equal(menu.children[2].attributes.label, "ZotWatch：立即检查新文献");
+  assert.equal(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null, "no Fluent file in the main window");
 
   // A second main window load must not duplicate menu items
   vm.runInContext("onMainWindowLoad({ window: __win })", Object.assign(env.context, { __win: mainWindow }));
@@ -635,7 +671,7 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
 
   // The menu label shows the pending count when the menu opens
   menu.dispatch("popupshowing");
-  assert.equal(JSON.parse(menu.children[1].attributes["data-l10n-args"]).count, addon.pendingCount);
+  assert.equal(menu.children[1].attributes.label, `ZotWatch 文献推荐（${addon.pendingCount} 篇待查看）…`);
 
   // Notices are plain text even when an error message contains markup
   addon.notify("ZotWatch", '<a href=x>proxy</a> failed');
@@ -644,6 +680,43 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(menu.children.length, 0);
   assert.deepEqual(Zotero.errors.map(String), []);
+});
+
+test("Zotero 8: MenuManager is skipped so the main window keeps its locale", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const env = createEnvironment({ dataDir, items: libraryItems(), http: standardHttp({}), zoteroVersion: 8 });
+  t.after(env.cleanup);
+  await boot(env);
+  assert.equal(env.menus.registered.length, 0);
+  const menu = env.mainWindow.document.getElementById("menu_ToolsPopup");
+  assert.equal(menu.children.length, 3);
+  assert.equal(env.mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.equal(menu.children.length, 0);
+});
+
+test("an unreadable journals.csv does not stop the plugin", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  mkdirSync(join(dataDir, "zotwatch"), { recursive: true });
+  writeFileSync(join(dataDir, "zotwatch", "journals.csv"), Buffer.from([0xc6, 0xda, 0xbf, 0xaf])); // GBK bytes
+  const env = createEnvironment({ dataDir, items: libraryItems(), http: standardHttp({}), zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const readUTF8 = env.context.IOUtils.readUTF8;
+  env.context.IOUtils.readUTF8 = async (p) => {
+    if (p.endsWith("journals.csv")) throw new Error("Could not read file because it is not UTF-8 encoded");
+    return readUTF8(p);
+  };
+  const addon = await boot(env);
+  assert.ok(env.Zotero.ZotWatch, "startup completed");
+  assert.equal(env.registeredPanes.length, 1);
+  assert.match(await addon.getStatus(), /UTF-8/);
+  assert.equal(env.Zotero.errors.length, 1);
+  env.Zotero.errors.length = 0;
+  await addon.setJournalWhitelist("issn,title\n1234-5678,X");
+  assert.doesNotMatch(await addon.getStatus(), /UTF-8/);
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
 });
 
 test("preference pane initialises from Zotero's events inside a sandbox", async () => {

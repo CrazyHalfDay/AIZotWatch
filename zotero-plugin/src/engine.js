@@ -196,6 +196,7 @@ export class ZotWatchEngine {
               cache.titles[key] = { issns: found, at: this.now() };
               dirty = true;
             } catch (e) {
+              if (e?.cancelled) throw e;
               this.log(`Journal lookup failed for "${v.title}": ${e.message}`);
             }
           }
@@ -219,6 +220,8 @@ export class ZotWatchEngine {
     if (s.eartharxiv.enabled) tasks.push(["EarthArXiv", () => fetchEartharxiv(this.http, { ...common, ...s.eartharxiv })]);
 
     const settled = await Promise.allSettled(tasks.map(([, fn]) => fn()));
+    const cancelled = settled.find((r) => r.status === "rejected" && r.reason?.cancelled);
+    if (cancelled) throw cancelled.reason;
     const works = [];
     const errors = [];
     const perSource = {};
@@ -521,6 +524,7 @@ export class ZotWatchEngine {
         const summary = await summarizePaper(llm, toSummarize[i]);
         await this.patchWorks([[toSummarize[i].id, { summary }]]);
       } catch (e) {
+        if (e?.cancelled) throw e;
         errors.push({ stage: "llm", message: `摘要失败：${e.message}` });
         if (i === 0) break; // likely a configuration problem; don't repeat it N times
       }

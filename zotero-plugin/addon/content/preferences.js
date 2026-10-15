@@ -33,20 +33,22 @@ var ZotWatchPrefs = {
       const el = document.getElementById(id);
       if (el) el.addEventListener("command", () => handler.call(this));
     };
-    on("zw-run", () => {
+    on("zw-run", async () => {
+      await this.flushWhitelist();
       this.api.openRecommendations();
       this.api.runNow().catch(() => {});
     });
     on("zw-test", () => this.show("正在测试连接…", () => this.api.testConnections()));
     on("zw-status-refresh", () => this.refreshStatus());
-    on("zw-journals-suggest", () =>
-      this.show("正在分析文库期刊（可能需要查询 Crossref）…", async () => {
+    on("zw-journals-suggest", async () => {
+      await this.flushWhitelist();
+      await this.withWhitelistLocked("正在分析文库期刊（可能需要查询 Crossref）…", async () => {
         await this.setWhitelist(await this.api.suggestJournals());
         return "已根据文库生成期刊列表（已合并原有条目）。可手动补充影响因子。";
-      }),
-    );
+      });
+    });
     on("zw-journals-preset", () =>
-      this.show("正在载入…", async () => {
+      this.withWhitelistLocked("正在载入…", async () => {
         await this.setWhitelist(await this.api.loadPresetJournals());
         return "已载入地学期刊示例列表（来自 AIZotWatch 项目）。";
       }),
@@ -76,8 +78,14 @@ var ZotWatchPrefs = {
     }
   },
 
-  /** Pane became visible (not merely loaded for search or hover): show status. */
+  /**
+   * Zotero also dispatches 'showing' to every pane while the settings search
+   * runs; only scan the library when our pane is the one actually selected.
+   */
   onShowing() {
+    if (document.getElementById("prefs-search")?.value?.trim()) return;
+    const selected = document.getElementById("prefs-navigation")?.value;
+    if (selected && selected !== "zotwatch-prefpane") return;
     this.refreshStatus();
   },
 
@@ -98,6 +106,31 @@ var ZotWatchPrefs = {
     const whitelist = document.getElementById("zw-whitelist");
     if (!whitelist) return;
     this.api.setJournalWhitelist(whitelist.value).catch((e) => Zotero.logError(e));
+  },
+
+  /** Save edits still waiting for the debounce, so actions see the current list. */
+  async flushWhitelist() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const whitelist = document.getElementById("zw-whitelist");
+    if (!whitelist) return;
+    try {
+      await this.api.setJournalWhitelist(whitelist.value);
+    } catch (e) {
+      Zotero.logError(e);
+    }
+  },
+
+  /** Run a task that rewrites the whitelist with the field and its buttons disabled. */
+  async withWhitelistLocked(pending, task) {
+    const ids = ["zw-whitelist", "zw-journals-suggest", "zw-journals-import", "zw-journals-preset"];
+    const elements = ids.map((id) => document.getElementById(id)).filter(Boolean);
+    for (const el of elements) el.disabled = true;
+    try {
+      await this.show(pending, task);
+    } finally {
+      if (!this.disposed) for (const el of elements) el.disabled = false;
+    }
   },
 
   async setWhitelist(text) {
@@ -133,7 +166,7 @@ var ZotWatchPrefs = {
     fp.appendFilters(fp.filterAll);
     if ((await fp.show()) !== fp.returnOK) return;
     const path = typeof fp.file === "string" ? fp.file : fp.file.path;
-    await this.show("正在导入…", async () => {
+    await this.withWhitelistLocked("正在导入…", async () => {
       await this.setWhitelist(await Zotero.File.getContentsAsync(path));
       return `已导入：${path}`;
     });

@@ -9,14 +9,16 @@ import { PREF_PREFIX, loadSettings } from "../settings.js";
 
 /**
  * HTTP transport over Zotero.HTTP.request (honours Zotero's proxy settings).
- * In-flight requests register a canceller in `cancellers`, so a run can be
- * aborted immediately on cancel or plugin shutdown.
+ * With a `signal` (see createCancelSignal), cancelling aborts in-flight
+ * requests and makes later ones fail at once; core/http.js also ends retry
+ * waits early through `transport.signal`.
  */
-export function createZoteroTransport({ cancellers = new Set() } = {}) {
+export function createZoteroTransport({ signal = null } = {}) {
   return {
-    cancellers,
+    signal,
     async request({ method = "GET", url, headers = {}, body, responseType = "json", timeout = 60000 }) {
-      let cancel = null;
+      signal?.throwIfCancelled();
+      const unregisters = [];
       let xhr;
       try {
         xhr = await Zotero.HTTP.request(method, url, {
@@ -28,16 +30,15 @@ export function createZoteroTransport({ cancellers = new Set() } = {}) {
           errorDelayMax: 0,
           logBodyLength: 0,
           anon: true, // never send Zotero's cookies to third-party APIs (Zotero 9+; ignored before)
-          cancellerReceiver: (fn) => {
-            cancel = fn;
-            cancellers.add(fn);
+          cancellerReceiver: (cancel) => {
+            if (signal) unregisters.push(signal.onCancel(cancel));
           },
         });
       } catch (e) {
         if (e instanceof Zotero.HTTP.CancelledException) throw new CancelledRequestError();
         throw e;
       } finally {
-        if (cancel) cancellers.delete(cancel);
+        for (const unregister of unregisters) unregister();
       }
       if (!xhr.status) {
         // Status 0: let Zotero explain certificate/proxy problems, otherwise report the channel error
