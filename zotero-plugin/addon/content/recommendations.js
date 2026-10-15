@@ -9,8 +9,20 @@ const LABELS = {
   must_read: { text: "必读", cls: "must" },
   consider: { text: "推荐", cls: "consider" },
   ignore: { text: "一般", cls: "ignore" },
+  // Track labels (see src/core/tracks.js)
+  flagship: { text: "顶刊地学", cls: "flagship" },
+  followed: { text: "关注", cls: "followed" },
 };
-const SOURCES = { crossref: "期刊", arxiv: "arXiv", eartharxiv: "EarthArXiv" };
+// Sections of the "all" view, in display order
+const SECTIONS = [
+  ["personal", "个性推荐"],
+  ["flagship", "顶刊地学速览"],
+  ["followed", "关注作者"],
+];
+const SOURCES = { crossref: "期刊", arxiv: "arXiv", eartharxiv: "EarthArXiv", openalex: "OpenAlex" };
+// Sources whose works show their journal instead of the source name
+const VENUE_SOURCES = new Set(["crossref", "openalex"]);
+const STAGE_NAMES = { followed: "关注作者", flagship: "顶刊地学", enrich: "摘要补全", llm: "大模型" };
 const SUMMARY_FIELDS = [
   ["research_question", "研究问题"],
   ["methodology", "研究方法"],
@@ -22,6 +34,7 @@ const SUMMARY_FIELDS = [
 const state = {
   view: null,
   tab: "new",
+  track: "all",
   filter: "all",
   sort: "score",
   query: "",
@@ -62,6 +75,23 @@ function formatRelative(ms) {
   if (diff < 3600000) return `${Math.round(diff / 60000)} 分钟前`;
   if (diff < 86400000) return `${Math.round(diff / 3600000)} 小时前`;
   return new Date(ms).toLocaleString();
+}
+
+/** Track of a work: "flagship", "followed" or "personal" (same rule as src/core/tracks.js). */
+function trackOf(work) {
+  return work.label === "flagship" || work.label === "followed" ? work.label : "personal";
+}
+
+function sourceLabel(work) {
+  if (VENUE_SOURCES.has(work.source)) return work.venue || (work.source === "crossref" ? null : SOURCES[work.source]);
+  return SOURCES[work.source] || work.source;
+}
+
+/** "关注作者（OpenAlex）" for a stage with a source, the source alone for fetch errors. */
+function errorOrigin(error) {
+  const stage = STAGE_NAMES[error.stage];
+  if (error.source && stage) return `${stage}（${error.source}）`;
+  return error.source || stage || error.stage;
 }
 
 function authorLine(authors) {
@@ -107,15 +137,24 @@ function visibleWorks() {
   const latestRun = view.lastRun?.runId;
   const q = state.query.trim().toLowerCase();
   let works = view.works.filter((w) => w.status === state.tab);
+  if (state.track !== "all") works = works.filter((w) => trackOf(w) === state.track);
   if (state.filter === "must_read") works = works.filter((w) => w.label === "must_read");
   if (state.filter === "latest") works = works.filter((w) => w.firstRunId === latestRun);
   if (q) {
     works = works.filter((w) =>
-      [w.title, w.translatedTitle, w.venue, authorLine(w.authors), w.abstract].some((s) => (s || "").toLowerCase().includes(q)),
+      [w.title, w.translatedTitle, w.venue, authorLine(w.authors), (w.followedAuthors || []).join(" "), w.topic, w.abstract].some((s) =>
+        (s || "").toLowerCase().includes(q),
+      ),
     );
   }
   const byDate = (w) => Date.parse(w.published || "") || 0;
-  works.sort(state.sort === "date" ? (a, b) => byDate(b) - byDate(a) || b.score - a.score : (a, b) => b.score - a.score);
+  const byScore = (w) => w.score || 0;
+  // Followed-only works all score 0: newest first among equal scores
+  works.sort(
+    state.sort === "date"
+      ? (a, b) => byDate(b) - byDate(a) || byScore(b) - byScore(a)
+      : (a, b) => byScore(b) - byScore(a) || byDate(b) - byDate(a),
+  );
   return works;
 }
 
@@ -126,8 +165,12 @@ function renderHeader() {
   const run = view.lastRun;
   const parts = [];
   if (run) {
+    const stats = run.stats;
+    const byLabel = stats.newByLabel;
     parts.push(`上次检查：${formatRelative(run.runAt)}`);
-    parts.push(`抓取 ${run.stats.fetched ?? 0} 篇，推荐 ${run.stats.recommended ?? 0} 篇（新增 ${run.stats.newRecommendations ?? 0}）`);
+    parts.push(`抓取 ${stats.fetched ?? 0} 篇，推荐 ${stats.recommended ?? 0} 篇（新增 ${byLabel?.personal ?? stats.newRecommendations ?? 0}）`);
+    if (byLabel?.flagship) parts.push(`顶刊 ${byLabel.flagship} 篇`);
+    if (byLabel?.followed) parts.push(`关注作者 ${byLabel.followed} 篇`);
   } else {
     parts.push("尚未运行");
   }
@@ -146,8 +189,8 @@ function renderHeader() {
   const errors = run?.errors || [];
   if (errors.length) {
     notice.hidden = false;
-    notice.textContent = `上次运行有 ${errors.length} 个问题：${errors.map((e) => `${e.source || e.stage}：${e.message}`).join("；")}`;
-  } else if (run && !run.stats.fetched) {
+    notice.textContent = `上次运行有 ${errors.length} 个问题：${errors.map((e) => `${errorOrigin(e)}：${e.message}`).join("；")}`;
+  } else if (run && !run.stats.fetched && !run.stats.followed?.fetched) {
     notice.hidden = false;
     notice.textContent = "上次运行没有抓取到任何文献：请在「设置 → 关注期刊」中确认期刊列表（或开启 arXiv / EarthArXiv），并检查网络连接。";
   } else if (view.provider === "local" && view.works.length) {
@@ -191,15 +234,35 @@ function actionButton(text, onclick, { primary = false, busyKey = null } = {}) {
   return el("button", { type: "button", class: primary ? "primary small" : "small", disabled: !!busy, onclick }, busy || text);
 }
 
+/** Score shown on a card: personal works only; flagship scores are muted, followed-only works have none. */
+function scoreBadge(work) {
+  const track = trackOf(work);
+  if (track === "followed") return null;
+  const text = `${Math.round((work.score || 0) * 100)} 分`;
+  if (track === "flagship") return el("span", { class: "score muted", title: "与文库相似度（仅供参考）", text });
+  return el("span", { class: "score", title: `相似度 ${((work.similarity || 0) * 100).toFixed(1)}`, text });
+}
+
+/** Tooltip with the flagship gate details ({pos, neg, judged}). */
+function gateTitle(gate) {
+  if (!gate || typeof gate.pos !== "number") return null;
+  const neg = typeof gate.neg === "number" ? `，排除领域 ${gate.neg}` : "";
+  return `地学相关度 ${gate.pos}${neg}${gate.judged ? "，经大模型复核" : ""}`;
+}
+
+function chips(work) {
+  const out = [];
+  const names = (work.followedAuthors || []).filter(Boolean);
+  if (names.length) out.push(el("span", { class: "chip followed", text: `关注：${names.join("、")}` }));
+  if (work.topic) out.push(el("span", { class: "chip topic", text: `方向：${work.topic}` }));
+  return out;
+}
+
 function card(work) {
   const label = LABELS[work.label] || LABELS.consider;
   const isLatest = work.firstRunId && work.firstRunId === state.view.lastRun?.runId;
   const expanded = state.expanded.has(work.id);
-  const meta = [
-    SOURCES[work.source] === "期刊" ? work.venue : SOURCES[work.source] || work.source,
-    formatDate(work.published),
-    work.impactFactor ? `IF ${work.impactFactor}` : null,
-  ].filter(Boolean);
+  const meta = [sourceLabel(work), formatDate(work.published), work.impactFactor ? `IF ${work.impactFactor}` : null].filter(Boolean);
 
   const actions = [];
   if (work.status === "new") {
@@ -223,10 +286,11 @@ function card(work) {
     el(
       "div",
       { class: "card-meta" },
-      el("span", { class: `badge ${label.cls}`, text: label.text }),
-      el("span", { class: "score", title: `相似度 ${((work.similarity || 0) * 100).toFixed(1)}`, text: `${Math.round(work.score * 100)} 分` }),
+      el("span", { class: `badge ${label.cls}`, title: trackOf(work) === "flagship" ? gateTitle(work.gate) : null, text: label.text }),
+      scoreBadge(work),
       isLatest && work.status === "new" ? el("span", { class: "badge fresh", text: "新" }) : null,
       el("span", { class: "muted", text: meta.join(" · ") }),
+      ...chips(work),
     ),
     el("h2", { class: "title" }, el("a", { href: "#", onclick: (e) => (e.preventDefault(), api().openUrl(work.url)), text: work.title })),
     work.translatedTitle ? el("div", { class: "translated", text: work.translatedTitle }) : null,
@@ -250,6 +314,8 @@ function card(work) {
 
 function emptyState() {
   const { view } = state;
+  const filtered = state.track !== "all" || state.filter !== "all" || state.query.trim();
+  if (filtered && view.works.some((w) => w.status === state.tab)) return el("div", { class: "empty", text: "没有符合当前筛选条件的文献。" });
   if (state.tab !== "new") return el("div", { class: "empty", text: "这里还没有内容。" });
   if (!view.lastRun) {
     return el(
@@ -262,11 +328,34 @@ function emptyState() {
   return el("div", { class: "empty" }, el("h2", { text: "全部看完了 🎉" }), el("p", { text: "没有待查看的推荐。新的文献会在下次检查时出现。" }));
 }
 
+/** Cards grouped by track, each group under a header with its count (empty groups omitted). */
+function sectioned(works) {
+  const nodes = [];
+  for (const [track, title] of SECTIONS) {
+    const group = works.filter((w) => trackOf(w) === track);
+    if (!group.length) continue;
+    nodes.push(
+      el(
+        "div",
+        { class: `section-header ${track}` },
+        el("span", { class: "section-title", text: title }),
+        el("span", { class: "section-count muted", text: `${group.length} 篇` }),
+      ),
+      ...group.map(card),
+    );
+  }
+  return nodes;
+}
+
 function renderList() {
   const list = $("list");
   const scroll = list.scrollTop;
   const works = visibleWorks();
-  list.replaceChildren(...(works.length ? works.map(card) : [emptyState()]));
+  let nodes;
+  if (!works.length) nodes = [emptyState()];
+  else if (state.track === "all") nodes = sectioned(works);
+  else nodes = works.map(card);
+  list.replaceChildren(...nodes);
   list.scrollTop = scroll;
 }
 
@@ -360,6 +449,7 @@ window.addEventListener("load", () => {
       render();
     });
   }
+  segmented("track-filter", (value) => (state.track = value));
   segmented("label-filter", (value) => (state.filter = value));
   segmented("sort", (value) => (state.sort = value));
   $("search").addEventListener("input", (e) => {

@@ -183,6 +183,10 @@ test("local provider works without any API key", async () => {
 test("LLM translation and summaries are stored in the inbox", async () => {
   const llm = (req) => {
     const prompt = JSON.parse(req.body).messages[0].content;
+    if (prompt.includes("研究方向标签")) {
+      const n = (prompt.match(/^Cluster \d+ \(/gm) || []).length;
+      return { choices: [{ message: { content: JSON.stringify(Array.from({ length: n }, (_, i) => `方向${i}`)) } }] };
+    }
     if (prompt.includes("翻译")) {
       const n = (prompt.match(/^\d+\. /gm) || []).length;
       return { choices: [{ message: { content: "```json\n" + JSON.stringify(Array.from({ length: n }, (_, i) => `标题${i}`)) + "\n```" } }] };
@@ -197,6 +201,7 @@ test("LLM translation and summaries are stored in the inbox", async () => {
   assert.deepEqual(run.errors, []);
   const works = Object.values((await engine.loadInbox()).works);
   assert.ok(works.every((w) => w.translatedTitle?.startsWith("标题")));
+  assert.ok(works.every((w) => w.topic?.startsWith("方向")), "every work gets its research direction");
   assert.equal(works.filter((w) => w.summary).length, 1);
   const best = works.sort((a, b) => b.score - a.score)[0];
   assert.equal(best.summary.methodology, "方法");

@@ -27,6 +27,11 @@
   margin-top: 8px;
 }
 
+.zw-prefs .zw-subhead {
+  font-weight: 600;
+  margin-top: 12px;
+}
+
 .zw-prefs .zw-textarea {
   width: 100%;
   box-sizing: border-box;

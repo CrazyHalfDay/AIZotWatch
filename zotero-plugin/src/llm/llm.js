@@ -129,3 +129,173 @@ export async function summarizePaper(llm, work) {
   if (!Object.keys(summary).length) throw new Error("LLM summary had none of the expected fields");
   return summary;
 }
+
+/**
+ * Relevance prompt of the Python PaperRelevanceFilter (RELEVANCE_FILTER_PROMPT,
+ * llm/prompts.py), verbatim, except that papers are named P1, P2, … instead of
+ * by DOI: models echo short ids reliably but sometimes rewrite DOIs.
+ */
+export function relevancePrompt(boundary, works) {
+  const papers = works
+    .map((w, i) => `- P${i + 1}\n  Title: ${w.title || ""}\n  Abstract: ${w.abstract || "No abstract available"}`)
+    .join("\n");
+  return `You are an academic research assistant. Determine whether each paper is relevant to the user's research interests.
+
+User research interests:
+${boundary}
+
+Papers:
+${papers}
+
+Return a JSON object with:
+{
+  "relevant_ids": ["paper_id_1", "paper_id_2", ...],
+  "irrelevant_ids": ["paper_id_3", "paper_id_4", ...]
+}
+
+Rules:
+- Use the title and abstract meaning (semantic relevance), not just keyword overlap.
+- If a paper is borderline or uncertain, classify it as irrelevant.
+- Return only JSON (no markdown, no extra text).
+`;
+}
+
+/**
+ * Indices (0-based) of the papers a relevance reply lists in `relevant_ids`
+ * ("P3", "p3", 3 or "3"; unknown ids are ignored). Throws when the reply holds
+ * no usable verdict.
+ */
+export function parseRelevantIds(reply, count) {
+  const parsed = parseJsonReply(reply);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Relevance reply is not a JSON object");
+  let ids = parsed.relevant_ids ?? [];
+  if (typeof ids === "string") ids = ids.split(/[\s,;，；]+/);
+  if (!Array.isArray(ids)) throw new Error("Relevance reply has no relevant_ids list");
+  const out = new Set();
+  for (const id of ids) {
+    const match = String(id ?? "").trim().match(/^P?\s*(\d+)$/i);
+    const n = match ? Number(match[1]) : 0;
+    if (n >= 1 && n <= count) out.add(n - 1);
+  }
+  return out;
+}
+
+/**
+ * Ask the LLM which works match `boundary` (the flagship gray zone), in
+ * batches. A batch whose reply cannot be parsed, or whose request fails, is
+ * kept whole (inclusive, like having no LLM); once the very first request
+ * fails, the remaining batches are kept without asking (likely a
+ * configuration problem). An empty boundary keeps everything (Python parity).
+ * Cancellation propagates.
+ * @returns {Promise<{kept: object[], judged: number, failedBatches: number, error: string|null, confirmed: Set<object>}>}
+ *   kept in input order; `judged` counts works with a verdict; `confirmed` holds the works the LLM accepted
+ */
+export async function judgeRelevance(llm, works, boundary, { batchSize = 20 } = {}) {
+  const result = { kept: [], judged: 0, failedBatches: 0, error: null, confirmed: new Set() };
+  const text = String(boundary || "").trim();
+  if (!text) {
+    result.kept = [...works];
+    return result;
+  }
+  const size = Math.max(1, Math.floor(batchSize) || 1);
+  let answered = false;
+  let stopped = false;
+  for (let start = 0; start < works.length; start += size) {
+    const batch = works.slice(start, start + size);
+    const keepBatch = (message) => {
+      result.kept.push(...batch);
+      result.failedBatches++;
+      result.error ||= message;
+    };
+    if (stopped) {
+      keepBatch(null);
+      continue;
+    }
+    let reply;
+    try {
+      reply = await llm.chat(relevancePrompt(text, batch), { maxTokens: 1024, temperature: 0.3 });
+    } catch (e) {
+      if (e?.cancelled) throw e;
+      keepBatch(e?.message || String(e));
+      if (!answered) stopped = true;
+      continue;
+    }
+    answered = true;
+    let relevant;
+    try {
+      relevant = parseRelevantIds(reply, batch.length);
+    } catch (e) {
+      keepBatch(`无法解析大模型的回复（${e.message}）`);
+      continue;
+    }
+    result.judged += batch.length;
+    batch.forEach((w, i) => {
+      if (!relevant.has(i)) return;
+      result.kept.push(w);
+      result.confirmed.add(w);
+    });
+  }
+  return result;
+}
+
+// Longest topic label kept (the card chip and note line stay short)
+export const MAX_TOPIC_LABEL_CHARS = 30;
+
+/**
+ * Batch label prompt of the Python ClusterLabeler (BATCH_CLUSTER_LABEL_PROMPT,
+ * llm/prompts.py, and the cluster blocks of label_clusters_batch), verbatim:
+ * up to 3 representative titles and 5 keywords per cluster.
+ * @param {{memberCount: number, titles?: string[], keywords?: string[]}[]} clusters
+ */
+export function clusterLabelPrompt(clusters) {
+  const info = clusters
+    .map((c, i) => {
+      const titles = (c.titles || []).slice(0, 3).map((t) => `"${t}"`).join(", ");
+      const keywords = c.keywords?.length ? c.keywords.slice(0, 5).join(", ") : "N/A";
+      return `Cluster ${i + 1} (${c.memberCount} papers):\n  Titles: ${titles}\n  Keywords: ${keywords}`;
+    })
+    .join("\n\n");
+  return `基于以下多个论文簇，为每个簇生成一个简洁的研究方向标签（仅中文，不超过 10 个词）。
+
+## Clusters:
+${info}
+
+## Instructions:
+1. 为每个簇识别共同的研究主题或方向
+2. 用中文生成能概括每个簇核心的简洁标签
+3. 适当使用领域术语，保持自然流畅；常用英文缩写可直接使用（如 LLM, SAR 等）
+4. 按输入顺序返回 JSON 数组，元素为中文标签字符串
+
+## Output（JSON array of strings, 中文标签）:
+`;
+}
+
+/**
+ * Labels from a batch label reply. Unlike Python (which pads with "Cluster N"
+ * and parses stray lines), only a JSON array of exactly `count` non-empty
+ * strings is accepted, so a bad reply is retried later instead of being
+ * stored as a label. Surrounding quotes are trimmed and labels capped.
+ * @throws {Error} with a Chinese message for the run's error list
+ */
+export function parseClusterLabels(reply, count) {
+  let parsed;
+  try {
+    parsed = parseJsonReply(reply);
+  } catch (e) {
+    throw new Error(`无法解析大模型的回复（${e.message}）`);
+  }
+  if (!Array.isArray(parsed)) throw new Error("大模型的回复不是 JSON 数组");
+  if (parsed.length !== count) throw new Error(`大模型返回了 ${parsed.length} 个标签，应为 ${count} 个`);
+  return parsed.map((value, i) => {
+    const label = typeof value === "string" ? value.replace(/\s+/g, " ").replace(/^[\s"'“”‘’]+|[\s"'“”‘’]+$/g, "") : "";
+    if (!label) throw new Error(`第 ${i + 1} 个标签为空`);
+    return Array.from(label).slice(0, MAX_TOPIC_LABEL_CHARS).join("").trim();
+  });
+}
+
+/** One batch LLM call labelling every given cluster (aligned with input); throws on a bad reply. */
+export async function labelClusters(llm, clusters) {
+  if (!clusters.length) return [];
+  const reply = await llm.chat(clusterLabelPrompt(clusters), { maxTokens: 1024 });
+  return parseClusterLabels(reply, clusters.length);
+}

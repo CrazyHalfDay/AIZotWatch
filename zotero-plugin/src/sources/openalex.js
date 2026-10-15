@@ -1,60 +1,54 @@
-// OpenAlex abstract fallback: many publishers (e.g. Elsevier) do not deposit
-// abstracts in Crossref, but OpenAlex stores them as an inverted index.
+// OpenAlex abstracts: many publishers (e.g. Elsevier) do not deposit abstracts
+// in Crossref, but OpenAlex stores them as an inverted index. Used by the last
+// tier of the abstract fallback (sources/abstracts.js), one filter query per
+// 50 DOIs, and by the followed-authors source.
 
-import { buildUrl, getJson, mapWithConcurrency } from "../core/http.js";
+import { buildUrl } from "../core/http.js";
 import { collapseWhitespace, normalizeDoi } from "../core/text.js";
 
 const OPENALEX_WORKS = "https://api.openalex.org/works";
+// Abstracts are far shorter; larger positions are malformed and would make a huge sparse array
+const MAX_ABSTRACT_WORDS = 20000;
+/** DOIs per batched abstract lookup (OpenAlex allows up to 50 values in an OR filter). */
+export const OPENALEX_BATCH_SIZE = 50;
 
 export function reconstructAbstract(inverted) {
   if (!inverted || typeof inverted !== "object") return null;
   const words = [];
   for (const [word, positions] of Object.entries(inverted)) {
-    for (const pos of positions || []) words[pos] = word;
+    if (!Array.isArray(positions)) continue;
+    for (const pos of positions) {
+      if (Number.isInteger(pos) && pos >= 0 && pos < MAX_ABSTRACT_WORDS) words[pos] = word;
+    }
   }
   const text = collapseWhitespace(words.filter((w) => w !== undefined).join(" "));
   return text || null;
 }
 
-/**
- * Fill in missing abstracts in place for works with DOIs.
- * @returns {Promise<number>} number of abstracts added
- */
-export async function enrichAbstracts(http, works, { mailto = "", batchSize = 50, concurrency = 2, retry = {}, log = () => {} } = {}) {
-  const missing = works.filter((w) => !w.abstract && normalizeDoi(w.doi) && !/[|,]/.test(w.doi));
-  if (!missing.length) return 0;
-  const batches = [];
-  for (let i = 0; i < missing.length; i += batchSize) batches.push(missing.slice(i, i + batchSize));
+/** True when a DOI can go into an OpenAlex OR filter ("|" and "," are filter syntax). */
+export function batchableDoi(doi) {
+  return !/[|,]/.test(doi);
+}
 
-  let added = 0;
-  await mapWithConcurrency(batches, concurrency, async (batch) => {
-    const url = buildUrl(OPENALEX_WORKS, {
-      filter: `doi:${batch.map((w) => `https://doi.org/${w.doi}`).join("|")}`,
-      select: "doi,abstract_inverted_index",
-      "per-page": batchSize,
-      mailto,
-    });
-    let data;
-    try {
-      data = await getJson(http, url, retry);
-    } catch (e) {
-      if (e?.cancelled) throw e;
-      log(`OpenAlex batch failed: ${e.message}`);
-      return;
-    }
-    const byDoi = new Map();
-    for (const r of data?.results || []) {
-      const abstract = reconstructAbstract(r.abstract_inverted_index);
-      if (abstract) byDoi.set(normalizeDoi(r.doi), abstract);
-    }
-    for (const w of batch) {
-      const abstract = byDoi.get(normalizeDoi(w.doi)) || null;
-      if (abstract) {
-        w.abstract = abstract;
-        added++;
-      }
-    }
+/** URL of one batched abstract lookup for up to OPENALEX_BATCH_SIZE normalized DOIs. */
+export function openAlexAbstractsUrl(dois, mailto = "") {
+  return buildUrl(OPENALEX_WORKS, {
+    filter: `doi:${dois.map((doi) => `https://doi.org/${doi}`).join("|")}`,
+    select: "doi,abstract_inverted_index",
+    "per-page": OPENALEX_BATCH_SIZE,
+    mailto,
   });
-  log(`OpenAlex: filled ${added}/${missing.length} missing abstracts`);
-  return added;
+}
+
+/** Reconstructed abstracts by normalized DOI from a batched lookup response; never throws. */
+export function parseOpenAlexAbstracts(data) {
+  const byDoi = new Map();
+  const results = Array.isArray(data?.results) ? data.results : [];
+  for (const record of results) {
+    if (!record || typeof record !== "object") continue;
+    const doi = normalizeDoi(record.doi);
+    const abstract = reconstructAbstract(record.abstract_inverted_index);
+    if (doi && abstract && !byDoi.has(doi)) byDoi.set(doi, abstract);
+  }
+  return byDoi;
 }

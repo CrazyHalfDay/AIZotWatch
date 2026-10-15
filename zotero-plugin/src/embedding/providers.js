@@ -64,9 +64,10 @@ export function createEmbedder(cfg, http, { retry = {} } = {}) {
   const dimensions = preset.sendDimensions ? cfg.dimensions || 1024 : undefined;
   const headers = cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {};
 
-  async function embedBatch(batch) {
+  async function embedBatch(batch, inputType) {
     const body = { model, input: batch.map(prepare) };
-    if (provider === "voyage") body.input_type = "document";
+    // Voyage embeds queries (e.g. the flagship anchors) differently from documents
+    if (provider === "voyage") body.input_type = inputType || "document";
     if (dimensions) {
       body.dimensions = dimensions;
       body.encoding_format = "float";
@@ -81,12 +82,16 @@ export function createEmbedder(cfg, http, { retry = {} } = {}) {
     cacheable: true,
     requiresFit: false,
 
-    async embed(texts, { onProgress } = {}) {
+    /**
+     * @param {string[]} texts
+     * @param {object} [options] - `onProgress(done, total)`; `inputType` "query" or "document" (default; Voyage only, others ignore it)
+     */
+    async embed(texts, { onProgress, inputType } = {}) {
       const batches = [];
       for (let i = 0; i < texts.length; i += batchSize) batches.push(texts.slice(i, i + batchSize));
       let done = 0;
       const results = await mapWithConcurrency(batches, Math.max(1, cfg.concurrency || 3), async (batch) => {
-        const vectors = await embedBatch(batch);
+        const vectors = await embedBatch(batch, inputType);
         done += batch.length;
         onProgress?.(done, texts.length);
         return vectors;

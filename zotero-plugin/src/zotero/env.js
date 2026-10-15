@@ -140,6 +140,8 @@ function itemToPlain(item) {
     issn: field("ISSN"),
     venue: field("publicationTitle", true),
     dateAdded: sqlDateToIso(item.dateAdded),
+    // Manual and automatic tags (cluster keywords for research-direction labels)
+    tags: typeof item.getTags === "function" ? item.getTags().map((t) => t?.tag).filter((t) => typeof t === "string" && t) : [],
   };
 }
 

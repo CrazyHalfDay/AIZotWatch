@@ -3,6 +3,7 @@
 // score = w_sim * similarity + w_if * IF_score.
 
 import { chooseClusterCount, sphericalKMeans } from "./kmeans.js";
+import { MAX_CLUSTER_TITLES, topKeywords } from "./topics.js";
 import { dot, normalizeInPlace, yieldToEventLoop } from "./vector.js";
 
 export const PREPRINT_SOURCES = new Set(["arxiv", "eartharxiv", "biorxiv", "medrxiv"]);
@@ -21,10 +22,45 @@ export function computeTemporalWeights(dates, { halflifeDays = 0, minWeight = 0.
 }
 
 /**
- * Cluster the profile and summarise each cluster by its weighted centroid and
- * effective size (sum of member temporal weights).
+ * Members of one cluster described for topic labels (Python ClusterInfo):
+ * profile item keys, the titles closest to the unweighted member mean (the
+ * k-means centroid, as in Python) and the most frequent keyword tags.
  */
-export async function buildClusters(matrix, weights, { minClusters = 5, maxClusters = 35, tolerance = 0.2, iterations = 20, seed = 42 } = {}) {
+function describeMembers(matrix, members, items, outputTag) {
+  const dim = matrix.dim;
+  const mean = new Float32Array(dim);
+  for (const i of members) {
+    const off = i * dim;
+    for (let d = 0; d < dim; d++) mean[d] += matrix.data[off + d];
+  }
+  normalizeInPlace(mean);
+  const titles = members
+    .map((i) => ({ i, sim: dot(matrix.data, mean, i * dim, 0, dim) }))
+    .sort((a, b) => b.sim - a.sim)
+    .map(({ i }) => items[i]?.title)
+    .filter((t) => typeof t === "string" && t.trim())
+    .slice(0, MAX_CLUSTER_TITLES);
+  const memberItems = members.map((i) => items[i]);
+  return {
+    memberKeys: memberItems.map((item) => item?.key).filter((k) => typeof k === "string"),
+    titles,
+    keywords: topKeywords(memberItems, { outputTag }),
+  };
+}
+
+/**
+ * Cluster the profile and summarise each cluster by its weighted centroid and
+ * effective size (sum of member temporal weights). With `items` (the profile
+ * items, aligned with the matrix rows: {key, title, tags}) each cluster also
+ * carries `memberKeys`, representative `titles` and `keywords` (tags other
+ * than `outputTag` and markers). Clusters are sorted by member count, largest
+ * first (Python order, stable for ties).
+ */
+export async function buildClusters(
+  matrix,
+  weights,
+  { minClusters = 5, maxClusters = 35, tolerance = 0.2, iterations = 20, seed = 42, items = null, outputTag = "" } = {},
+) {
   const n = matrix.rows;
   if (n === 0) return { clusters: [], k: 0, silhouette: null };
 
@@ -46,11 +82,13 @@ export async function buildClusters(matrix, weights, { minClusters = 5, maxClust
   const sums = new Float32Array(k * dim);
   const effective = new Float64Array(k);
   const counts = new Int32Array(k);
+  const members = Array.from({ length: k }, () => []);
   for (let i = 0; i < n; i++) {
     const c = assignments[i];
     const w = weights[i];
     counts[c]++;
     effective[c] += w;
+    members[c].push(i);
     const off = c * dim;
     const rowOff = i * dim;
     for (let d = 0; d < dim; d++) sums[off + d] += matrix.data[rowOff + d] * w;
@@ -61,8 +99,14 @@ export async function buildClusters(matrix, weights, { minClusters = 5, maxClust
     if (counts[c] === 0) continue;
     const centroid = sums.slice(c * dim, (c + 1) * dim);
     normalizeInPlace(centroid);
-    clusters.push({ centroid, memberCount: counts[c], effectiveSize: effective[c] });
+    const cluster = { centroid, memberCount: counts[c], effectiveSize: effective[c] };
+    if (items) {
+      Object.assign(cluster, describeMembers(matrix, members[c], items, outputTag));
+      await yieldToEventLoop();
+    }
+    clusters.push(cluster);
   }
+  clusters.sort((a, b) => b.memberCount - a.memberCount);
   return { clusters, k: clusters.length, silhouette };
 }
 
@@ -143,30 +187,75 @@ export class ProfileRanker {
     return num / den;
   }
 
-  /** max_k(sim_k * ln(1 + E_k)) / max_k ln(1 + E_k). */
+  /**
+   * max_k(sim_k * ln(1 + E_k)) / max_k ln(1 + E_k). Also returns `cluster`,
+   * the macro-best cluster (favours big clusters), and `nearest`, the cluster
+   * with the most similar centroid (the work's research direction).
+   */
   macroScore(vec) {
-    if (!this.clusters.length || this.maxLogSize <= 0) return { macro: 0, cluster: null };
+    if (!this.clusters.length) return { macro: 0, cluster: null, nearest: null };
     let best = -Infinity;
     let bestIdx = 0;
+    let nearestSim = -Infinity;
+    let nearest = 0;
     this.clusters.forEach((c, i) => {
-      const raw = dot(c.centroid, vec) * this.logSizes[i];
+      const sim = dot(c.centroid, vec);
+      if (sim > nearestSim) {
+        nearestSim = sim;
+        nearest = i;
+      }
+      const raw = sim * this.logSizes[i];
       if (raw > best) {
         best = raw;
         bestIdx = i;
       }
     });
-    return { macro: best / this.maxLogSize, cluster: bestIdx };
+    if (this.maxLogSize <= 0) return { macro: 0, cluster: null, nearest };
+    return { macro: best / this.maxLogSize, cluster: bestIdx, nearest };
   }
 
   scoreVector(vec, neighbors) {
     if (this.clusters.length) {
       const micro = this.microScore(vec, neighbors);
-      const { macro, cluster } = this.macroScore(vec);
+      const { macro, cluster, nearest } = this.macroScore(vec);
       const a = this.cfg.microWeight;
-      return { similarity: a * micro + (1 - a) * macro, micro, macro, cluster };
+      return { similarity: a * micro + (1 - a) * macro, micro, macro, cluster, nearest };
     }
     const [top] = neighbors || this.matrix.topK(vec, 1);
-    return { similarity: top ? top.score : 0, micro: null, macro: null, cluster: null };
+    return { similarity: top ? top.score : 0, micro: null, macro: null, cluster: null, nearest: null };
+  }
+
+  /** Similarity and journal scores of works (each with a `vector`, non-empty profile), in input order. */
+  async scoreAll(works, { onProgress } = {}) {
+    // Neighbours are searched in small blocks; yielding between blocks keeps Zotero responsive
+    const scored = [];
+    const block = 8;
+    const k = this.clusters.length ? this.cfg.knn : 1;
+    for (let start = 0; start < works.length; start += block) {
+      const slice = works.slice(start, start + block);
+      const neighbors = this.matrix.topKBlock(slice.map((w) => w.vector), k);
+      slice.forEach((w, j) => {
+        const sim = this.scoreVector(w.vector, neighbors[j]);
+        const js = journalScore(w, this.journals, this.cfg.journal);
+        const score = this.cfg.similarityWeight * sim.similarity + this.cfg.ifWeight * js.ifScore;
+        scored.push({ ...w, ...sim, ...js, score });
+      });
+      onProgress?.(scored.length, works.length);
+      await yieldToEventLoop();
+    }
+    return scored;
+  }
+
+  /**
+   * Display scores without the similarity gate, thresholds or labels, in input
+   * order (Python ProfileRanker.score_works, used by the flagship track). With
+   * an empty profile every work scores 0 and gets no journal score.
+   */
+  async scoreWorks(works, { onProgress } = {}) {
+    if (this.isEmpty) {
+      return works.map((w) => ({ ...w, similarity: 0, micro: null, macro: null, cluster: null, nearest: null, ifScore: 0, impactFactor: null, score: 0 }));
+    }
+    return this.scoreAll(works, { onProgress });
   }
 
   /**
@@ -185,23 +274,7 @@ export class ProfileRanker {
       };
     }
 
-    // Neighbours are searched in small blocks; yielding between blocks keeps Zotero responsive
-    const scored = [];
-    const block = 8;
-    const k = this.clusters.length ? this.cfg.knn : 1;
-    for (let start = 0; start < works.length; start += block) {
-      const slice = works.slice(start, start + block);
-      const neighbors = this.matrix.topKBlock(slice.map((w) => w.vector), k);
-      slice.forEach((w, j) => {
-        const sim = this.scoreVector(w.vector, neighbors[j]);
-        const js = journalScore(w, this.journals, this.cfg.journal);
-        const score = this.cfg.similarityWeight * sim.similarity + this.cfg.ifWeight * js.ifScore;
-        scored.push({ ...w, ...sim, ...js, score });
-      });
-      onProgress?.(scored.length, works.length);
-      await yieldToEventLoop();
-    }
-
+    const scored = await this.scoreAll(works, { onProgress });
     let kept = scored;
     if (this.cfg.gateEnabled) kept = scored.filter((s) => s.similarity >= this.cfg.minSimilarity);
     const thresholds = computeThresholds(

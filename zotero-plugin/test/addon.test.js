@@ -231,6 +231,8 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
         assert.equal(onlyTopLevel, true);
         return items.map((data) => ({
           ...data,
+          // Items without tags lack getTags(): the library adapter must tolerate it
+          ...(data.tags ? { getTags: () => data.tags.map((tag) => ({ tag, type: 0 })) } : {}),
           isRegularItem: () => data.itemType !== "note",
           getField(name, unformatted, baseMapped) {
             if (name === "publicationTitle" || name === "title") assert.equal(baseMapped, true);
@@ -405,6 +407,7 @@ function libraryItems() {
       issn: "0016-7037",
       venue: "Geochimica et Cosmochimica Acta",
       dateAdded: "2024-05-01 10:00:00",
+      tags: ["Copper isotopes", "Porphyry", "⭐⭐⭐", "/unread", "ZotWatch"],
     })),
     ...Array.from({ length: 4 }, (_, i) => ({
       key: `M${i}`,
@@ -694,6 +697,263 @@ test("Zotero 8: MenuManager is skipped so the main window keeps its locale", asy
   assert.equal(env.mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(menu.children.length, 0);
+});
+
+test("Zotero 10: followed authors reach the inbox, the notice, the status and the library", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const published = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  const followedWork = {
+    id: "https://openalex.org/W77",
+    doi: "https://doi.org/10.31223/X5ZZZ",
+    display_name: "Melt inclusions record slab-derived <i>sulfur</i>",
+    publication_date: published,
+    type: "preprint",
+    is_paratext: false,
+    authorships: [
+      { author: { id: "https://openalex.org/A1", display_name: "Li Wang", orcid: "https://orcid.org/0000-0002-1825-0097" } },
+      { author: null },
+    ],
+    primary_location: { landing_page_url: "https://eartharxiv.org/x", source: { display_name: "EarthArXiv", issn: null } },
+    abstract_inverted_index: { Sulfur: [0], isotopes: [1] },
+    cited_by_count: null,
+  };
+  const openalexQueries = [];
+  const standard = standardHttp({});
+  const http = {
+    async request(req) {
+      if (req.url.startsWith("https://api.openalex.org/works")) {
+        openalexQueries.push(decodeURIComponent(req.url));
+        return { status: 200, data: { meta: { next_cursor: null }, results: [followedWork] } };
+      }
+      return standard.request(req);
+    },
+  };
+  const env = createEnvironment({ dataDir, items: libraryItems(), http, zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const addon = await boot(env);
+  useApiEmbeddings(env);
+  env.prefs.set("extensions.zotwatch.followed.enabled", true);
+  env.prefs.set("extensions.zotwatch.followed.authors", "Li Wang, https://orcid.org/0000-0002-1825-0097\nnot an author line");
+
+  const result = await addon.runNow({ background: true });
+  assert.equal(result.stats.newByLabel.followed, 1);
+  assert.ok(result.stats.newByLabel.personal >= 1);
+  assert.deepEqual(plain(result.errors), [{ stage: "followed", message: "无法识别的作者行：not an author line" }]);
+  assert.match(openalexQueries[0], /filter=author\.orcid:https:\/\/orcid\.org\/0000-0002-1825-0097,from_publication_date:\d{4}-\d{2}-\d{2}&/);
+  assert.ok(env.Zotero.HTTP.requests.every((r) => r.options.anon === true));
+  assert.equal(env.Zotero.notifications.length, 1);
+  assert.match(env.Zotero.notifications[0].text, /^发现 \d+ 篇新推荐（\d+ 篇必读），关注作者 1 篇。/);
+  assert.ok(existsSync(join(dataDir, "zotwatch", "followed.json")));
+
+  const view = await addon.getView();
+  const followed = view.works.find((w) => w.label === "followed");
+  assert.equal(followed.id, "doi:10.31223/x5zzz");
+  assert.equal(followed.title, "Melt inclusions record slab-derived sulfur");
+  assert.deepEqual(plain(followed.followedAuthors), ["Li Wang"]);
+  assert.equal(followed.score, 0);
+  assert.match(await addon.getStatus(), /关注作者：1 位（Li Wang），检查最近 60 天；1 行无法识别：not an author line/);
+
+  // OpenAlex preprints become preprint items
+  const itemID = await addon.addToLibrary(followed.id);
+  const item = env.savedItems.find((i) => i.id === itemID);
+  assert.equal(item.itemType, "preprint");
+  assert.equal(item.fields.repository, "EarthArXiv");
+  assert.equal(item.fields.DOI, "10.31223/x5zzz");
+  assert.deepEqual(plain(item.creators), [{ creatorType: "author", firstName: "Li", lastName: "Wang" }]);
+
+  // Shown once: the next run finds nothing new from the followed authors
+  const again = await addon.runNow();
+  assert.equal(again.stats.newByLabel.followed, 0);
+
+  // Resetting forgets the seen-set with everything else
+  await addon.resetData();
+  assert.ok(!existsSync(join(dataDir, "zotwatch", "followed.json")));
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.deepEqual(env.Zotero.errors.map(String), []);
+});
+
+test("Zotero 10: missing abstracts are filled from publisher APIs, cached and their keys checked", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const abstract = "Copper isotopes trace sulfide saturation and porphyry ore formation beneath continental arcs in this study.";
+  const standard = standardHttp({});
+  const publisherCalls = [];
+  const http = {
+    async request(req) {
+      if (req.url.startsWith("https://api.crossref.org/works?")) {
+        // The copper paper arrives from Crossref without an abstract, under an Elsevier DOI
+        const res = await standard.request(req);
+        const items = res.data.message.items.map((w, i) => (i === 0 ? { ...w, DOI: "10.1016/j.gca.2099.1", abstract: undefined } : w));
+        return { status: 200, data: { message: { ...res.data.message, items } } };
+      }
+      if (req.url.startsWith("https://api.elsevier.com/")) {
+        publisherCalls.push(req);
+        if (req.headers["X-ELS-APIKey"] !== "els-key") return { status: 401, data: {} };
+        return req.url.includes("j.gca.2099.1")
+          ? { status: 200, data: { "full-text-retrieval-response": { coredata: { "dc:description": abstract } } } }
+          : { status: 404, data: {} };
+      }
+      if (req.url.startsWith("https://api.springernature.com/")) return { status: 401, data: { message: "Authentication failed" } };
+      if (req.url.startsWith("https://api.openalex.org/works")) return { status: 200, data: { results: [] } };
+      return standard.request(req);
+    },
+  };
+  const env = createEnvironment({ dataDir, items: libraryItems(), http, zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const addon = await boot(env);
+  useApiEmbeddings(env);
+  env.prefs.set("extensions.zotwatch.abstracts.elsevierKey", "els-key");
+
+  const result = await addon.runNow();
+  assert.deepEqual(plain(result.errors), []);
+  assert.equal(result.stats.abstracts.elsevier, 1);
+  assert.equal(result.stats.abstractsEnriched, 1);
+  assert.deepEqual(plain(publisherCalls[0].headers), { "X-ELS-APIKey": "els-key", Accept: "application/json" });
+  assert.ok(env.Zotero.HTTP.requests.every((r) => r.options.anon === true));
+  const view = await addon.getView();
+  assert.equal(view.works.find((w) => w.id === "doi:10.1016/j.gca.2099.1")?.abstract, abstract);
+  assert.ok(existsSync(join(dataDir, "zotwatch", "abstracts-cache.json")));
+  assert.match(await addon.getStatus(), /摘要补全：上次运行补全 1 \/ 1 篇（Elsevier 1）/);
+
+  // The next run answers from the cache
+  publisherCalls.length = 0;
+  const again = await addon.runNow();
+  assert.equal(again.stats.abstracts.cacheHits, 1);
+  assert.equal(publisherCalls.length, 0);
+
+  env.prefs.set("extensions.zotwatch.abstracts.springerKey", "spr-key");
+  const status = await addon.testConnections();
+  assert.match(status, /✅ Elsevier：Key 有效/);
+  assert.match(status, /❌ Springer Nature：Key 无效（HTTP 401）/);
+
+  await addon.resetData();
+  assert.ok(!existsSync(join(dataDir, "zotwatch", "abstracts-cache.json")));
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.deepEqual(env.Zotero.errors.map(String), []);
+});
+
+test("Zotero 10: flagship-journal articles are gated into their own track", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const created = new Date(Date.now() - 2 * 86400000).toISOString();
+  const nature = (n, title, abstract) => ({
+    DOI: `10.1038/s41586-0${n}`,
+    title: [title],
+    author: [{ given: "Li", family: "Wang" }],
+    abstract: `<jats:p>${abstract}</jats:p>`,
+    "container-title": ["Nature"],
+    created: { "date-time": created },
+    URL: `https://doi.org/10.1038/s41586-0${n}`,
+    type: "journal-article",
+    ISSN: ["0028-0836", "1476-4687"],
+  });
+  const flagshipQueries = [];
+  const standard = standardHttp({});
+  const http = {
+    async request(req) {
+      const url = decodeURIComponent(req.url);
+      if (req.url.startsWith("https://api.crossref.org/works?") && url.includes("issn:0028-0836")) {
+        flagshipQueries.push(url);
+        const items = [
+          nature(1, "Copper isotope records of mantle sulfur", "Copper isotope and sulfur budgets of the mantle beneath arcs"),
+          nature(2, "Fast-charging battery anodes", "Battery battery anodes for electric vehicles"),
+        ];
+        return { status: 200, data: { message: { "total-results": items.length, items } } };
+      }
+      return standard.request(req);
+    },
+  };
+  const env = createEnvironment({ dataDir, items: libraryItems(), http, zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const addon = await boot(env);
+  useApiEmbeddings(env);
+  env.prefs.set("extensions.zotwatch.flagship.enabled", true);
+  env.prefs.set("extensions.zotwatch.flagship.positiveAnchor", "Copper isotope geochemistry of mantle sulfur.");
+  env.prefs.set("extensions.zotwatch.flagship.negativeAnchors", "Battery chemistry.\nGalaxy surveys.");
+
+  const result = await addon.runNow({ background: true });
+  assert.deepEqual(plain(result.errors), []);
+  assert.equal(flagshipQueries.length, 1);
+  assert.match(flagshipQueries[0], /issn:0028-0836,issn:1476-4687,issn:0036-8075/);
+  assert.equal(result.stats.perSource["顶刊"], 2);
+  assert.equal(result.stats.newByLabel.flagship, 1);
+  assert.match(env.Zotero.notifications[0].text, /，顶刊地学 1 篇。/);
+
+  const view = await addon.getView();
+  const flagship = view.works.filter((w) => w.label === "flagship");
+  assert.deepEqual(plain(flagship.map((w) => w.id)), ["doi:10.1038/s41586-01"]);
+  assert.equal(flagship[0].venue, "Nature");
+  assert.equal(flagship[0].gate.judged, false);
+  assert.ok(flagship[0].gate.pos >= 0.3 && flagship[0].gate.neg < flagship[0].gate.pos);
+  assert.ok(!view.works.some((w) => w.id === "doi:10.1038/s41586-02"), "rejected by the battery anchor");
+  assert.match(
+    await addon.getStatus(),
+    /顶刊地学速览：12 个 ISSN，接受阈值 0\.30，灰区下限 0\.22；上次运行 2 篇候选，2 篇有摘要且在时间范围内，入选 1 篇（灰区 0 篇）/,
+  );
+
+  const itemID = await addon.addToLibrary(flagship[0].id);
+  assert.equal(env.savedItems.find((i) => i.id === itemID).itemType, "journalArticle");
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.deepEqual(env.Zotero.errors.map(String), []);
+});
+
+test("Zotero 10: research directions are labeled from library titles and tags", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const prompts = [];
+  const standard = standardHttp({});
+  const http = {
+    async request(req) {
+      if (req.url === "https://llm.example/v1/chat/completions") {
+        const prompt = JSON.parse(req.body).messages[0].content;
+        prompts.push(prompt);
+        const content = prompt.includes("研究方向标签")
+          ? JSON.stringify([...prompt.matchAll(/^ {2}Titles: (.*)$/gm)].map(([, titles]) => (titles.includes("Copper") ? "铜同位素分馏" : "地幔熔融")))
+          : '{"research_question":"问题","methodology":"方法"}';
+        return { status: 200, data: { choices: [{ message: { content } }] } };
+      }
+      return standard.request(req);
+    },
+  };
+  const env = createEnvironment({ dataDir, items: libraryItems(), http, zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const addon = await boot(env);
+  useApiEmbeddings(env);
+  const llmPrefs = { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.translateTitles": false, "llm.summaryTopN": "1" };
+  for (const [key, value] of Object.entries(llmPrefs)) env.prefs.set(`extensions.zotwatch.${key}`, value);
+  assert.equal(addon.getSettings().llm.topicLabels, true, "on by default");
+
+  const result = await addon.runNow();
+  assert.deepEqual(plain(result.errors), []);
+  assert.deepEqual(plain(result.stats.topics), { clusters: 2, labeled: 2, generated: 2 });
+  const labelPrompts = prompts.filter((p) => p.includes("研究方向标签"));
+  assert.equal(labelPrompts.length, 1);
+  assert.match(labelPrompts[0], /Cluster 1 \(12 papers\):\n {2}Titles: "Copper isotope fractionation in porphyry systems \d+", .*\n {2}Keywords: Copper isotopes, Porphyry\n/);
+  assert.match(labelPrompts[0], /Cluster 2 \(4 papers\):\n {2}Titles: .*\n {2}Keywords: N\/A\n/, "items without tags");
+  assert.doesNotMatch(labelPrompts[0], /⭐|\/unread|ZotWatch/);
+  assert.ok(existsSync(join(dataDir, "zotwatch", "cluster-labels.json")));
+
+  const view = await addon.getView();
+  const top = view.works.find((w) => w.id === "doi:10.5555/new.1");
+  assert.equal(top.topic, "铜同位素分馏");
+  assert.equal(view.works.find((w) => w.id === "doi:10.5555/new.2").topic, "地幔熔融");
+  assert.match(await addon.getStatus(), /\n研究方向：铜同位素分馏（12 篇）、地幔熔融（4 篇）\n/);
+
+  // The summary note names the research direction
+  await addon.addToLibrary(top.id);
+  const note = env.savedItems.find((i) => typeof i.note === "string");
+  assert.match(note.note, /<p>研究方向：铜同位素分馏<\/p>/);
+
+  // Turned off: no line in the status, no new label request
+  env.prefs.set("extensions.zotwatch.llm.topicLabels", false);
+  assert.doesNotMatch(await addon.getStatus(), /研究方向/);
+  await addon.resetData();
+  await addon.runNow();
+  assert.equal(prompts.filter((p) => p.includes("研究方向标签")).length, 1);
+  assert.ok(!existsSync(join(dataDir, "zotwatch", "cluster-labels.json")), "labels are cleared with the cache");
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.deepEqual(env.Zotero.errors.map(String), []);
 });
 
 test("an unreadable journals.csv does not stop the plugin", async (t) => {

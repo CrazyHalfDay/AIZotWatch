@@ -1,6 +1,6 @@
 {
   "name": "zotwatch-zotero",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ZotWatch as a Zotero plugin: recommend new papers based on your Zotero library",
   "private": true,
   "type": "module",

@@ -8,6 +8,7 @@ import { libraryVenues, parseWhitelist, serializeWhitelist } from "../core/journ
 import { CancelledError, ZotWatchEngine } from "../engine.js";
 import { createEmbedder } from "../embedding/providers.js";
 import { createLlmClient } from "../llm/llm.js";
+import { checkPublisherKeys } from "../sources/abstracts.js";
 import { addWorkToZotero } from "./items.js";
 import {
   createZoteroLibrary,
@@ -59,6 +60,50 @@ export function plainMenuLabels(count, locale) {
     open: count > 0 ? `ZotWatch Recommendations (${count} new)…` : "ZotWatch Recommendations…",
     run: "ZotWatch: Check for New Papers",
   };
+}
+
+/** Background notice for a run that found new recommendations (all tracks). */
+export function newRecommendationsNotice(stats) {
+  const { flagship = 0, followed = 0 } = stats.newByLabel || {};
+  const tracks = `${flagship ? `，顶刊地学 ${flagship} 篇` : ""}${followed ? `，关注作者 ${followed} 篇` : ""}`;
+  return `发现 ${stats.newRecommendations} 篇新推荐（${stats.mustRead ?? 0} 篇必读）${tracks}。在「工具 → ZotWatch 文献推荐」中查看。`;
+}
+
+/** Status line for the followed-authors setting (so unparseable lines show up before a run). */
+export function followedStatusLine({ authors, invalid, daysBack }) {
+  const names = authors.map((a) => a.name);
+  const list = names.length > 6 ? `${names.slice(0, 6).join("、")} 等` : names.join("、");
+  const head = authors.length ? `关注作者：${authors.length} 位（${list}），检查最近 ${daysBack} 天` : "关注作者：未填写有效的作者";
+  return invalid.length ? `${head}；${invalid.length} 行无法识别：${invalid[0]}` : head;
+}
+
+/** Status line for the flagship track: its settings and the last run's funnel (stats.flagship). */
+export function flagshipStatusLine(cfg, stats) {
+  const head = cfg.issns.length
+    ? `顶刊地学速览：${cfg.issns.length} 个 ISSN，接受阈值 ${cfg.minScore.toFixed(2)}，灰区下限 ${cfg.grayLow.toFixed(2)}`
+    : "顶刊地学速览：未填写有效的 ISSN";
+  if (!stats) return head;
+  const judged = stats.judged ? `，大模型复核 ${stats.judged} 篇` : "";
+  return `${head}；上次运行 ${stats.candidates} 篇候选，${stats.recent} 篇有摘要且在时间范围内，入选 ${stats.recommended} 篇（灰区 ${stats.gray} 篇${judged}）`;
+}
+
+/** Status line for the abstract fallback of the last run (stats.abstracts). */
+export function abstractsStatusLine(counts) {
+  const sources = [
+    ["缓存", counts.cacheHits],
+    ["Crossref", counts.crossref],
+    ["Elsevier", counts.elsevier],
+    ["Springer Nature", counts.springer],
+    ["OpenAlex", counts.openalex],
+  ].filter(([, n]) => n > 0);
+  const detail = sources.length ? `（${sources.map(([name, n]) => `${name} ${n}`).join("，")}）` : "";
+  return `摘要补全：上次运行补全 ${counts.filled || 0} / ${counts.missing || 0} 篇${detail}`;
+}
+
+/** Status line for the research-direction labels: the largest directions and their sizes. */
+export function topicsStatusLine(topics, max = 8) {
+  const shown = topics.slice(0, max).map((t) => `${t.label}（${t.size} 篇）`).join("、");
+  return `研究方向：${shown}${topics.length > max ? ` 等 ${topics.length} 个` : ""}`;
 }
 
 /** ProgressWindow parses its text as markup; keep arbitrary messages inert. */
@@ -324,11 +369,7 @@ export class ZotWatchAddon {
         await this.refreshPendingCount().catch(() => {});
         this.emit({ type: "done", result });
         if (background && result.stats.newRecommendations > 0) {
-          this.notify(
-            "ZotWatch",
-            `发现 ${result.stats.newRecommendations} 篇新推荐（${result.stats.mustRead} 篇必读）。在「工具 → ZotWatch 文献推荐」中查看。`,
-            { sticky: true },
-          );
+          this.notify("ZotWatch", newRecommendationsNotice(result.stats), { sticky: true });
         }
         return result;
       } catch (e) {
@@ -540,21 +581,30 @@ export class ZotWatchAddon {
     } catch (e) {
       lines.push(`❌ Crossref：${e.message}`);
     }
+    lines.push(...(await checkPublisherKeys(this.transport, settings.abstracts)));
     return lines.join("\n");
   }
 
   async getStatus() {
+    const settings = this.getSettings();
     const items = await createZoteroLibrary().getItems();
     const withAbstract = items.filter((i) => i.abstract).length;
-    const inbox = await this.createEngine().loadInbox();
+    const engine = this.createEngine(settings);
+    const inbox = await engine.loadInbox();
     const pending = Object.values(inbox.works).filter((w) => w.status === "new").length;
     const last = inbox.lastRun;
     const library = Zotero.Libraries.get(profileLibraryID());
+    const followed = settings.followed;
+    const topics = settings.llm.topicLabels ? await engine.getTopics() : [];
     return [
       ...(this.whitelistError ? [`⚠️ ${this.whitelistError}`] : []),
       `文库：${library?.name || "我的文库"}，${items.length} 个条目（含摘要 ${withAbstract}）`,
       `待查看推荐：${pending}`,
       last ? `上次运行：${new Date(last.runAt).toLocaleString()}，推荐 ${last.stats.recommended} 篇，抓取 ${last.stats.fetched} 篇` : "尚未运行",
+      ...(topics.length ? [topicsStatusLine(topics)] : []),
+      ...(followed.enabled ? [followedStatusLine(followed)] : []),
+      ...(settings.flagship.enabled ? [flagshipStatusLine(settings.flagship, last?.stats?.flagship)] : []),
+      ...(last?.stats?.abstracts ? [abstractsStatusLine(last.stats.abstracts)] : []),
       `数据目录：${this.storage.dir}`,
     ].join("\n");
   }

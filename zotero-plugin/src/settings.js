@@ -2,14 +2,18 @@
 // addon/prefs.js); numbers are stored as strings so the preference pane can
 // bind plain text inputs, and are parsed here with defaults.
 
+import { parseFollowedAuthors } from "./core/authors.js";
+import { FLAGSHIP_DEFAULTS, normalizeIssnList, parseAnchorLines } from "./core/flagship.js";
 import { parseList } from "./core/text.js";
 
 export const PREF_PREFIX = "extensions.zotwatch.";
 
-// Per-provider calibration: local TF-IDF cosines are much lower than neural ones
+// Per-provider calibration: local TF-IDF cosines are much lower than neural ones.
+// The flagship gate bands were tuned on DashScope text-embedding-v4 (the
+// Python config); the local values are rough (lexical overlap with one sentence).
 const PROVIDER_CALIBRATION = {
-  local: { minSimilarity: 0.06, minMustRead: 0.22, minConsider: 0.12 },
-  default: { minSimilarity: 0.2, minMustRead: 0.55, minConsider: 0.35 },
+  local: { minSimilarity: 0.06, minMustRead: 0.22, minConsider: 0.12, flagshipMinScore: 0.12, flagshipGrayLow: 0.04 },
+  default: { minSimilarity: 0.2, minMustRead: 0.55, minConsider: 0.35, flagshipMinScore: 0.3, flagshipGrayLow: 0.22 },
 };
 
 function num(value, fallback, { min = -Infinity, max = Infinity, int = false } = {}) {
@@ -30,6 +34,11 @@ function str(value, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+/** Free text that falls back to `fallback` when unset or blank (clearing a field restores the default). */
+function textOr(value, fallback) {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
 /**
  * Build the settings object from a pref getter.
  * @param {(key: string) => any} get - returns the raw pref value for a key without the prefix
@@ -37,6 +46,8 @@ function str(value, fallback = "") {
 export function loadSettings(get) {
   const provider = str(get("embedding.provider"), "local") || "local";
   const calib = PROVIDER_CALIBRATION[provider] || PROVIDER_CALIBRATION.default;
+  const followedAuthors = parseFollowedAuthors(typeof get("followed.authors") === "string" ? get("followed.authors") : "");
+  const flagshipMinScore = num(get("flagship.minScore"), calib.flagshipMinScore, { min: 0, max: 1 });
 
   return {
     embedding: {
@@ -54,6 +65,8 @@ export function loadSettings(get) {
       apiKey: str(get("llm.apiKey")),
       model: str(get("llm.model"), "deepseek/deepseek-chat") || "deepseek/deepseek-chat",
       translateTitles: bool(get("llm.translateTitles"), true),
+      // Label the library's research directions (clusters) once; labels are reused across runs
+      topicLabels: bool(get("llm.topicLabels"), true),
       summaryTopN: num(get("llm.summaryTopN"), 10, { min: 0, max: 100, int: true }),
       temperature: 0.3,
       maxTokens: 2048,
@@ -77,6 +90,36 @@ export function loadSettings(get) {
         maxResults: num(get("sources.eartharxiv.maxResults"), 500, { min: 1, max: 5000, int: true }),
       },
       openalexAbstracts: bool(get("sources.openalexAbstracts"), true),
+    },
+    // Abstract fallback tiers (sources/abstracts.js); mailto is sources.crossref.mailto
+    abstracts: {
+      crossref: bool(get("abstracts.crossref"), true),
+      openalex: bool(get("sources.openalexAbstracts"), true),
+      elsevierKey: str(get("abstracts.elsevierKey")),
+      springerKey: str(get("abstracts.springerKey")),
+    },
+    followed: {
+      enabled: bool(get("followed.enabled"), false),
+      // Parsed lines (see parseFollowedAuthors); unparseable lines are reported by the run
+      authors: followedAuthors.authors,
+      invalid: followedAuthors.invalid,
+      // Publication-date window searched on every run (a seen-set prevents repeats)
+      daysBack: num(get("followed.daysBack"), 60, { min: 7, max: 365, int: true }),
+    },
+    // Flagship geoscience track (core/flagship.js); blank text fields use the defaults
+    flagship: {
+      enabled: bool(get("flagship.enabled"), false),
+      issns: normalizeIssnList(parseList(textOr(get("flagship.issns"), FLAGSHIP_DEFAULTS.issns.join("\n")))),
+      positiveAnchor: textOr(get("flagship.positiveAnchor"), FLAGSHIP_DEFAULTS.positiveAnchor).trim(),
+      negativeAnchors: parseAnchorLines(textOr(get("flagship.negativeAnchors"), FLAGSHIP_DEFAULTS.negativeAnchors.join("\n"))),
+      // Positive-anchor cosine >= minScore accepts, < grayLow rejects, in between is the gray zone
+      minScore: flagshipMinScore,
+      grayLow: Math.min(num(get("flagship.grayLow"), calib.flagshipGrayLow, { min: 0, max: 1 }), flagshipMinScore),
+      llmFallback: bool(get("flagship.llmFallback"), true),
+      llmBoundary: textOr(get("flagship.llmBoundary"), FLAGSHIP_DEFAULTS.llmBoundary).trim(),
+      llmBatchSize: 20,
+      // Articles shown per run, newest first (0 = no cap)
+      maxResults: num(get("flagship.maxResults"), FLAGSHIP_DEFAULTS.maxResults, { min: 0, max: 200, int: true }),
     },
     journals: {
       whitelist: typeof get("journals.whitelist") === "string" ? get("journals.whitelist") : "",

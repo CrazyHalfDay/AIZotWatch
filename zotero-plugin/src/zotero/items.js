@@ -3,9 +3,15 @@
 /* global Zotero */
 
 import { toZoteroCreator } from "../core/authors.js";
+import { trackOf } from "../core/tracks.js";
 import { SUMMARY_FIELDS } from "../llm/llm.js";
 
 const PREPRINT_SOURCES = new Set(["arxiv", "eartharxiv"]);
+
+/** arXiv / EarthArXiv works and OpenAlex works typed "preprint". */
+function isPreprint(work) {
+  return PREPRINT_SOURCES.has(work.source) || work.type === "preprint";
+}
 
 function escapeHtml(s) {
   return String(s ?? "")
@@ -15,12 +21,29 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+const percent = (value) => (Number.isFinite(value) ? (value * 100).toFixed(0) : "0");
+
+/** Where the recommendation came from: score line, flagship track or followed authors. */
+function originLines(work) {
+  const names = (work.followedAuthors || []).filter(Boolean).join("、");
+  const track = trackOf(work);
+  const lines = [];
+  if (track === "followed") {
+    lines.push(`来源：关注作者（${names}）`);
+  } else {
+    if (track === "flagship") lines.push(`来源：顶刊地学速览（与文库相似度 ${percent(work.similarity)}）`);
+    else if (typeof work.score === "number") lines.push(`推荐分数：${percent(work.score)}（相似度 ${percent(work.similarity)}）`);
+    if (names) lines.push(`关注作者：${names}`);
+  }
+  if (work.topic) lines.push(`研究方向：${work.topic}`);
+  return lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("\n");
+}
+
 export function summaryNoteHtml(work) {
   const rows = SUMMARY_FIELDS.filter(([key]) => work.summary?.[key])
     .map(([key, label]) => `<p><strong>${label}：</strong>${escapeHtml(work.summary[key])}</p>`)
     .join("\n");
-  const score = typeof work.score === "number" ? `<p>推荐分数：${(work.score * 100).toFixed(0)}（相似度 ${(work.similarity * 100).toFixed(0)}）</p>` : "";
-  return `<h2>ZotWatch AI 摘要</h2>\n${rows}\n${score}`;
+  return `<h2>ZotWatch AI 摘要</h2>\n${rows}\n${originLines(work)}`;
 }
 
 // In-flight lookups, so two quick "add" clicks never create two collections
@@ -68,7 +91,7 @@ async function importByIdentifier(work, libraryID, collection, log) {
 }
 
 function createItemFromWork(work, libraryID) {
-  const preprint = PREPRINT_SOURCES.has(work.source) && Zotero.ItemTypes.getID("preprint");
+  const preprint = isPreprint(work) && Zotero.ItemTypes.getID("preprint");
   const item = new Zotero.Item(preprint ? "preprint" : "journalArticle");
   item.libraryID = libraryID;
   const set = (field, value) => {

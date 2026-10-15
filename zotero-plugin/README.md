@@ -7,12 +7,16 @@
 ## 功能
 
 - **本地文库画像**：直接读取 Zotero 本地数据库中的条目（无需 Zotero API Key），增量向量化——只有新增或修改过的条目才会重新计算
-- **多源抓取**：Crossref（按关注期刊 ISSN）、arXiv（按分类）、EarthArXiv（OAI-PMH），摘要缺失时自动从 OpenAlex 补全
+- **多源抓取**：Crossref（按关注期刊 ISSN）、arXiv（按分类）、EarthArXiv（OAI-PMH）
+- **摘要补全**：论文缺少摘要时（很多出版商不向 Crossref 提交摘要），按 DOI 依次从 Crossref、Elsevier、Springer Nature（后两者需填写免费的 API Key）和 OpenAlex 查找，结果缓存在本地；关注作者的论文同样会补全
 - **关注期刊自动推断**：默认取文库中最常出现的期刊作为关注列表，也可导入 `journal_whitelist.csv`（含影响因子）
 - **与 Python 版一致的打分算法**：k-NN 微观相似度 + 语义聚类宏观相似度融合（Silhouette 自适应选 k），叠加期刊影响因子，动态阈值分出「必读 / 推荐 / 一般」
-- **推荐收件箱**：「待查看 / 已加入 / 已忽略」三栏，已处理的论文不会重复推荐；支持筛选必读、本次新增、按分数/日期排序、搜索
+- **顶刊地学速览**：Nature、Science、PNAS、Nature Communications、Science Advances 等综合性顶刊单独抓取，不按文库相似度筛选，而是用语义「领域锚点」挑出其中的固体地球科学与古生物文章（介于两可之间的可交给大模型复核），单独列出、按发表时间从新到旧排列
+- **关注作者**：按 ORCID（或 OpenAlex 作者 ID）追踪指定研究者的新论文。这些论文不参与打分、只与文库去重，每篇只出现一次；与个性推荐重合时不重复显示，而是在那条推荐上标注「关注：作者名」
+- **推荐收件箱**：「待查看 / 已加入 / 已忽略」三栏，已处理的论文不会重复推荐；按来源分区显示（个性推荐、顶刊地学、关注作者），支持按来源筛选、筛选必读、本次新增、按分数/日期排序、搜索
 - **一键加入 Zotero**：通过 DOI / arXiv 号调用 Zotero 自带的「通过标识符添加」抓取完整元数据，自动放入指定分类并打标签
 - **AI 增强（可选）**：标题翻译成中文、五要点结构化 AI 摘要（研究问题 / 方法 / 发现 / 创新点 / 相关性），可保存为子笔记；支持任何 OpenAI 兼容接口（OpenRouter、DeepSeek、Kimi、通义千问…）
+- **研究方向标签（需大模型）**：文库语义聚类得到的每个研究方向由大模型根据代表性标题和你的 Zotero 标签起一个简短的中文名称，每篇推荐（含顶刊地学文章）标注它最接近的研究方向「方向：…」；标签只生成一次，之后按方向成员沿用，文库变化后只为新出现的方向补充
 - **每日自动运行**：Zotero 运行时在后台按间隔检查，发现新推荐时弹出提示
 - **开箱即用**：默认使用无需 API Key 的本地向量化模式；配置 DashScope / Voyage 后推荐质量更高
 
@@ -44,12 +48,19 @@
 | 向量化 | 服务商 | `本地模式`（免费、离线、效果一般）/ `DashScope`（text-embedding-v4，1024 维）/ `Voyage`（voyage-3.5）/ `OpenAI 兼容`（可接 OpenAI、硅基流动、本地 Ollama 等） |
 | 向量化 | 模型 / 接口地址 | 留空使用默认；更换服务商或模型后会自动重新向量化文库 |
 | 来源 | Crossref / arXiv / EarthArXiv | 回溯天数默认 7 / 7 / 14 天；arXiv 只保留主分类匹配的论文 |
+| 来源 | 摘要补全 | 缺摘要的论文按 DOI 依次查询 Crossref（只用于预印本等不是从 Crossref 抓到的论文）→ Elsevier（`10.1016/`，需 API Key）→ Springer Nature（`10.1007/`、`10.1038/`，需 API Key）→ OpenAlex，取第一个不少于 80 个字符的摘要。找到的摘要缓存 30 天；各来源都明确没有的 DOI 7 天内不再查询（网络错误和限流不算，新填 API Key 后也会重新查询）。API Key 无效时本次运行停用该来源，并在推荐窗口提示；「测试连接」会检查已填写的 Key。Key 申请：[dev.elsevier.com](https://dev.elsevier.com) / [dev.springernature.com](https://dev.springernature.com) |
 | 关注期刊 | 自动关注文库常见期刊 | 取出现次数 ≥ 2 的前 N 种期刊；文库条目缺少 ISSN 时通过 Crossref 按刊名查询（结果缓存 90 天） |
+| 顶刊地学速览 | 开启 / 顶刊 ISSN | 默认关闭。开启后这些期刊（默认 12 个 ISSN：Nature、Science、Nature Communications、Science Advances、Communications Earth & Environment、PNAS、Nature Geoscience、Nature Reviews Earth & Environment 的印刷版与电子版）用单独的 Crossref 查询抓取（回溯天数与 Crossref 相同），并有自己的抓取上限（与关注期刊各自最多 3000 篇，即配置编辑器中的 `sources.crossref.maxResults`），发文量很大的综合期刊不会挤占关注期刊的名额；即使关闭了 Crossref 来源也会抓取。期刊的任一 ISSN 命中即算顶刊文章，它们不再进入个性推荐，也不受关键词、相似度门槛、预印本占比和推荐数量限制，但必须有摘要（会先经过摘要补全）且在「最近 N 天」内发表 |
+| 顶刊地学速览 | 门控与阈值 | 每篇文章的摘要向量与「地学领域描述」（正向锚点）和每条「排除领域」（大气、材料、化学、生物、天文、工程）比较：离任一排除领域不比正向锚点远的直接排除；与正向锚点的相似度 ≥ 接受阈值的保留，< 灰区下限的排除，两者之间为灰区。阈值留空时自动取值：API 模式 0.30 / 0.22（Python 版针对 DashScope text-embedding-v4 调校的值），本地模式 0.12 / 0.04（本地模式只比较字面词汇，效果粗糙，建议开启大模型复核或改用 DashScope）。Voyage 的锚点按查询（query）向量化，与 Python 版一致 |
+| 顶刊地学速览 | 大模型复核 / 每次最多显示 | 灰区文章按「大模型复核标准」（与 Python 版 `llm_boundary` 相同）每 20 篇一批交给大模型判断；未启用大模型或关闭复核时灰区全部保留。大模型请求失败或回复无法解析时保留该批并在推荐窗口提示，不影响本次运行。入选文章按发表时间从新到旧最多显示 N 篇（默认 30，0 为不限），卡片上的分数为与文库的相似度（仅供参考），悬停徽章可看到地学相关度和是否经大模型复核。锚点和复核标准留空时恢复默认值 |
+| 关注作者 | 作者列表 / 检查最近 N 天 | 每行一位：姓名 + ORCID（如 `汪在聪, 0000-0002-3584-1673`，也可粘贴 `https://orcid.org/…` 链接）或 OpenAlex 作者 ID（如 `A5023888391`），以 `#` 开头的行会被忽略。每次运行在 OpenAlex 中查询这些作者最近 N 天（默认 60 天，7–365）发表的论文，已出现过的不会再推荐。这些论文不参与评分，不受关键词、摘要和「最近 N 天」过滤影响，只与文库去重；首次开启时会把最近 N 天的论文一次性列出。设置页的「刷新状态」会显示识别到的作者和无法识别的行 |
 | 关注期刊 | 期刊白名单 | 与 AIZotWatch 相同的 CSV 格式：`issn,title,category,impact_factor`；影响因子参与打分。列表保存为数据目录下的 `zotwatch/journals.csv`（体积可能超过偏好设置建议的 4 KB 上限，所以不放在偏好设置里），清除缓存时会保留 |
 | 推荐 | 每次推荐数量 / 最近 N 天 / 预印本占比 | 对应 Python 版的 `watch.top_k`、`watch.recent_days`、`watch.max_preprint_ratio` |
 | 推荐 | 最低相似度 | 相似度门槛（对应 `fusion.min_similarity`），留空时按向量化服务自动取值（API 模式 0.20，本地模式 0.06） |
 | 推荐 | 包含 / 排除关键词 | 对应 `interests.include_keywords` / `exclude_keywords`，整词匹配，中文按子串匹配 |
 | AI | 接口地址 / API Key / 模型 | 任意 OpenAI 兼容的 `/chat/completions` 接口；「快速填写」可一键填入常见服务商 |
+| AI | 每次自动生成摘要的篇数 | 个性推荐取分数最高的 N 篇，顶刊地学和关注作者各另取最新的 N 篇；标题翻译覆盖本次所有新增论文 |
+| AI | 为文库研究方向生成主题标签 | 默认开启（启用大模型并填写 API Key 后生效）。每个研究方向（文库聚类）把最接近中心的 3 个标题和最常用的 5 个 Zotero 标签（不含 `ZotWatch` 输出标签、以 `/` 或 `_` 开头的工作流标签和 ⭐、✔️ 这类符号标签）发给大模型，一次请求为所有未命名的方向起名（Python 版的批量提示词）。重新聚类后，成员重合度（Jaccard）≥ 0.5 的方向沿用原来的标签，只为新方向补充；回复格式不对时不保存，下次运行重试，并在推荐窗口提示。设置页的「刷新状态」列出最大的 8 个研究方向 |
 | 加入 Zotero | 分类 / 标签 / 子笔记 | 默认保存到「ZotWatch 推荐」分类并打上 `ZotWatch` 标签 |
 
 更多高级参数（打分权重、k-NN 邻居数、时间衰减半衰期、收件箱保留天数、使用的文库 ID 等）可在 **设置 → 高级 → 配置编辑器** 中搜索 `extensions.zotwatch.` 修改。
@@ -57,17 +68,30 @@
 ## 工作原理
 
 ```
-Zotero 文库 ──► 画像（增量向量化 + 聚类）
+Zotero 文库 ──► 画像（增量向量化 + 聚类 + 研究方向标签）
                         │
-Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 关键词过滤 ──► OpenAlex 补摘要
+Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 补摘要 ──► 关键词过滤
                         │
                         ▼
              打分：score = 0.8 × 相似度 + 0.2 × 期刊分
              相似度 = 0.65 × k-NN 微观分 + 0.35 × 聚类宏观分
                         │
                         ▼
-      相似度门槛 → 动态阈值标签 → 最近 N 天 → 预印本占比 → Top K → 收件箱
+      相似度门槛 → 动态阈值标签 → 最近 N 天 → 预印本占比 → Top K ──► 个性推荐 ──────────┐
+                                                                                        │
+Crossref（顶刊 ISSN，单独查询）──► 去重 ──► 补摘要 ──► 有摘要 + 最近 N 天                │
+      ──► 领域锚点门控（灰区交给大模型）──► 新→旧，最多 N 篇 ──► 顶刊地学速览 ──────────┼──► 收件箱
+                                                                                        │
+OpenAlex（关注作者的 ORCID）──► 去掉已出现过的 ──► 与文库去重 ──► 补摘要 ──► 关注作者 ──┘
 ```
+
+「补摘要」对本次所有缺摘要的论文（候选论文和关注作者的新论文一起）按 DOI 依次查询 Crossref → Elsevier → Springer Nature → OpenAlex，取第一个足够长的摘要；它在关键词过滤之前进行（与 Python 版相同），所以关键词也能匹配补全的摘要。
+
+顶刊地学速览与 Python 版的 `scoring.flagship` 相同：顶刊文章在去重后立即离开个性推荐流程，先补摘要、去掉无摘要和不在「最近 N 天」内的文章（Python 版在门控之后才按时间过滤，结果相同，但这里省下向量化和大模型调用），再与领域锚点比较。锚点每次运行重新向量化（一次很小的请求，不写入候选缓存）；文章向量与个性推荐共用候选缓存。入选文章照常计算与文库的相似度和期刊分，但只用于显示，不设门槛、不分「必读 / 推荐」。大模型复核用 Python 版的相关性提示词，只是把论文编号改为 P1、P2…（比让模型照抄 DOI 更可靠）；与 Python 版不同，复核失败不会中断运行，而是保留该批文章。
+
+研究方向标签对应 Python 版的 `profile.clustering.generate_labels`：聚类按方向大小从大到小排列，每个方向的代表性标题按与成员均值（k-means 中心）的相似度选取，关键词是成员最常用的 Zotero 标签。与 Python 版不同，标签保存在独立的 `cluster-labels.json` 中，按方向成员（文库条目）匹配而不是随聚类结果一起清空，所以文库增删几篇论文、或本地模式每次重新聚类，都不会重新生成全部标签；大模型的回复必须是与方向数量相同的 JSON 字符串数组，否则不保存（Python 版会把「Cluster N」或解析错的行当作标签永久保存）。每篇论文的研究方向取中心最接近的方向（Python 版计算的是偏向大方向的宏观最佳方向，且没有在报告中使用）；新方向的标签在本次推荐写入收件箱之后生成，随后补到这些论文上。
+
+关注作者的论文与个性推荐是同一篇时只保留个性推荐，并标注「关注：作者名」；已在收件箱中的论文只补上标注，不改变它的分数和状态。之后如果一篇「关注作者」论文出现在个性推荐的结果里，它会改为显示分数，但保留关注标注。
 
 算法细节与 AIZotWatch 的 [docs/algorithm.md](../docs/algorithm.md) 一致：聚类采用球面 k-means，按 Silhouette 系数在 `[max(5, √N/3), min(35, √N)]` 范围内选择 k（偏向更细粒度）；宏观分为 `max_k(sim_k × ln(1+E_k)) / max_k ln(1+E_k)`；动态阈值取当批分数的第 95 / 70 百分位并设下限。
 
@@ -77,14 +101,15 @@ Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 
 
 ## 数据与隐私
 
-- 插件数据保存在 **Zotero 数据目录下的 `zotwatch/` 文件夹**（向量缓存 `profile.*`、候选缓存 `candidates.*`、聚类 `clusters.json`、推荐记录 `inbox.json`、期刊白名单 `journals.csv`）；在设置中可一键清除缓存和推荐记录，不影响文库本身和期刊白名单
+- 插件数据保存在 **Zotero 数据目录下的 `zotwatch/` 文件夹**（向量缓存 `profile.*`、候选缓存 `candidates.*`、聚类 `clusters.json`、推荐记录 `inbox.json`、研究方向标签 `cluster-labels.json`、关注作者已出现过的论文 `followed.json`、摘要缓存 `abstracts-cache.json`、期刊白名单 `journals.csv`）；在设置中可一键清除缓存和推荐记录，不影响文库本身和期刊白名单（清除后，关注作者最近 N 天的论文会再列出一次，研究方向标签也会重新生成）
 - API Key 保存在 Zotero 的偏好设置（profile 目录下的 `prefs.js`，明文），请勿与他人共享该目录
 - 发送到外部服务的内容：
-  - 向量化服务：文库条目和候选论文的**标题 + 摘要**（本地模式不发送）
-  - 大模型（仅启用时）：推荐论文的标题、摘要、作者和期刊名
-  - Crossref / arXiv / EarthArXiv / OpenAlex：只有查询条件（ISSN、分类、日期、DOI），不含文库内容
+  - 向量化服务：文库条目和候选论文的**标题 + 摘要**，开启顶刊地学速览时还有领域锚点文本（本地模式不发送）
+  - 大模型（仅启用时）：推荐论文（包括顶刊地学和关注作者的论文）的标题、摘要、作者和期刊名；顶刊灰区复核时发送这些文章的标题和摘要以及复核标准；生成研究方向标签时发送**文库中**每个方向最多 3 个代表性标题和 5 个 Zotero 标签以及方向的篇数（可在设置中关闭）
+  - Crossref / arXiv / EarthArXiv / OpenAlex：只有查询条件（ISSN、分类、日期、DOI、关注作者的 ORCID / OpenAlex 作者 ID），不含文库内容
+  - Elsevier / Springer Nature（仅在填写 API Key 时）：缺摘要论文的 DOI 和你的 API Key，不含文库内容
 - 所有网络请求都通过 `Zotero.HTTP` 发出，遵循 Zotero 的代理设置；在 Zotero 9 及以上版本中请求不携带 Zotero 的 Cookie（匿名请求）
-- 填写的 Crossref 联系邮箱会作为 `mailto` 参数出现在请求网址中，因此也会出现在 Zotero 的调试日志里；公开提交调试日志前请留意
+- 填写的 Crossref 联系邮箱会作为 `mailto` 参数出现在请求网址中，Springer Nature 的 API Key 也作为网址参数发送（Elsevier 的 Key 放在请求头中），因此可能出现在 Zotero 的调试日志里；公开提交调试日志前请留意
 
 ## 与 Python 版 AIZotWatch 的对应关系
 
@@ -94,13 +119,17 @@ Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 
 | `pipeline/profile.py` + `profile_clusterer.py`（FAISS） | `src/engine.js` + `src/core/kmeans.js`（纯 JS） |
 | `pipeline/profile_ranker.py` + `cluster_scorer.py` + `journal_scorer.py` | `src/core/scoring.js` |
 | `sources/crossref.py` / `arxiv.py` / `eartharxiv.py` | `src/sources/*.js` |
+| `sources/openalex.py`（`followed_authors`，关注作者） | `src/sources/followed.js`；按 ORCID / OpenAlex 作者 ID 合并查询，每次查最近 N 天并用 `followed.json` 记录已出现的论文（不再首次拉取全部历史论文，也不会因某次运行失败而漏掉论文），跳过数据集、勘误等非论文类型 |
+| `pipeline/flagship_filter.py` + `watch.py` 中的 `_select_flagship`（顶刊地学速览） | `src/core/flagship.js`（ISSN 匹配与锚点门控）+ `src/engine.js` 的 `selectFlagship` + `src/llm/llm.js` 的 `judgeRelevance`；相同的锚点、阈值和复核提示词（论文编号改为 P1、P2…），顶刊用单独的 Crossref 查询和抓取上限，ISSN 统一格式后匹配，按向量化服务自动校准阈值，大模型失败时保留灰区文章而不中断运行，AI 摘要每次取最新的 N 篇 |
+| `infrastructure/enrichment/api_fallback.py` + `pipeline/enrich.py`（API 摘要补全） | `src/sources/abstracts.js`；相同的 Crossref → Elsevier → Springer Nature → OpenAlex 顺序和 80 字符下限，OpenAlex 每 50 个 DOI 合并查询；缓存为 `abstracts-cache.json`，网络错误和限流不会被记为「没有摘要」，API Key 无效时本次运行停用该来源并提示；在去重之后进行，不为文库中已有的论文浪费请求 |
 | `pipeline/dedupe.py`（rapidfuzz） | `src/core/dedupe.js`（等价的 token_set_ratio） |
 | `pipeline/filters.py` | `src/core/filters.js` |
 | `llm/summarizer.py` / `translator.py` | `src/llm/llm.js`（相同的摘要提示词） |
+| `llm/cluster_labeler.py` + `profile_clusterer.py` 中的代表性标题和关键词（研究方向标签） | `src/core/scoring.js` 的 `buildClusters`（成员、代表性标题、标签关键词，按大小排序）+ `src/core/topics.js`（标签筛选与按成员 Jaccard 沿用）+ `src/llm/llm.js` 的 `labelClusters`（相同的批量提示词，只接受数量正确的 JSON 数组）；标签存于 `cluster-labels.json`，重新聚类时不清空，每篇推荐标注中心最接近的方向 |
 | RSS / HTML 报告 / Server酱推送 | Zotero 内的推荐窗口 + 桌面通知 |
 | `watch --push`（推送到 Zotero） | 「加入 Zotero」按钮 |
 
-尚未移植：顶刊地学速览（flagship track）、关注作者（ORCID）、出版商网页摘要抓取（Camoufox）、研究兴趣重排序（rerank）、领域分类与总体综述。插件与 Python 版的缓存互不共享，可以同时使用。
+尚未移植：出版商网页摘要抓取（Camoufox）、研究兴趣重排序（rerank）、领域分类与总体综述、HTML 报告中的研究兴趣画像（文库分析与研究方向聚类图谱）。插件与 Python 版的缓存互不共享，可以同时使用。
 
 ## 开发
 
@@ -121,10 +150,10 @@ zotero-plugin/
 │   ├── prefs.js            # 偏好设置默认值
 │   └── content/            # 设置面板、推荐窗口（xhtml/js/css）、图标、示例期刊表
 ├── src/                    # 业务代码（esbuild 打包为 content/zotwatch.js）
-│   ├── core/               # 纯算法：文本、XML、向量、k-means、打分、过滤、去重、期刊表
-│   ├── sources/            # Crossref、arXiv、EarthArXiv、OpenAlex
+│   ├── core/               # 纯算法：文本、XML、向量、k-means、打分、过滤、去重、期刊表、作者解析、推荐分区、顶刊门控、研究方向标签
+│   ├── sources/            # Crossref、arXiv、EarthArXiv、OpenAlex（关注作者）、摘要补全链
 │   ├── embedding/          # DashScope / Voyage / OpenAI 兼容 / 本地 TF-IDF
-│   ├── llm/                # OpenAI 兼容对话接口、标题翻译、AI 摘要
+│   ├── llm/                # OpenAI 兼容对话接口、标题翻译、AI 摘要、顶刊灰区复核、研究方向标签
 │   ├── engine.js           # 完整流水线（不依赖 Zotero，可在 Node 中测试）
 │   ├── settings.js         # 偏好设置 → 配置对象
 │   └── zotero/             # Zotero 适配层：HTTP、文件存储、文库读取、条目创建、菜单与调度

@@ -5,7 +5,7 @@ import { CancelledRequestError, createCancelSignal, getJson, mapWithConcurrency,
 import { fetchArxiv, parseArxivFeed } from "../src/sources/arxiv.js";
 import { fetchCrossref, parseCrossrefItem, resolveJournalIssns } from "../src/sources/crossref.js";
 import { fetchEartharxiv, parseOaiPage } from "../src/sources/eartharxiv.js";
-import { enrichAbstracts, reconstructAbstract } from "../src/sources/openalex.js";
+import { openAlexAbstractsUrl, parseOpenAlexAbstracts, reconstructAbstract } from "../src/sources/openalex.js";
 import { pastDaysWindow } from "../src/sources/window.js";
 import { fixture, mockHttp, noSleep } from "./helpers.js";
 
@@ -125,23 +125,18 @@ test("eartharxiv OAI-PMH paging, deleted records and empty results", async () =>
   assert.equal(works[1].published, "2024-10-06T08:30:00Z");
 });
 
-test("openalex abstract reconstruction and enrichment", async () => {
+test("openalex abstract reconstruction and batched lookups", () => {
   assert.equal(reconstructAbstract({ Zircon: [0], ages: [1, 3], "old,": [2] }), "Zircon ages old, ages");
-  const works = [
-    { doi: "10.1234/a", abstract: null },
-    { doi: "10.1234/b", abstract: "kept" },
-    { doi: "10.1234/c", abstract: null },
-    { doi: null, abstract: null },
-    { doi: "not-a-doi", abstract: null },
-  ];
-  const http = mockHttp([
-    ["https://api.openalex.org/works", () => ({ results: [{ doi: "https://doi.org/10.1234/A", abstract_inverted_index: { Hello: [0], world: [1] } }] })],
-  ]);
-  const added = await enrichAbstracts(http, works);
-  assert.equal(added, 1);
-  assert.equal(works[0].abstract, "Hello world");
-  assert.equal(works[2].abstract, null);
-  assert.match(decodeURIComponent(http.calls[0].url), /filter=doi:https:\/\/doi.org\/10.1234\/a\|https:\/\/doi.org\/10.1234\/c&/);
+  const url = decodeURIComponent(openAlexAbstractsUrl(["10.1234/a", "10.1234/c"], "me@example.org"));
+  assert.match(url, /filter=doi:https:\/\/doi.org\/10.1234\/a\|https:\/\/doi.org\/10.1234\/c&select=doi,abstract_inverted_index&per-page=50&mailto=me@example.org$/);
+  const found = parseOpenAlexAbstracts({
+    results: [{ doi: "https://doi.org/10.1234/A", abstract_inverted_index: { Hello: [0], world: [1] } }, null, { doi: 5 }, { doi: "10.1234/c" }],
+  });
+  assert.deepEqual([...found], [["10.1234/a", "Hello world"]]);
+  // Malformed bodies yield nothing instead of throwing
+  for (const body of [null, "<html>", { results: "x" }, { results: [{ doi: "10.1/x", abstract_inverted_index: { a: "b" } }] }]) {
+    assert.equal(parseOpenAlexAbstracts(body).size, 0);
+  }
 });
 
 test("retries honour Retry-After and never retry a cancelled request", async () => {

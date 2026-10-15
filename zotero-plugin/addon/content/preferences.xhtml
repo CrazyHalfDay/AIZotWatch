@@ -1,7 +1,7 @@
 <vbox id="zw-prefs-root" class="zw-prefs main-section">
   <groupbox>
     <label><html:h2>运行</html:h2></label>
-    <html:p class="zw-hint">ZotWatch 根据你的 Zotero 文库构建研究画像，每天从 Crossref / arXiv / EarthArXiv 抓取新文献并按相关性推荐。推荐结果在「工具 → ZotWatch 文献推荐」中查看。</html:p>
+    <html:p class="zw-hint">ZotWatch 根据你的 Zotero 文库构建研究画像，每天从 Crossref / arXiv / EarthArXiv 抓取新文献并按相关性推荐，也可以追踪指定作者的新论文和顶刊中的地学文章。推荐结果在「工具 → ZotWatch 文献推荐」中查看。</html:p>
     <checkbox native="true" label="每天自动检查新文献（Zotero 运行时在后台进行）" preference="extensions.zotwatch.schedule.autoRun"/>
     <html:div class="zw-grid">
       <html:label for="zw-interval">检查间隔（小时）</html:label>
@@ -52,7 +52,17 @@
       <html:input type="text" id="zw-arxiv-cats" placeholder="physics.geo-ph, astro-ph.EP" preference="extensions.zotwatch.sources.arxiv.categories"/>
     </html:div>
     <checkbox native="true" label="EarthArXiv 地学预印本" preference="extensions.zotwatch.sources.eartharxiv.enabled"/>
-    <checkbox native="true" label="摘要缺失时从 OpenAlex 补全" preference="extensions.zotwatch.sources.openalexAbstracts"/>
+    <html:label class="zw-block-label zw-subhead">摘要补全</html:label>
+    <html:p class="zw-hint">论文缺少摘要时按 Crossref → Elsevier → Springer Nature → OpenAlex 的顺序查找，找到的摘要缓存 30 天，各来源都确认没有的 7 天内不再查询。</html:p>
+    <checkbox native="true" label="从 Crossref 补全（预印本等非期刊来源）" preference="extensions.zotwatch.abstracts.crossref"/>
+    <checkbox native="true" label="从 OpenAlex 补全" preference="extensions.zotwatch.sources.openalexAbstracts"/>
+    <html:div class="zw-grid">
+      <html:label for="zw-elsevier-key">Elsevier API Key（可选，补 10.1016 期刊摘要）</html:label>
+      <html:input type="password" id="zw-elsevier-key" preference="extensions.zotwatch.abstracts.elsevierKey"/>
+      <html:label for="zw-springer-key">Springer Nature API Key（可选，补 10.1007 / 10.1038 期刊摘要）</html:label>
+      <html:input type="password" id="zw-springer-key" preference="extensions.zotwatch.abstracts.springerKey"/>
+    </html:div>
+    <html:p class="zw-hint">申请：dev.elsevier.com / dev.springernature.com。只发送 DOI。</html:p>
   </groupbox>
 
   <groupbox>
@@ -69,6 +79,42 @@
       <button id="zw-journals-import" label="导入 CSV 文件…"/>
       <button id="zw-journals-preset" label="载入地学期刊示例"/>
     </hbox>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>关注作者</html:h2></label>
+    <checkbox native="true" label="关注指定作者的新论文（通过 OpenAlex，按 ORCID 识别）" preference="extensions.zotwatch.followed.enabled"/>
+    <html:p class="zw-hint">每行一位作者：姓名 + ORCID（或 OpenAlex 作者 ID）。关注作者的论文不参与评分，只与文库去重。</html:p>
+    <html:label for="zw-followed-authors" class="zw-block-label">作者列表（以 # 开头的行会被忽略）</html:label>
+    <html:textarea id="zw-followed-authors" class="zw-textarea" rows="5" spellcheck="false" placeholder="汪在聪, 0000-0002-3584-1673&#10;Jay J. Ague, https://orcid.org/0000-0001-8408-0279" preference="extensions.zotwatch.followed.authors"></html:textarea>
+    <html:div class="zw-grid">
+      <html:label for="zw-followed-days">每次检查最近 N 天发表的论文</html:label>
+      <html:input type="number" id="zw-followed-days" min="7" max="365" preference="extensions.zotwatch.followed.daysBack"/>
+    </html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>顶刊地学速览</html:h2></label>
+    <checkbox native="true" label="单独追踪顶刊中的地学文章（Nature、Science、PNAS 等）" preference="extensions.zotwatch.flagship.enabled"/>
+    <html:p class="zw-hint">这些期刊的文章不按文库相似度筛选，而是比较摘要与「地学领域描述」和各「排除领域」的语义相似度：离任一排除领域更近的不要，达到接受阈值的保留，介于灰区下限和接受阈值之间的交给大模型复核（未启用大模型时全部保留）。结果单独列为「顶刊地学速览」，按发表时间从新到旧排列。</html:p>
+    <html:p class="zw-hint">阈值留空时按向量化服务自动取值：API 模式 0.30 / 0.22（按 DashScope text-embedding-v4 调校）；本地模式只比较字面词汇，取 0.12 / 0.04，效果较粗糙，建议开启大模型复核或改用 DashScope。</html:p>
+    <html:label for="zw-flagship-issns" class="zw-block-label">顶刊 ISSN（逗号或换行分隔，留空用默认）</html:label>
+    <html:textarea id="zw-flagship-issns" class="zw-textarea" rows="3" spellcheck="false" preference="extensions.zotwatch.flagship.issns"></html:textarea>
+    <html:div class="zw-grid">
+      <html:label for="zw-flagship-max">每次最多显示（0 不限）</html:label>
+      <html:input type="number" id="zw-flagship-max" min="0" max="200" preference="extensions.zotwatch.flagship.maxResults"/>
+      <html:label for="zw-flagship-min">接受阈值（留空自动）</html:label>
+      <html:input type="text" id="zw-flagship-min" placeholder="自动" preference="extensions.zotwatch.flagship.minScore"/>
+      <html:label for="zw-flagship-gray">灰区下限（留空自动）</html:label>
+      <html:input type="text" id="zw-flagship-gray" placeholder="自动" preference="extensions.zotwatch.flagship.grayLow"/>
+    </html:div>
+    <checkbox native="true" label="灰区文章交给大模型复核（需开启大模型）" preference="extensions.zotwatch.flagship.llmFallback"/>
+    <html:label for="zw-flagship-positive" class="zw-block-label">地学领域描述（英文，留空用默认）</html:label>
+    <html:textarea id="zw-flagship-positive" class="zw-textarea" rows="3" spellcheck="false" preference="extensions.zotwatch.flagship.positiveAnchor"></html:textarea>
+    <html:label for="zw-flagship-negative" class="zw-block-label">排除领域锚点（每行一个，留空用默认）</html:label>
+    <html:textarea id="zw-flagship-negative" class="zw-textarea" rows="6" spellcheck="false" preference="extensions.zotwatch.flagship.negativeAnchors"></html:textarea>
+    <html:label for="zw-flagship-boundary" class="zw-block-label">大模型复核标准（留空用默认）</html:label>
+    <html:textarea id="zw-flagship-boundary" class="zw-textarea" rows="3" spellcheck="false" preference="extensions.zotwatch.flagship.llmBoundary"></html:textarea>
   </groupbox>
 
   <groupbox>
@@ -114,6 +160,8 @@
       <html:input type="number" id="zw-llm-topn" min="0" preference="extensions.zotwatch.llm.summaryTopN"/>
     </html:div>
     <checkbox native="true" label="将英文标题翻译为中文" preference="extensions.zotwatch.llm.translateTitles"/>
+    <checkbox native="true" label="为文库研究方向生成主题标签（会把每个方向的代表性标题发送给大模型）" preference="extensions.zotwatch.llm.topicLabels"/>
+    <html:p class="zw-hint">研究方向来自文库的语义聚类，标签只生成一次并在之后的运行中沿用（文库变化较大时才为新的方向补充标签）；推荐卡片和子笔记会显示论文最接近的研究方向。</html:p>
   </groupbox>
 
   <groupbox>
