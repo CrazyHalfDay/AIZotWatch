@@ -1,6 +1,7 @@
-// Smoke test of the built plugin in a simulated Zotero environment: loads
+// Smoke tests of the built plugin in simulated Zotero environments: load
 // build/addon/bootstrap.js into a VM context with stubbed Zotero/Firefox APIs
-// and drives the full lifecycle (startup -> run -> add item -> shutdown).
+// and drive the full lifecycle (startup -> run -> add item -> shutdown), once
+// as Zotero 10 (MenuManager, sandboxed preference scripts) and once as Zotero 7.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -18,6 +19,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Values created inside the VM have foreign prototypes; compare them structurally
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const addonDir = join(root, "build", "addon");
+const PLUGIN_ID = "zotwatch@crazyhalfday.github.io";
 
 test.before(() => {
   execFileSync(process.execPath, [join(root, "scripts", "build.mjs")], { stdio: "pipe" });
@@ -30,6 +32,7 @@ function fakeElement(doc, tag) {
     attributes: {},
     listeners: {},
     children: [],
+    disabled: false,
     setAttribute(k, v) {
       this.attributes[k] = v;
     },
@@ -39,8 +42,11 @@ function fakeElement(doc, tag) {
     addEventListener(type, fn) {
       (this.listeners[type] ||= []).push(fn);
     },
+    removeEventListener(type, fn) {
+      this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn);
+    },
     dispatch(type) {
-      for (const fn of this.listeners[type] || []) fn({ type });
+      for (const fn of this.listeners[type] || []) fn({ type, target: this });
     },
     append(...els) {
       for (const child of els) {
@@ -52,33 +58,61 @@ function fakeElement(doc, tag) {
     remove() {
       if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
       doc.elements.delete(this.id);
+      doc.links.delete(this);
     },
   };
   return el;
 }
 
 function fakeWindow() {
-  const doc = { elements: new Map() };
+  const doc = { elements: new Map(), links: new Set(), focused: true };
   doc.getElementById = (id) => doc.elements.get(id) || null;
   doc.createXULElement = (tag) => fakeElement(doc, tag);
+  doc.hasFocus = () => doc.focused;
+  doc.querySelector = (selector) => {
+    const href = selector.match(/href="([^"]+)"/)?.[1];
+    return [...doc.links].find((l) => l.attributes.href === href) || null;
+  };
   const popup = fakeElement(doc, "menupopup");
   popup.id = "menu_ToolsPopup";
   doc.elements.set(popup.id, popup);
   const opened = [];
+  const listeners = {};
   return {
     document: doc,
-    ZoteroPane: { selectItem() {} },
+    ZoteroPane: { async selectItem(id) {
+      this.selected = id;
+    } },
     opened,
+    MozXULElement: {
+      insertFTLIfNeeded(href) {
+        if (doc.querySelector(`link[href="${href}"]`)) return;
+        const link = fakeElement(doc, "link");
+        link.attributes = { rel: "localization", href };
+        doc.links.add(link);
+      },
+    },
     openDialog(url, name, features) {
       const dialog = { url, name, features, closed: false, focus() {}, close() { this.closed = true; } };
       opened.push(dialog);
       return dialog;
     },
+    addEventListener(type, fn) {
+      (listeners[type] ||= []).push(fn);
+    },
+    removeEventListener(type, fn) {
+      listeners[type] = (listeners[type] || []).filter((f) => f !== fn);
+    },
+    fire(type) {
+      const fns = listeners[type] || [];
+      listeners[type] = [];
+      for (const fn of fns) fn({ type });
+    },
     focus() {},
   };
 }
 
-function createEnvironment({ dataDir, items, http }) {
+function createEnvironment({ dataDir, items, http, zoteroVersion }) {
   const prefs = new Map();
   const prefDefaults = new Map();
   const savedItems = [];
@@ -86,6 +120,7 @@ function createEnvironment({ dataDir, items, http }) {
   const timers = new Set();
   const mainWindow = fakeWindow();
   const registeredPanes = [];
+  const menus = { registered: [], unregistered: [] };
   let nextId = 100;
 
   class FakeItem {
@@ -130,13 +165,25 @@ function createEnvironment({ dataDir, items, http }) {
       this.libraryID = libraryID;
     }
     async saveTx() {
+      await new Promise((r) => setTimeout(r, 5));
       this.id = nextId++;
       collections.push(this);
     }
   }
 
+  class CancelledException extends Error {}
+  class SecurityException extends Error {}
+  const libraries = {
+    1: { libraryType: "user", editable: true, name: "我的文库", waited: 0, async waitForDataLoad(type) {
+      assert.equal(type, "item");
+      this.waited++;
+    } },
+    2: { libraryType: "feed", editable: false, name: "Feed", async waitForDataLoad() {} },
+  };
+
   const Zotero = {
     initializationPromise: Promise.resolve(),
+    isMac: false,
     debug() {},
     logError(e) {
       Zotero.errors.push(e);
@@ -157,13 +204,26 @@ function createEnvironment({ dataDir, items, http }) {
     getMainWindows: () => [mainWindow],
     getMainWindow: () => mainWindow,
     HTTP: {
+      CancelledException,
+      SecurityException,
+      checkSecurity() {},
+      requests: [],
       async request(method, url, options) {
-        const res = await http.request({ method, url, headers: options.headers, body: options.body, responseType: options.responseType });
+        Zotero.HTTP.requests.push({ method, url, options });
+        let cancel;
+        const cancelled = new Promise((_, reject) => {
+          cancel = () => reject(new CancelledException());
+        });
+        options.cancellerReceiver?.(cancel);
+        const res = await Promise.race([
+          http.request({ method, url, headers: options.headers, body: options.body, responseType: options.responseType }),
+          cancelled,
+        ]);
         const data = options.responseType === "json" && typeof res.data === "string" ? null : res.data;
-        return { status: res.status, response: data };
+        return { status: res.status, response: data, channel: null, getResponseHeader: () => null };
       },
     },
-    Libraries: { userLibraryID: 1, get: (id) => id === 1 },
+    Libraries: { userLibraryID: 1, get: (id) => libraries[id] || false },
     Items: {
       async getAll(libraryID, onlyTopLevel) {
         assert.equal(libraryID, 1);
@@ -173,7 +233,7 @@ function createEnvironment({ dataDir, items, http }) {
           isRegularItem: () => data.itemType !== "note",
           getField(name, unformatted, baseMapped) {
             if (name === "publicationTitle" || name === "title") assert.equal(baseMapped, true);
-            return { title: data.title, abstractNote: data.abstract, DOI: data.doi, ISSN: data.issn, publicationTitle: data.venue, extra: "" }[name] ?? "";
+            return { title: data.title, abstractNote: data.abstract, DOI: data.doi, ISSN: data.issn, publicationTitle: data.venue, extra: data.extra || "" }[name] ?? "";
           },
         }));
       },
@@ -182,7 +242,13 @@ function createEnvironment({ dataDir, items, http }) {
     ItemTypes: { getID: (t) => (t === "preprint" ? 31 : 1) },
     Item: FakeItem,
     Collection: FakeCollection,
-    Collections: { getByLibrary: () => collections },
+    Collections: {
+      recent: [],
+      getByLibrary: () => collections,
+      addToRecent(c) {
+        this.recent.push(c.id);
+      },
+    },
     Translate: {
       Search: class {
         setIdentifier(id) {
@@ -204,9 +270,12 @@ function createEnvironment({ dataDir, items, http }) {
         this.text = t;
       }
       show() {}
-      startCloseTimer() {}
+      startCloseTimer(ms, requireMouseOver) {
+        this.closeTimer = [ms, requireMouseOver];
+      }
     },
     notifications: [],
+    UIProperties: { registerRoot() {} },
     Utilities: { Internal: { openPreferences(id) {
       Zotero.openedPrefs = id;
     } } },
@@ -217,6 +286,18 @@ function createEnvironment({ dataDir, items, http }) {
       getResourceAsync: async (url) => readFileSync(join(addonDir, url.replace("chrome://zotwatch/", "")), "utf8"),
     },
   };
+  if (zoteroVersion >= 8) {
+    Zotero.MenuManager = {
+      registerMenu(options) {
+        menus.registered.push(options);
+        return "menu-key-1";
+      },
+      unregisterMenu(key) {
+        menus.unregistered.push(key);
+        return true;
+      },
+    };
+  }
 
   const IOUtils = {
     makeDirectory: async (p) => mkdirSync(p, { recursive: true }),
@@ -225,6 +306,8 @@ function createEnvironment({ dataDir, items, http }) {
     writeJSON: async (p, obj) => writeFileSync(p, JSON.stringify(obj)),
     read: async (p) => new Uint8Array(readFileSync(p)),
     write: async (p, bytes) => writeFileSync(p, bytes),
+    readUTF8: async (p) => readFileSync(p, "utf8"),
+    writeUTF8: async (p, text) => writeFileSync(p, text, "utf8"),
     remove: async (p) => rmSync(p, { recursive: true, force: true }),
   };
 
@@ -248,6 +331,17 @@ function createEnvironment({ dataDir, items, http }) {
     },
     Services: {
       io: { newURI: (spec) => ({ spec }) },
+      wm: {
+        getMostRecentWindow: (type) => {
+          assert.equal(type, "zotwatch:recommendations");
+          return mainWindow.opened.findLast((d) => !d.closed) || null;
+        },
+      },
+      ww: {
+        openWindow: () => {
+          throw new Error("main window exists; ww.openWindow should not be used");
+        },
+      },
       scriptloader: {
         loadSubScriptWithOptions(url, { target }) {
           assert.ok(url.startsWith("chrome://zotwatch/content/"), url);
@@ -287,7 +381,14 @@ function createEnvironment({ dataDir, items, http }) {
   // Default prefs, loaded the way Zotero does (prefs.js with a `pref` function)
   vm.runInNewContext(readFileSync(join(addonDir, "prefs.js"), "utf8"), { pref: (k, v) => prefDefaults.set(k, v) });
 
-  return { context, Zotero, prefs, prefDefaults, mainWindow, registeredPanes, chromeRegistrations, savedItems, collections, timers };
+  const env = { context, Zotero, prefs, prefDefaults, mainWindow, registeredPanes, chromeRegistrations, savedItems, collections, timers, menus, libraries };
+  env.cleanup = () => {
+    for (const timer of timers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+  };
+  return env;
 }
 
 function libraryItems() {
@@ -297,7 +398,8 @@ function libraryItems() {
       itemType: "journalArticle",
       title: `Copper isotope fractionation in porphyry systems ${i}`,
       abstract: `Copper isotopes and sulfide saturation in arc magmas, study ${i}`,
-      doi: `10.4444/lib.${i}`,
+      doi: i === 0 ? "" : `10.4444/lib.${i}`,
+      extra: i === 0 ? "Original DOI: 10.9999/other\nDOI: 10.4444/lib.0" : "",
       issn: "0016-7037",
       venue: "Geochimica et Cosmochimica Acta",
       dateAdded: "2024-05-01 10:00:00",
@@ -333,72 +435,111 @@ function recentCrossref() {
     mk(1, "Copper isotope fractionation during sulfide saturation in arc magmas", "Copper isotopes sulfide saturation arc magmas porphyry"),
     mk(2, "Mantle peridotite melting revisited", "Mantle peridotite melting basalt"),
     mk(3, "Graphene battery electrodes", "Graphene electrodes for lithium batteries and supercapacitors"),
-  ];
+    // The library holds this one through the "DOI:" line of an item's Extra field
+    mk(4, "An already collected copper paper", "Copper isotopes sulfide"),
+  ].map((w, i) => (i === 3 ? { ...w, DOI: "10.4444/lib.0" } : w));
 }
 
-test("plugin lifecycle in a simulated Zotero", async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
-  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
-  const counter = {};
-  const http = mockHttp([
-    ["https://api.crossref.org/works", () => ({ message: { "total-results": 3, items: recentCrossref() } })],
+function standardHttp(counter, { gate } = {}) {
+  return mockHttp([
+    ["https://api.crossref.org/works", async () => {
+      if (gate) await gate;
+      return { message: { "total-results": 4, items: recentCrossref() } };
+    }],
     ["https://api.crossref.org/journals", () => ({ message: { items: [] } })],
     ["https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", embeddingHandler(counter)],
   ]);
-  const env = createEnvironment({ dataDir, items: libraryItems(), http });
-  const { context, Zotero, mainWindow } = env;
-  t.after(() => {
-    for (const timer of env.timers) {
-      clearTimeout(timer);
-      clearInterval(timer);
-    }
-  });
+}
 
-  // --- startup
-  vm.runInContext(readFileSync(join(addonDir, "bootstrap.js"), "utf8"), context, { filename: "bootstrap.js" });
-  await vm.runInContext('startup({ id: "zotwatch@crazyhalfday.github.io", version: "0.1.0", rootURI: "jar:file:///zotwatch.xpi!/" })', context);
+async function boot(env) {
+  vm.runInContext(readFileSync(join(addonDir, "bootstrap.js"), "utf8"), env.context, { filename: "bootstrap.js" });
+  await vm.runInContext(`startup({ id: "${PLUGIN_ID}", version: "0.1.0", rootURI: "jar:file:///zotwatch.xpi!/" })`, env.context);
+  return env.Zotero.ZotWatch;
+}
 
+function useApiEmbeddings(env) {
+  env.prefs.set("extensions.zotwatch.embedding.provider", "dashscope");
+  env.prefs.set("extensions.zotwatch.embedding.apiKey", "sk-test");
+}
+
+test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const counter = {};
+  const env = createEnvironment({ dataDir, items: libraryItems(), http: standardHttp(counter), zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const { Zotero, mainWindow, menus } = env;
+
+  // A whitelist stored in the pref by an earlier version is migrated to a file
+  env.prefs.set("extensions.zotwatch.journals.whitelist", "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0");
+
+  const addon = await boot(env);
   assert.deepEqual(plain(env.chromeRegistrations[0].entries), [["content", "zotwatch", "jar:file:///zotwatch.xpi!/content/"]]);
-  const addon = Zotero.ZotWatch;
   assert.ok(addon, "Zotero.ZotWatch is exposed");
   assert.equal(env.registeredPanes.length, 1);
   assert.equal(env.registeredPanes[0].src, "chrome://zotwatch/content/preferences.xhtml");
-  assert.equal(env.registeredPanes[0].pluginID, "zotwatch@crazyhalfday.github.io");
-  const menu = mainWindow.document.getElementById("menu_ToolsPopup");
-  assert.deepEqual(menu.children.map((c) => c.id), ["zotwatch-menu-separator", "zotwatch-menu-open", "zotwatch-menu-run"]);
+  assert.equal(env.registeredPanes[0].pluginID, PLUGIN_ID);
+  assert.match(env.registeredPanes[0].helpURL, /^https:\/\//);
   assert.equal(env.timers.size, 2, "scheduler armed");
   assert.equal(addon.isRunDue(), true, "first run is due");
 
-  // A second main window load must not duplicate menu items
-  vm.runInContext("onMainWindowLoad({ window: __win })", Object.assign(context, { __win: mainWindow }));
-  assert.equal(menu.children.length, 3);
+  assert.equal(readFileSync(join(dataDir, "zotwatch", "journals.csv"), "utf8").split("\n")[1], "0016-7037,GCA,GEO,5.0");
+  assert.equal(env.prefs.get("extensions.zotwatch.journals.whitelist"), "");
+  assert.match(addon.getJournalWhitelist(), /0016-7037/);
 
-  // --- menu opens the recommendations window
-  mainWindow.document.getElementById("zotwatch-menu-open").dispatch("command");
+  // Menus go through MenuManager; nothing is injected into the DOM
+  assert.equal(menus.registered.length, 1);
+  const menuOptions = menus.registered[0];
+  assert.equal(menuOptions.target, "main/menubar/tools");
+  assert.equal(menuOptions.pluginID, PLUGIN_ID);
+  assert.deepEqual(plain(menuOptions.menus.map((m) => m.l10nID || m.menuType)), ["separator", "zotwatch-menu-open", "zotwatch-menu-run"]);
+  assert.equal(mainWindow.document.getElementById("menu_ToolsPopup").children.length, 0);
+  assert.ok(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), "Fluent file inserted");
+
+  // Opening twice focuses the existing window
+  menuOptions.menus[1].onCommand();
+  menuOptions.menus[1].onCommand();
+  assert.equal(mainWindow.opened.length, 1);
   assert.equal(mainWindow.opened[0].url, "chrome://zotwatch/content/recommendations.xhtml");
+  assert.doesNotMatch(mainWindow.opened[0].features, /width=/, "size comes from persisted attributes");
 
-  // --- run with a configured API provider
-  env.prefs.set("extensions.zotwatch.embedding.provider", "dashscope");
-  env.prefs.set("extensions.zotwatch.embedding.apiKey", "sk-test");
+  // --- run
+  useApiEmbeddings(env);
   const events = [];
   addon.addListener((e) => events.push(e.type));
   const result = await addon.runNow();
   assert.equal(result.stats.libraryItems, 16, "notes are excluded");
-  assert.equal(result.stats.fetched, 3);
+  assert.equal(result.stats.fetched, 4);
+  assert.equal(result.stats.afterDedupe, 3, "Extra-field DOI counts as in the library");
   assert.ok(result.stats.recommended >= 1);
   assert.ok(events.includes("start") && events.includes("progress") && events.includes("done"));
-  assert.ok(Number(env.prefs.get("extensions.zotwatch.schedule.lastRun")) > 0);
-  assert.equal(addon.isRunDue(), false);
-  assert.ok(existsSync(join(dataDir, "zotwatch", "inbox.json")));
+  assert.equal(env.libraries[1].waited > 0, true, "waits for library data");
+  assert.ok(Zotero.HTTP.requests.every((r) => r.options.anon === true), "requests are anonymous");
   assert.ok(existsSync(join(dataDir, "zotwatch", "profile.bin")));
+
+  // The menu label carries the number of pending recommendations
+  const context = { args: null, enabled: null, setL10nArgs(a) {
+    this.args = a;
+  }, setEnabled(e) {
+    this.enabled = e;
+  } };
+  menuOptions.menus[1].onShowing({}, context);
+  assert.equal(JSON.parse(context.args).count, addon.pendingCount);
+  assert.ok(addon.pendingCount >= 1);
+  menuOptions.menus[2].onShowing({}, context);
+  assert.equal(context.enabled, true);
 
   const view = await addon.getView();
   const top = view.works.sort((a, b) => b.score - a.score)[0];
   assert.equal(top.id, "doi:10.5555/new.1");
   assert.ok(!view.works.some((w) => w.id === "doi:10.5555/new.3"), "off-topic paper is gated");
 
-  // --- add to library (translator finds nothing -> item built from metadata)
-  const itemID = await addon.addToLibrary(top.id);
+  // --- two quick adds create a single collection
+  const others = view.works.filter((w) => w.id !== top.id && w.status === "new");
+  const [itemID] = await Promise.all([addon.addToLibrary(top.id), ...others.map((w) => addon.addToLibrary(w.id))]);
+  assert.equal(env.collections.length, 1);
+  assert.equal(env.collections[0].name, "ZotWatch 推荐");
+  assert.ok(Zotero.Collections.recent.includes(env.collections[0].id));
   const item = env.savedItems.find((i) => i.id === itemID);
   assert.equal(item.itemType, "journalArticle");
   assert.equal(item.fields.title, top.title);
@@ -406,39 +547,149 @@ test("plugin lifecycle in a simulated Zotero", async (t) => {
   assert.equal(item.fields.publicationTitle, "Geochimica et Cosmochimica Acta");
   assert.deepEqual(plain(item.creators), [{ creatorType: "author", firstName: "Li", lastName: "Wang" }]);
   assert.deepEqual(plain(item.tags), ["ZotWatch"]);
-  assert.equal(env.collections[0].name, "ZotWatch 推荐");
   assert.deepEqual(plain(item.collections), [env.collections[0].id]);
-  const afterAdd = await addon.getView();
-  assert.equal(afterAdd.works.find((w) => w.id === top.id).status, "added");
+  assert.equal(addon.pendingCount, 0);
 
-  // --- dismiss, status text, preset journals, preferences
-  const other = afterAdd.works.find((w) => w.status === "new");
-  if (other) {
-    await addon.setStatus(other.id, "dismissed");
-    assert.equal((await addon.getView()).works.find((w) => w.id === other.id).status, "dismissed");
-  }
-  assert.match(await addon.getStatus(), /文库条目：16/);
+  // --- bulk status change, status text, journals, preferences, URLs
+  await addon.setStatus([top.id, others[0]?.id].filter(Boolean), "dismissed");
+  assert.equal((await addon.getView()).works.find((w) => w.id === top.id).status, "dismissed");
+  assert.match(await addon.getStatus(), /我的文库，16 个条目/);
   assert.match(await addon.loadPresetJournals(), /^issn,title,category,impact_factor/);
-  assert.match(await addon.suggestJournals(), /0016-7037,Geochimica et Cosmochimica Acta/);
+  assert.match(await addon.suggestJournals(), /0016-7037,GCA,GEO,5/);
+  await addon.setJournalWhitelist("issn,title\n1234-5678,X");
+  assert.equal(readFileSync(join(dataDir, "zotwatch", "journals.csv"), "utf8"), "issn,title\n1234-5678,X");
   addon.openPreferences();
   assert.equal(Zotero.openedPrefs, "zotwatch-prefpane");
   addon.openUrl("javascript:alert(1)");
   assert.equal(Zotero.launched, undefined, "only http(s) URLs are opened");
+  await addon.showItem(itemID);
+  assert.equal(mainWindow.ZoteroPane.selected, itemID);
 
-  // --- background run notifies only when there is something new
+  // --- a feed library is never used for the profile
+  env.prefs.set("extensions.zotwatch.profile.libraryID", "2");
+  assert.match(await addon.getStatus(), /我的文库/);
+  env.prefs.set("extensions.zotwatch.profile.libraryID", "");
+
+  // --- cancelling aborts in-flight requests
+  let release;
+  const gate = new Promise((r) => (release = r));
+  Object.assign(env, { gate });
+  const slow = standardHttp(counter, { gate });
+  Zotero.HTTP.request = ((original) => async (method, url, options) => {
+    if (url.startsWith("https://api.crossref.org/works")) {
+      let cancel;
+      const cancelled = new Promise((_, reject) => (cancel = () => reject(new Zotero.HTTP.CancelledException())));
+      options.cancellerReceiver(cancel);
+      const res = await Promise.race([slow.request({ method, url }), cancelled]);
+      return { status: res.status, response: res.data, channel: null, getResponseHeader: () => null };
+    }
+    return original(method, url, options);
+  })(Zotero.HTTP.request);
   env.prefs.set("extensions.zotwatch.schedule.lastRun", "0");
-  env.prefs.set("extensions.zotwatch.schedule.lastAttempt", "0");
-  await addon.runNow({ background: true });
-  assert.equal(Zotero.notifications.length, 0);
+  const running = addon.runNow();
+  while (!addon.cancellers.size) await new Promise((r) => setTimeout(r, 5));
+  addon.cancelRun();
+  assert.equal(await running, null);
+  assert.ok(events.includes("cancelled"));
+  release();
 
-  // --- shutdown cleans up
-  vm.runInContext("shutdown({}, ADDON_DISABLE)", context);
-  assert.equal(menu.children.length, 0);
+  // --- shutdown waits for a run, then cleans up
+  const pending = addon.runNow();
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.equal(await pending, null);
+  assert.deepEqual(plain(menus.unregistered), ["menu-key-1"]);
+  assert.equal(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
   assert.equal(Zotero.ZotWatch, undefined);
   assert.equal(env.timers.size, 0);
   assert.equal(env.chromeRegistrations[0].destroyed, true);
   assert.equal(mainWindow.opened[0].closed, true);
   assert.deepEqual(Zotero.errors.map(String), []);
+});
+
+test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const env = createEnvironment({ dataDir, items: libraryItems(), http: standardHttp({}), zoteroVersion: 7 });
+  t.after(env.cleanup);
+  const { Zotero, mainWindow } = env;
+
+  const addon = await boot(env);
+  const menu = mainWindow.document.getElementById("menu_ToolsPopup");
+  assert.deepEqual(menu.children.map((c) => c.id), ["zotwatch-menu-separator", "zotwatch-menu-open", "zotwatch-menu-run"]);
+  assert.equal(menu.children[1].attributes["data-l10n-id"], "zotwatch-menu-open");
+
+  // A second main window load must not duplicate menu items
+  vm.runInContext("onMainWindowLoad({ window: __win })", Object.assign(env.context, { __win: mainWindow }));
+  assert.equal(menu.children.length, 3);
+
+  // Background run while Zotero is in the background: the notice waits for focus
+  useApiEmbeddings(env);
+  mainWindow.document.focused = false;
+  const result = await addon.runNow({ background: true });
+  assert.ok(result.stats.newRecommendations > 0);
+  assert.equal(Zotero.notifications.length, 0, "deferred until Zotero is focused");
+  mainWindow.fire("activate");
+  assert.equal(Zotero.notifications.length, 1);
+  assert.match(Zotero.notifications[0].text, /新推荐/);
+  assert.deepEqual(plain(Zotero.notifications[0].closeTimer), [20000, true], "stays until clicked");
+
+  // The menu label shows the pending count when the menu opens
+  menu.dispatch("popupshowing");
+  assert.equal(JSON.parse(menu.children[1].attributes["data-l10n-args"]).count, addon.pendingCount);
+
+  // Notices are plain text even when an error message contains markup
+  addon.notify("ZotWatch", '<a href=x>proxy</a> failed');
+  assert.doesNotMatch(Zotero.notifications.at(-1).text, /</);
+
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.equal(menu.children.length, 0);
+  assert.deepEqual(Zotero.errors.map(String), []);
+});
+
+test("preference pane initialises from Zotero's events inside a sandbox", async () => {
+  const code = readFileSync(join(addonDir, "content", "preferences.js"), "utf8");
+  const docListeners = [];
+  const elements = new Map();
+  const el = (id, props = {}) => {
+    const node = { id, listeners: {}, textContent: "", value: "", ...props, addEventListener(type, fn) {
+      (this.listeners[type] ||= []).push(fn);
+    } };
+    elements.set(id, node);
+    return node;
+  };
+  const rootEl = el("zw-prefs-root");
+  el("zw-output");
+  const whitelist = el("zw-whitelist");
+  for (const id of ["zw-run", "zw-test", "zw-status-refresh", "zw-journals-suggest", "zw-journals-preset", "zw-journals-import", "zw-reset", "zw-llm-preset"]) el(id);
+  const saved = [];
+  const api = {
+    getJournalWhitelist: () => "issn,title\n0016-7037,GCA",
+    setJournalWhitelist: async (text) => saved.push(text),
+    getStatus: async () => "状态：正常",
+  };
+  const document = {
+    addEventListener: (type, fn, capture) => docListeners.push({ type, fn, capture }),
+    getElementById: (id) => elements.get(id) || null,
+  };
+  // Zotero 8+: scripts run in their own global, so nothing is visible to inline handlers
+  const sandbox = vm.createContext({ document, Zotero: { ZotWatch: api, Prefs: { set() {} }, logError() {} }, setTimeout, clearTimeout });
+  vm.runInContext(code, sandbox);
+  const fire = (type, target) => docListeners.filter((l) => l.type === type).forEach((l) => l.fn({ type, target }));
+  assert.ok(docListeners.every((l) => l.capture === true), "capture listeners see non-bubbling pane events");
+
+  fire("load", { id: "something-else" });
+  assert.equal(whitelist.value, "");
+  fire("load", rootEl);
+  assert.equal(whitelist.value, "issn,title\n0016-7037,GCA");
+  assert.equal(elements.get("zw-output").textContent, "", "no library scan until the pane is shown");
+  fire("showing", rootEl);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(elements.get("zw-output").textContent, "状态：正常");
+
+  whitelist.value = "edited";
+  whitelist.listeners.input[0]();
+  fire("unload", rootEl);
+  assert.deepEqual(saved, ["edited"], "pending edits are saved on unload");
 });
 
 test("XHTML files are well-formed and scripts reference existing element ids", () => {
@@ -453,11 +704,13 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
     return out;
   };
   collectIds(recDoc, recIds);
+  assert.equal(recDoc.attr("persist"), "screenX screenY width height sizemode");
   const recJs = readFileSync(join(root, "addon/content/recommendations.js"), "utf8");
   for (const [, id] of recJs.matchAll(/\$\("([\w-]+)"\)/g)) assert.ok(recIds.has(id), `recommendations.xhtml lacks #${id}`);
   for (const s of ["new", "added", "dismissed"]) assert.ok(recIds.has(`count-${s}`));
 
   const prefXhtml = readFileSync(join(root, "addon/content/preferences.xhtml"), "utf8");
+  assert.doesNotMatch(prefXhtml, /\son[a-z]+=/, "no inline handlers: pane scripts are sandboxed on Zotero 8+");
   // Zotero parses the pane as a XUL fragment with the html: prefix bound
   const prefDoc = parseXml(
     `<box xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" xmlns:html="http://www.w3.org/1999/xhtml">${prefXhtml}</box>`,
@@ -471,5 +724,11 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   const prefsJs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   for (const [, key] of prefXhtml.matchAll(/preference="([\w.]+)"/g)) {
     assert.ok(prefsJs.includes(`pref("${key}",`), `no default for ${key}`);
+  }
+
+  // Both locales define every Fluent message used by the menus
+  for (const locale of ["zh-CN", "en-US"]) {
+    const ftl = readFileSync(join(root, `addon/locale/${locale}/zotwatch-mainWindow.ftl`), "utf8");
+    for (const id of ["zotwatch-menu-open", "zotwatch-menu-run"]) assert.match(ftl, new RegExp(`^${id} =`, "m"), `${locale} lacks ${id}`);
   }
 });

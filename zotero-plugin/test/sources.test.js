@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CancelledRequestError, getJson, retryAfterMs } from "../src/core/http.js";
 import { fetchArxiv, parseArxivFeed } from "../src/sources/arxiv.js";
 import { fetchCrossref, parseCrossrefItem, resolveJournalIssns } from "../src/sources/crossref.js";
 import { fetchEartharxiv, parseOaiPage } from "../src/sources/eartharxiv.js";
@@ -141,4 +142,31 @@ test("openalex abstract reconstruction and enrichment", async () => {
   assert.equal(works[0].abstract, "Hello world");
   assert.equal(works[2].abstract, null);
   assert.match(decodeURIComponent(http.calls[0].url), /filter=doi:https:\/\/doi.org\/10.1234\/a\|https:\/\/doi.org\/10.1234\/c&/);
+});
+
+test("retries honour Retry-After and never retry a cancelled request", async () => {
+  assert.equal(retryAfterMs("7"), 7000);
+  assert.equal(retryAfterMs("Wed, 21 Oct 2015 07:28:10 GMT", Date.parse("Wed, 21 Oct 2015 07:28:00 GMT")), 10000);
+  assert.equal(retryAfterMs(null), null);
+  assert.equal(retryAfterMs("soon"), null);
+
+  const delays = [];
+  let n = 0;
+  const throttled = {
+    async request() {
+      return n++ === 0 ? { status: 429, data: null, retryAfter: "30" } : { status: 200, data: { ok: true } };
+    },
+  };
+  assert.deepEqual(await getJson(throttled, "https://x.test/a", { sleep: async (ms) => delays.push(ms) }), { ok: true });
+  assert.deepEqual(delays, [30000]);
+
+  let calls = 0;
+  const cancelling = {
+    async request() {
+      calls++;
+      throw new CancelledRequestError();
+    },
+  };
+  await assert.rejects(getJson(cancelling, "https://x.test/b", { sleep: async () => {} }), (e) => e.cancelled === true);
+  assert.equal(calls, 1);
 });

@@ -18,7 +18,7 @@
 
 ## 安装
 
-需要 **Zotero 7 或更新版本**（兼容到 Zotero 10）。
+支持 **Zotero 7、8、9、10**（已对照 Zotero 10.0 源码逐项核对所用接口）。在 Zotero 8 及以上版本中，菜单通过官方的 `Zotero.MenuManager` 注册，菜单项会显示待查看推荐的数量；Zotero 7 上则直接插入「工具」菜单。
 
 1. 下载 `.xpi` 文件：
    - 正式版本：仓库的 [Releases](https://github.com/CrazyHalfDay/AIZotWatch/releases) 页面（`zotero-plugin-v*` 标签）
@@ -45,7 +45,7 @@
 | 向量化 | 模型 / 接口地址 | 留空使用默认；更换服务商或模型后会自动重新向量化文库 |
 | 来源 | Crossref / arXiv / EarthArXiv | 回溯天数默认 7 / 7 / 14 天；arXiv 只保留主分类匹配的论文 |
 | 关注期刊 | 自动关注文库常见期刊 | 取出现次数 ≥ 2 的前 N 种期刊；文库条目缺少 ISSN 时通过 Crossref 按刊名查询（结果缓存 90 天） |
-| 关注期刊 | 期刊白名单 | 与 AIZotWatch 相同的 CSV 格式：`issn,title,category,impact_factor`；影响因子参与打分 |
+| 关注期刊 | 期刊白名单 | 与 AIZotWatch 相同的 CSV 格式：`issn,title,category,impact_factor`；影响因子参与打分。列表保存为数据目录下的 `zotwatch/journals.csv`（体积可能超过偏好设置建议的 4 KB 上限，所以不放在偏好设置里），清除缓存时会保留 |
 | 推荐 | 每次推荐数量 / 最近 N 天 / 预印本占比 | 对应 Python 版的 `watch.top_k`、`watch.recent_days`、`watch.max_preprint_ratio` |
 | 推荐 | 最低相似度 | 相似度门槛（对应 `fusion.min_similarity`），留空时按向量化服务自动取值（API 模式 0.20，本地模式 0.06） |
 | 推荐 | 包含 / 排除关键词 | 对应 `interests.include_keywords` / `exclude_keywords`，整词匹配，中文按子串匹配 |
@@ -71,17 +71,20 @@ Crossref / arXiv / EarthArXiv ──► 去重（DOI + 模糊标题）──► 
 
 算法细节与 AIZotWatch 的 [docs/algorithm.md](../docs/algorithm.md) 一致：聚类采用球面 k-means，按 Silhouette 系数在 `[max(5, √N/3), min(35, √N)]` 范围内选择 k（偏向更细粒度）；宏观分为 `max_k(sim_k × ln(1+E_k)) / max_k ln(1+E_k)`；动态阈值取当批分数的第 95 / 70 百分位并设下限。
 
-为了不阻塞 Zotero 界面，聚类和打分计算会分段让出主线程（单次阻塞 < 100 ms）。
+为了不阻塞 Zotero 界面，聚类和打分计算会分段让出主线程（单次阻塞 < 100 ms）。点击「取消」或停用/升级插件时，正在进行的网络请求会被立即中止。
+
+后台自动运行发现新推荐时会弹出提示。Zotero 10 的提示框依附于主窗口（不再置顶），所以如果当时 Zotero 不在前台，提示会等到你切回 Zotero 时再显示，并一直保留到点击为止。
 
 ## 数据与隐私
 
-- 插件数据保存在 **Zotero 数据目录下的 `zotwatch/` 文件夹**（向量缓存 `profile.*`、候选缓存 `candidates.*`、聚类 `clusters.json`、推荐记录 `inbox.json`）；在设置中可一键清除，不影响文库本身
+- 插件数据保存在 **Zotero 数据目录下的 `zotwatch/` 文件夹**（向量缓存 `profile.*`、候选缓存 `candidates.*`、聚类 `clusters.json`、推荐记录 `inbox.json`、期刊白名单 `journals.csv`）；在设置中可一键清除缓存和推荐记录，不影响文库本身和期刊白名单
 - API Key 保存在 Zotero 的偏好设置（profile 目录下的 `prefs.js`，明文），请勿与他人共享该目录
 - 发送到外部服务的内容：
   - 向量化服务：文库条目和候选论文的**标题 + 摘要**（本地模式不发送）
   - 大模型（仅启用时）：推荐论文的标题、摘要、作者和期刊名
   - Crossref / arXiv / EarthArXiv / OpenAlex：只有查询条件（ISSN、分类、日期、DOI），不含文库内容
-- 所有网络请求都通过 `Zotero.HTTP` 发出，遵循 Zotero 的代理设置
+- 所有网络请求都通过 `Zotero.HTTP` 发出，遵循 Zotero 的代理设置；在 Zotero 9 及以上版本中请求不携带 Zotero 的 Cookie（匿名请求）
+- 填写的 Crossref 联系邮箱会作为 `mailto` 参数出现在请求网址中，因此也会出现在 Zotero 的调试日志里；公开提交调试日志前请留意
 
 ## 与 Python 版 AIZotWatch 的对应关系
 
@@ -129,10 +132,12 @@ zotero-plugin/
 └── scripts/build.mjs       # 打包 + 生成 .xpi（零依赖 zip 实现）
 ```
 
-`src/engine.js` 的所有外部依赖（HTTP、存储、文库）都通过参数注入，因此核心流程可以完全在 Node 中测试；`test/addon.test.js` 则用模拟的 Zotero API 加载真正打包出来的插件，走完「启动 → 注册设置面板 → 添加菜单 → 运行 → 加入文库 → 关闭」的完整流程。
+`src/engine.js` 的所有外部依赖（HTTP、存储、文库）都通过参数注入，因此核心流程可以完全在 Node 中测试；`test/addon.test.js` 则用模拟的 Zotero API 加载真正打包出来的插件，分别按 Zotero 10（MenuManager、设置面板脚本运行在独立沙箱）和 Zotero 7（直接插入菜单）走完「启动 → 注册设置面板 → 添加菜单 → 运行 → 取消 → 加入文库 → 关闭」的完整流程。
 
 ### 发布
 
 1. 修改 `package.json` 中的 `version`
 2. 推送标签 `zotero-plugin-v<version>`（如 `zotero-plugin-v0.1.0`）
-3. GitHub Actions 会运行测试、构建并创建 Release，附带 `.xpi` 与 `zotwatch-update.json`；已安装的插件会通过 `manifest.json` 中的 `update_url` 自动检查更新
+3. GitHub Actions 会运行测试、构建并创建 Release（标记为 latest），附带 `.xpi` 与 `zotwatch-update.json`；已安装的插件会通过 `manifest.json` 中的 `update_url` 自动检查更新
+
+兼容的 Zotero 版本范围由 `addon/manifest.json` 的 `strict_min_version` / `strict_max_version`（当前 `10.*`）决定，构建时会同步写入 `zotwatch-update.json`（Zotero 会把更新清单里的范围当作兼容性更新应用，两处必须一致）。新的 Zotero 大版本发布并测试通过后，只需提高 manifest 中的上限。

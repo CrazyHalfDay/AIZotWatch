@@ -100,6 +100,12 @@ export function extractDoi(text) {
   return match ? normalizeDoi(match[1]) : "";
 }
 
+/** DOI from a "DOI: ..." line in Zotero's Extra field (older schemas kept it there). */
+export function extraFieldDoi(extra) {
+  const match = String(extra || "").match(/^\s*DOI:\s*(\S+)/im);
+  return match ? normalizeDoi(match[1]) : "";
+}
+
 /** Normalise an ISSN to the canonical "1234-567X" form; "" when invalid. */
 export function normalizeIssn(value) {
   if (!value) return "";

@@ -71,13 +71,34 @@ function authorLine(authors) {
 
 // ------------------------------------------------------------------ data
 
-async function refresh() {
-  if (!api()) {
-    $("subtitle").textContent = "ZotWatch 插件未加载";
-    return;
+let refreshing = null;
+let refreshQueued = false;
+
+/** Reload the inbox view. Calls made while a refresh runs are coalesced into one more. */
+function refresh() {
+  if (refreshing) {
+    refreshQueued = true;
+    return refreshing;
   }
-  state.view = await api().getView();
-  render();
+  refreshing = (async () => {
+    try {
+      do {
+        refreshQueued = false;
+        if (!api()) {
+          $("subtitle").textContent = "ZotWatch 插件未加载";
+          return;
+        }
+        state.view = await api().getView();
+        render();
+      } while (refreshQueued);
+    } catch (e) {
+      $("subtitle").textContent = `加载失败：${e.message || e}`;
+      Zotero.logError(e);
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
 }
 
 function visibleWorks() {
@@ -291,7 +312,7 @@ async function dismissVisible() {
   const message = `将当前列表中的 ${works.length} 篇推荐全部标记为已忽略？`;
   const ok = typeof Services !== "undefined" ? Services.prompt.confirm(window, "ZotWatch", message) : window.confirm(message);
   if (!ok) return;
-  for (const w of works) await api().setStatus(w.id, "dismissed");
+  await api().setStatus(works.map((w) => w.id), "dismissed");
   await refresh();
 }
 
@@ -346,11 +367,22 @@ window.addEventListener("load", () => {
     renderList();
   });
 
-  api()?.addListener(onAddonEvent);
-  refresh().catch((e) => {
-    $("subtitle").textContent = `加载失败：${e.message}`;
-    Zotero.logError(e);
+  // Close with Escape or Ctrl/Cmd+W, like other Zotero windows
+  window.addEventListener("keydown", (event) => {
+    const accel = Zotero.isMac ? event.metaKey : event.ctrlKey;
+    if ((accel && event.key.toLowerCase() === "w") || (event.key === "Escape" && !(event.target.id === "search" && event.target.value))) {
+      event.preventDefault();
+      window.close();
+    }
   });
+
+  // Follow Zotero's font size and density preferences
+  Zotero.UIProperties?.registerRoot(document.body);
+  // Size comes from the persisted/default root attributes; guard against a tiny first window
+  if (window.outerWidth < 500 || window.outerHeight < 400) window.resizeTo(1040, 800);
+
+  api()?.addListener(onAddonEvent);
+  refresh();
 });
 
 window.addEventListener("unload", () => {

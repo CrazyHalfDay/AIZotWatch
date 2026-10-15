@@ -1,8 +1,8 @@
-<vbox id="zw-prefs-root" class="zw-prefs" onload="ZotWatchPrefs.init()">
+<vbox id="zw-prefs-root" class="zw-prefs main-section">
   <groupbox>
     <label><html:h2>运行</html:h2></label>
     <html:p class="zw-hint">ZotWatch 根据你的 Zotero 文库构建研究画像，每天从 Crossref / arXiv / EarthArXiv 抓取新文献并按相关性推荐。推荐结果在「工具 → ZotWatch 文献推荐」中查看。</html:p>
-    <checkbox label="每天自动检查新文献（Zotero 运行时在后台进行）" preference="extensions.zotwatch.schedule.autoRun"/>
+    <checkbox native="true" label="每天自动检查新文献（Zotero 运行时在后台进行）" preference="extensions.zotwatch.schedule.autoRun"/>
     <html:div class="zw-grid">
       <html:label for="zw-interval">检查间隔（小时）</html:label>
       <html:input type="number" id="zw-interval" min="1" preference="extensions.zotwatch.schedule.intervalHours"/>
@@ -39,31 +39,31 @@
 
   <groupbox>
     <label><html:h2>文献来源</html:h2></label>
-    <checkbox label="Crossref（按关注期刊 ISSN 抓取正式发表论文）" preference="extensions.zotwatch.sources.crossref.enabled"/>
+    <checkbox native="true" label="Crossref（按关注期刊 ISSN 抓取正式发表论文）" preference="extensions.zotwatch.sources.crossref.enabled"/>
     <html:div class="zw-grid">
       <html:label for="zw-mailto">Crossref 联系邮箱（礼貌池，推荐填写）</html:label>
       <html:input type="email" id="zw-mailto" preference="extensions.zotwatch.sources.crossref.mailto"/>
       <html:label for="zw-crossref-days">回溯天数</html:label>
       <html:input type="number" id="zw-crossref-days" min="1" preference="extensions.zotwatch.sources.crossref.daysBack"/>
     </html:div>
-    <checkbox label="arXiv 预印本" preference="extensions.zotwatch.sources.arxiv.enabled"/>
+    <checkbox native="true" label="arXiv 预印本" preference="extensions.zotwatch.sources.arxiv.enabled"/>
     <html:div class="zw-grid">
       <html:label for="zw-arxiv-cats">arXiv 分类（逗号分隔）</html:label>
       <html:input type="text" id="zw-arxiv-cats" placeholder="physics.geo-ph, astro-ph.EP" preference="extensions.zotwatch.sources.arxiv.categories"/>
     </html:div>
-    <checkbox label="EarthArXiv 地学预印本" preference="extensions.zotwatch.sources.eartharxiv.enabled"/>
-    <checkbox label="摘要缺失时从 OpenAlex 补全" preference="extensions.zotwatch.sources.openalexAbstracts"/>
+    <checkbox native="true" label="EarthArXiv 地学预印本" preference="extensions.zotwatch.sources.eartharxiv.enabled"/>
+    <checkbox native="true" label="摘要缺失时从 OpenAlex 补全" preference="extensions.zotwatch.sources.openalexAbstracts"/>
   </groupbox>
 
   <groupbox>
     <label><html:h2>关注期刊</html:h2></label>
-    <checkbox label="自动关注文库中最常见的期刊" preference="extensions.zotwatch.journals.autoFromLibrary"/>
+    <checkbox native="true" label="自动关注文库中最常见的期刊" preference="extensions.zotwatch.journals.autoFromLibrary"/>
     <html:div class="zw-grid">
       <html:label for="zw-auto-top">自动关注的期刊数量</html:label>
       <html:input type="number" id="zw-auto-top" min="1" preference="extensions.zotwatch.journals.autoTopN"/>
     </html:div>
     <html:p class="zw-hint">期刊白名单（CSV：issn,title,category,impact_factor）。影响因子参与打分（权重 20%），未列出的期刊按默认分计算。</html:p>
-    <html:textarea id="zw-whitelist" class="zw-textarea" rows="8" spellcheck="false" preference="extensions.zotwatch.journals.whitelist"></html:textarea>
+    <html:textarea id="zw-whitelist" class="zw-textarea" rows="8" spellcheck="false"></html:textarea>
     <hbox class="zw-buttons">
       <button id="zw-journals-suggest" label="从文库生成期刊列表"/>
       <button id="zw-journals-import" label="导入 CSV 文件…"/>
@@ -83,7 +83,7 @@
       <html:label for="zw-preprint">预印本最大占比（0–1）</html:label>
       <html:input type="text" id="zw-preprint" preference="extensions.zotwatch.scoring.maxPreprintRatio"/>
     </html:div>
-    <checkbox label="排除没有摘要的文献" preference="extensions.zotwatch.scoring.requireAbstract"/>
+    <checkbox native="true" label="排除没有摘要的文献" preference="extensions.zotwatch.scoring.requireAbstract"/>
     <html:label for="zw-include" class="zw-block-label">必须包含的关键词（任一命中即保留，留空不限）</html:label>
     <html:textarea id="zw-include" class="zw-textarea" rows="2" spellcheck="false" preference="extensions.zotwatch.scoring.includeKeywords"></html:textarea>
     <html:label for="zw-exclude" class="zw-block-label">排除关键词（逗号或换行分隔）</html:label>
@@ -92,7 +92,7 @@
 
   <groupbox>
     <label><html:h2>AI 摘要与标题翻译（可选）</html:h2></label>
-    <checkbox label="启用大模型（OpenAI 兼容接口：OpenRouter / DeepSeek / Kimi / 通义千问 …）" preference="extensions.zotwatch.llm.enabled"/>
+    <checkbox native="true" label="启用大模型（OpenAI 兼容接口：OpenRouter / DeepSeek / Kimi / 通义千问 …）" preference="extensions.zotwatch.llm.enabled"/>
     <html:div class="zw-grid">
       <html:label for="zw-llm-preset">快速填写</html:label>
       <menulist id="zw-llm-preset" native="true">
@@ -113,7 +113,7 @@
       <html:label for="zw-llm-topn">每次自动生成摘要的篇数</html:label>
       <html:input type="number" id="zw-llm-topn" min="0" preference="extensions.zotwatch.llm.summaryTopN"/>
     </html:div>
-    <checkbox label="将英文标题翻译为中文" preference="extensions.zotwatch.llm.translateTitles"/>
+    <checkbox native="true" label="将英文标题翻译为中文" preference="extensions.zotwatch.llm.translateTitles"/>
   </groupbox>
 
   <groupbox>
@@ -124,8 +124,8 @@
       <html:label for="zw-tag">添加标签</html:label>
       <html:input type="text" id="zw-tag" preference="extensions.zotwatch.output.tag"/>
     </html:div>
-    <checkbox label="通过 DOI / arXiv 号抓取完整元数据（与「通过标识符添加条目」相同）" preference="extensions.zotwatch.output.useTranslator"/>
-    <checkbox label="把 AI 摘要保存为子笔记" preference="extensions.zotwatch.output.summaryNote"/>
+    <checkbox native="true" label="通过 DOI / arXiv 号抓取完整元数据（与「通过标识符添加条目」相同）" preference="extensions.zotwatch.output.useTranslator"/>
+    <checkbox native="true" label="把 AI 摘要保存为子笔记" preference="extensions.zotwatch.output.summaryNote"/>
     <hbox class="zw-buttons">
       <button id="zw-reset" label="清除 ZotWatch 缓存与推荐记录…"/>
     </hbox>

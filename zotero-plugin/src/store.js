@@ -46,5 +46,11 @@ export function createMemoryStorage() {
     async writeBinary(name, bytes) {
       files.set(name, Uint8Array.from(bytes));
     },
+    async readText(name) {
+      return files.has(name) ? String(files.get(name)) : null;
+    },
+    async writeText(name, text) {
+      files.set(name, String(text));
+    },
   };
 }

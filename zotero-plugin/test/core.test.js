@@ -10,6 +10,7 @@ import {
   cleanTitle,
   decodeEntities,
   extractDoi,
+  extraFieldDoi,
   hashString,
   isNonArticleTitle,
   normalizeDoi,
@@ -30,6 +31,8 @@ test("text helpers", () => {
   assert.equal(normalizeDoi("doi:10.1038/s41561-024-0001-x"), "10.1038/s41561-024-0001-x");
   assert.equal(normalizeDoi("not a doi"), "");
   assert.equal(extractDoi("arXiv: 2401.1\nDOI: 10.5194/gmd-17-1-2024"), "10.5194/gmd-17-1-2024");
+  assert.equal(extraFieldDoi("Original DOI: 10.1111/old\nDOI: 10.5194/GMD-17-1-2024"), "10.5194/gmd-17-1-2024");
+  assert.equal(extraFieldDoi("Related: 10.1111/other"), "");
   assert.equal(normalizeIssn("0016 7037"), "0016-7037");
   assert.equal(normalizeIssn("2041-172x"), "2041-172X");
   assert.equal(normalizeIssn("123"), "");

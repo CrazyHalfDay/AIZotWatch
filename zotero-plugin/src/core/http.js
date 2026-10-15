@@ -33,24 +33,52 @@ function errorDetail(data) {
   return typeof msg === "string" ? msg.slice(0, 200) : JSON.stringify(data).slice(0, 200);
 }
 
+/** Error thrown by transports when a request was cancelled; never retried. */
+export class CancelledRequestError extends Error {
+  constructor(message = "已取消") {
+    super(message);
+    this.name = "CancelledRequestError";
+    this.cancelled = true;
+  }
+}
+
+/** Parse a Retry-After header (seconds or HTTP date) into milliseconds. */
+export function retryAfterMs(value, now = Date.now()) {
+  if (value === undefined || value === null || value === "") return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+const MAX_RETRY_AFTER = 60000;
+
 /**
- * Perform a request, retrying network errors, 429 and 5xx with exponential backoff.
+ * Perform a request, retrying network errors, 429 and 5xx with exponential backoff
+ * (or the server's Retry-After, capped at one minute).
  * Resolves with `data` for 2xx responses, throws HttpError otherwise.
  */
 export async function request(transport, options, { retries = 2, baseDelay = 2000, sleep = defaultSleep } = {}) {
   let lastError;
+  let serverDelay = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) await sleep(baseDelay * 2 ** (attempt - 1));
+    if (attempt > 0) {
+      const backoff = baseDelay * 2 ** (attempt - 1);
+      await sleep(serverDelay !== null ? Math.min(Math.max(serverDelay, backoff), MAX_RETRY_AFTER) : backoff);
+    }
     let res;
     try {
       res = await transport.request({ method: "GET", responseType: "json", timeout: 60000, ...options });
     } catch (e) {
+      if (e?.cancelled) throw e;
       lastError = e;
+      serverDelay = null;
       continue;
     }
     if (res.status >= 200 && res.status < 300) return res.data;
     lastError = new HttpError(res.status, options.url, errorDetail(res.data));
     if (res.status !== 429 && res.status < 500) throw lastError;
+    serverDelay = retryAfterMs(res.retryAfter);
   }
   throw lastError;
 }

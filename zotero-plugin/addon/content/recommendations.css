@@ -1,41 +1,42 @@
 :root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --text: #1d2129;
-  --muted: #6b7280;
-  --border: #e3e6eb;
-  --accent: #2f6fde;
+  /* Zotero's theme tokens (chrome://zotero-platform/content/zotero.css) with standalone fallbacks */
+  --bg: var(--material-sidepane, #f6f7f9);
+  --panel: var(--material-background, #ffffff);
+  --text: var(--fill-primary, #1d2129);
+  --muted: var(--fill-secondary, #6b7280);
+  --border: var(--fill-quarternary, #e3e6eb);
+  --accent: var(--accent-blue, #2f6fde);
   --accent-text: #ffffff;
   --must: #d9480f;
   --must-bg: #fff1e8;
-  --consider: #2f6fde;
-  --consider-bg: #eaf1fe;
-  --ignore: #6b7280;
-  --ignore-bg: #f0f1f3;
+  --consider: var(--accent-blue, #2f6fde);
+  --consider-bg: var(--accent-blue10, #eaf1fe);
+  --ignore: var(--fill-secondary, #6b7280);
+  --ignore-bg: var(--fill-quinary, #f0f1f3);
   --fresh: #2b8a3e;
   --fresh-bg: #e6f6ea;
-  --summary-bg: #f4f7fb;
+  --summary-bg: var(--fill-quinary, #f4f7fb);
   --error: #c92a2a;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1d21;
-    --panel: #24272c;
-    --text: #e8eaed;
-    --muted: #9aa1ab;
-    --border: #363a41;
-    --accent: #5b8ef0;
+    --bg: var(--material-sidepane, #1b1d21);
+    --panel: var(--material-background, #24272c);
+    --text: var(--fill-primary, #e8eaed);
+    --muted: var(--fill-secondary, #9aa1ab);
+    --border: var(--fill-quarternary, #363a41);
+    --accent: var(--accent-blue, #5b8ef0);
     --must: #ff8a4c;
     --must-bg: #3a2418;
-    --consider: #7aa5f5;
-    --consider-bg: #1f2b40;
-    --ignore: #9aa1ab;
-    --ignore-bg: #2d3036;
+    --consider: var(--accent-blue, #7aa5f5);
+    --consider-bg: var(--accent-blue10, #1f2b40);
+    --ignore: var(--fill-secondary, #9aa1ab);
+    --ignore-bg: var(--fill-quinary, #2d3036);
     --fresh: #69db7c;
     --fresh-bg: #1d3323;
-    --summary-bg: #1f2329;
+    --summary-bg: var(--fill-quinary, #1f2329);
     --error: #ff8787;
   }
 }
@@ -55,7 +56,9 @@ body {
   flex-direction: column;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Zotero.UIProperties sets the body font size from Zotero's font-size preference */
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
 }
 
 [hidden] {
@@ -93,7 +96,7 @@ button.primary {
 
 button.small {
   padding: 3px 10px;
-  font-size: 13px;
+  font-size: 1em;
 }
 
 button.link {
@@ -133,12 +136,12 @@ input[type="search"] {
 
 .brand h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 1.38em;
 }
 
 .brand p {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: 0.92em;
 }
 
 .actions {
@@ -156,7 +159,7 @@ input[type="search"] {
 .progress-text {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: 1em;
   margin-bottom: 6px;
 }
 
@@ -190,7 +193,7 @@ input[type="search"] {
 
 .notice {
   padding: 8px 20px;
-  font-size: 13px;
+  font-size: 1em;
   background: var(--must-bg);
   border-bottom: 1px solid var(--border);
 }
@@ -243,7 +246,7 @@ input[type="search"] {
   border: none;
   border-radius: 0;
   padding: 4px 10px;
-  font-size: 13px;
+  font-size: 1em;
   color: var(--muted);
 }
 
@@ -290,14 +293,14 @@ input[type="search"] {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 0.92em;
 }
 
 .badge {
   border-radius: 4px;
   padding: 1px 7px;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 1em;
 }
 
 .badge.must {
@@ -326,7 +329,7 @@ input[type="search"] {
 }
 
 .title {
-  font-size: 16px;
+  font-size: 1.23em;
   line-height: 1.4;
   margin: 8px 0 2px;
 }
@@ -342,18 +345,18 @@ input[type="search"] {
 }
 
 .translated {
-  font-size: 14px;
+  font-size: 1.08em;
   margin-bottom: 4px;
 }
 
 .authors {
-  font-size: 12px;
+  font-size: 0.92em;
   margin-bottom: 6px;
 }
 
 .abstract {
   margin: 6px 0;
-  font-size: 13px;
+  font-size: 1em;
   cursor: pointer;
 }
 
@@ -369,7 +372,7 @@ input[type="search"] {
   border-radius: 6px;
   padding: 8px 12px;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: 1em;
 }
 
 .summary-title {
@@ -390,7 +393,7 @@ input[type="search"] {
 
 .error {
   color: var(--error);
-  font-size: 13px;
+  font-size: 1em;
   margin: 6px 0;
 }
 
@@ -410,5 +413,5 @@ input[type="search"] {
 
 .empty h2 {
   color: var(--text);
-  font-size: 18px;
+  font-size: 1.38em;
 }

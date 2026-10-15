@@ -30,10 +30,16 @@ function onMainWindowUnload({ window }) {
   globalThis.ZotWatchBundle?.addon.removeFromWindow(window);
 }
 
-function shutdown(data, reason) {
-  if (reason === APP_SHUTDOWN) return;
+// Zotero awaits the promise returned here, so a running pipeline can be
+// cancelled and settled before the plugin scope goes away.
+async function shutdown(data, reason) {
+  const addon = globalThis.ZotWatchBundle?.addon;
+  if (reason === APP_SHUTDOWN) {
+    await addon?.shutdown({ appShutdown: true });
+    return;
+  }
   try {
-    globalThis.ZotWatchBundle?.addon.shutdown();
+    await addon?.shutdown();
   } finally {
     globalThis.ZotWatchBundle = undefined;
     if (chromeHandle) {

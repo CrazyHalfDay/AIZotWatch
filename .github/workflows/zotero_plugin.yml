@@ -78,6 +78,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ZotWatch for Zotero ${{ github.ref_name }}
+          # The plugin's update_url points at releases/latest
+          make_latest: "true"
           files: |
             dist/*.xpi
             dist/zotwatch-update.json

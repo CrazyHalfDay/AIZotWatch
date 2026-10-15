@@ -3,25 +3,57 @@
 
 /* global Zotero, IOUtils, PathUtils */
 
-import { extractDoi, normalizeDoi } from "../core/text.js";
+import { CancelledRequestError } from "../core/http.js";
+import { extraFieldDoi, normalizeDoi } from "../core/text.js";
 import { PREF_PREFIX, loadSettings } from "../settings.js";
 
-/** HTTP transport over Zotero.HTTP.request (honours Zotero's proxy settings). */
-export const zoteroTransport = {
-  async request({ method = "GET", url, headers = {}, body, responseType = "json", timeout = 60000 }) {
-    const xhr = await Zotero.HTTP.request(method, url, {
-      headers,
-      body,
-      responseType: responseType === "json" ? "json" : "text",
-      timeout,
-      successCodes: false, // status handling and retries live in core/http.js
-      errorDelayMax: 0,
-      logBodyLength: 0,
-    });
-    if (!xhr.status) throw new Error(`网络连接失败：${url.split("?")[0]}`);
-    return { status: xhr.status, data: xhr.response };
-  },
-};
+/**
+ * HTTP transport over Zotero.HTTP.request (honours Zotero's proxy settings).
+ * In-flight requests register a canceller in `cancellers`, so a run can be
+ * aborted immediately on cancel or plugin shutdown.
+ */
+export function createZoteroTransport({ cancellers = new Set() } = {}) {
+  return {
+    cancellers,
+    async request({ method = "GET", url, headers = {}, body, responseType = "json", timeout = 60000 }) {
+      let cancel = null;
+      let xhr;
+      try {
+        xhr = await Zotero.HTTP.request(method, url, {
+          headers,
+          body,
+          responseType: responseType === "json" ? "json" : "text",
+          timeout,
+          successCodes: false, // status handling and retries live in core/http.js
+          errorDelayMax: 0,
+          logBodyLength: 0,
+          anon: true, // never send Zotero's cookies to third-party APIs (Zotero 9+; ignored before)
+          cancellerReceiver: (fn) => {
+            cancel = fn;
+            cancellers.add(fn);
+          },
+        });
+      } catch (e) {
+        if (e instanceof Zotero.HTTP.CancelledException) throw new CancelledRequestError();
+        throw e;
+      } finally {
+        if (cancel) cancellers.delete(cancel);
+      }
+      if (!xhr.status) {
+        // Status 0: let Zotero explain certificate/proxy problems, otherwise report the channel error
+        try {
+          Zotero.HTTP.checkSecurity(xhr.channel);
+        } catch (e) {
+          if (e instanceof Zotero.HTTP.SecurityException) throw e;
+        }
+        const code = xhr.channel?.status;
+        const host = url.replace(/^https?:\/\/([^/?#]+).*$/, "$1");
+        throw new Error(`网络连接失败：${host}${code ? `（0x${(code >>> 0).toString(16)}）` : ""}`);
+      }
+      return { status: xhr.status, data: xhr.response, retryAfter: xhr.getResponseHeader("Retry-After") };
+    },
+  };
+}
 
 /** File storage in <Zotero data directory>/zotwatch/. */
 export function createZoteroStorage() {
@@ -48,6 +80,14 @@ export function createZoteroStorage() {
       await ensureDir();
       await IOUtils.write(path(name), bytes, { tmpPath: `${path(name)}.tmp` });
     },
+    async readText(name) {
+      await ensureDir();
+      return (await IOUtils.exists(path(name))) ? IOUtils.readUTF8(path(name)) : null;
+    },
+    async writeText(name, text) {
+      await ensureDir();
+      await IOUtils.writeUTF8(path(name), text, { tmpPath: `${path(name)}.tmp` });
+    },
     async clear() {
       await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
       ready = null;
@@ -67,10 +107,18 @@ export function readSettings() {
   return loadSettings(getPref);
 }
 
+/** Library the profile is built from (hidden pref; feeds are never valid). */
 export function profileLibraryID() {
   const raw = parseInt(getPref("profile.libraryID"), 10);
-  if (Number.isFinite(raw) && Zotero.Libraries.get(raw)) return raw;
+  const library = Number.isFinite(raw) ? Zotero.Libraries.get(raw) : null;
+  if (library && library.libraryType !== "feed") return raw;
   return Zotero.Libraries.userLibraryID;
+}
+
+/** Library new items are saved to: the profile library if editable, else My Library. */
+export function targetLibraryID() {
+  const id = profileLibraryID();
+  return Zotero.Libraries.get(id)?.editable ? id : Zotero.Libraries.userLibraryID;
 }
 
 function sqlDateToIso(value) {
@@ -87,7 +135,7 @@ function itemToPlain(item) {
     itemType: item.itemType,
     title: field("title", true),
     abstract: field("abstractNote"),
-    doi: normalizeDoi(field("DOI")) || extractDoi(field("extra")),
+    doi: normalizeDoi(field("DOI")) || extraFieldDoi(field("extra")),
     issn: field("ISSN"),
     venue: field("publicationTitle", true),
     dateAdded: sqlDateToIso(item.dateAdded),
@@ -98,7 +146,10 @@ function itemToPlain(item) {
 export function createZoteroLibrary() {
   return {
     async getItems() {
-      const items = (await Zotero.Items.getAll(profileLibraryID(), true, false)).filter((i) => i.isRegularItem());
+      const libraryID = profileLibraryID();
+      // Same call ZoteroPane uses; joins a load that is already in progress
+      await Zotero.Libraries.get(libraryID)?.waitForDataLoad("item");
+      const items = (await Zotero.Items.getAll(libraryID, true, false)).filter((i) => i.isRegularItem());
       try {
         return items.map(itemToPlain);
       } catch (e) {

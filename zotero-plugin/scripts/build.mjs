@@ -100,6 +100,7 @@ cpSync(join(root, "addon"), addonOut, { recursive: true });
 
 const manifestPath = join(addonOut, "manifest.json");
 writeFileSync(manifestPath, readFileSync(manifestPath, "utf8").replace("__VERSION__", version));
+const zoteroApp = JSON.parse(readFileSync(manifestPath, "utf8")).applications.zotero;
 
 await build({
   entryPoints: [join(root, "src", "index.js")],
@@ -134,7 +135,11 @@ const update = {
         {
           version,
           update_link: `${RELEASE_BASE}/zotero-plugin-v${version}/${xpiName}`,
-          applications: { zotero: { strict_min_version: "6.999" } },
+          // Must match manifest.json: Firefox applies update-manifest ranges as
+          // compatibility updates, so a missing max would silently become "*"
+          applications: {
+            zotero: { strict_min_version: zoteroApp.strict_min_version, strict_max_version: zoteroApp.strict_max_version },
+          },
         },
       ],
     },

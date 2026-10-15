@@ -23,12 +23,24 @@ export function summaryNoteHtml(work) {
   return `<h2>ZotWatch AI 摘要</h2>\n${rows}\n${score}`;
 }
 
-export async function getOrCreateCollection(libraryID, name) {
-  const existing = Zotero.Collections.getByLibrary(libraryID).find((c) => c.name === name);
-  if (existing) return existing;
-  const collection = new Zotero.Collection({ name, libraryID });
-  await collection.saveTx();
-  return collection;
+// In-flight lookups, so two quick "add" clicks never create two collections
+const collectionLocks = new Map();
+
+export function getOrCreateCollection(libraryID, name) {
+  const lockKey = `${libraryID}\u0000${name}`;
+  if (!collectionLocks.has(lockKey)) {
+    const pending = (async () => {
+      // Recursive: also find the collection if the user moved it under another one
+      const existing = Zotero.Collections.getByLibrary(libraryID, true).find((c) => c.name === name);
+      if (existing) return existing;
+      const collection = new Zotero.Collection({ name, libraryID });
+      await collection.saveTx();
+      return collection;
+    })();
+    collectionLocks.set(lockKey, pending);
+    pending.finally(() => collectionLocks.delete(lockKey)).catch(() => {});
+  }
+  return collectionLocks.get(lockKey);
 }
 
 /** Import full metadata through Zotero's own DOI / arXiv lookup ("Add Item by Identifier"). */
@@ -98,6 +110,10 @@ export async function addWorkToZotero(work, { libraryID, collectionName, tag, wi
   }
   if (tag) item.addTag(tag);
   await item.saveTx();
+  // Newer Zotero versions list recently used collections under "Add to Collection"
+  if (collection && typeof Zotero.Collections.addToRecent === "function") {
+    Zotero.Collections.addToRecent(collection);
+  }
 
   if (withNote && work.summary) {
     const note = new Zotero.Item("note");
