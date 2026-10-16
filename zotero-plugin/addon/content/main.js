@@ -1,4 +1,4 @@
-/* global ChromeUtils, Services, window, document, location, history, Intl */
+/* global ChromeUtils, Services, window, document, location, Intl, Event */
 
 // ZotWatch main window shell: sidebar, router, page header, run progress,
 // error banner, toasts, keyboard shortcuts and addon events.
@@ -6,7 +6,8 @@
 // The page scripts (overview.js, inbox.js, settings.js) are classic scripts
 // sharing this window's global scope: the top-level helpers below ($, el,
 // svgIcon, segmented, format*, toast, refresh, ...) are theirs too. Each page
-// registers { init(), show(params), refresh(view), hide?(), flush?() } with
+// registers { init(), show(params), refresh(view), hide?(), flush?(), tick?()
+// (every minute while shown), heading?() (focus target after a switch) } with
 // registerPage(). All data comes from Zotero.ZotWatch (src/zotero/addon.js);
 // external text is only ever inserted with textContent.
 
@@ -252,6 +253,8 @@ const shell = {
   subtitles: {},
   scroll: {},
   bannerDismissed: null,
+  // The banner shows a load failure (cleared by the next successful load)
+  loadError: false,
   ticker: null,
 };
 
@@ -273,7 +276,10 @@ function setSubtitle(key, text) {
 function setActiveSection(id) {
   shell.section = id || null;
   for (const link of document.querySelectorAll(".subnav-item")) {
-    link.classList.toggle("active", link.dataset.section === shell.section);
+    const on = link.dataset.section === shell.section;
+    link.classList.toggle("active", on);
+    if (on) link.setAttribute("aria-current", "true");
+    else link.removeAttribute("aria-current");
   }
 }
 
@@ -291,7 +297,16 @@ function currentRoute() {
   return shell.section ? `${shell.page}/${shell.section}` : shell.page;
 }
 
-/** Switch to a page ("inbox", "settings/ai", ...). */
+/** Whether keyboard focus is on nothing, the document, or an element a page switch just hid. */
+function focusLost() {
+  const active = document.activeElement;
+  return !active || active === document.body || active === document.documentElement || !!active.closest?.("[hidden]");
+}
+
+/**
+ * Switch to a page ("inbox", "settings/ai", ...). The document URL keeps no
+ * route: Zotero stores the window's size and position under the document URI.
+ */
 function navigate(route) {
   const next = parseRoute(route);
   const previous = shell.page;
@@ -314,13 +329,6 @@ function navigate(route) {
   renderNav();
   $("page-title").textContent = PAGE_TITLES[next.page];
   setSubtitle(next.page, shell.subtitles[next.page]);
-  if (location.hash !== `#${next.route}`) {
-    try {
-      history.replaceState(null, "", `#${next.route}`);
-    } catch (e) {
-      // Not fatal: the hash only mirrors the current page
-    }
-  }
   // Remembered for this Zotero session (openWindow() without a page)
   if (api()) api().lastPage = next.route;
 
@@ -332,6 +340,16 @@ function navigate(route) {
     Zotero.logError(e);
   }
   if (previous !== next.page && !next.section) pagesNode.scrollTop = shell.scroll[next.page] || 0;
+  // Switching from a control the switch hides (a link or button on the old
+  // page, Ctrl+1…3 in a field) would drop focus to the window: move it to
+  // the new page's heading (sidebar buttons stay visible and keep it)
+  if (previous && focusLost()) {
+    try {
+      (page?.heading?.() || $("page-title")).focus?.({ preventScroll: true });
+    } catch (e) {
+      Zotero.logError(e);
+    }
+  }
 }
 
 function renderRunState(running, progress) {
@@ -401,10 +419,16 @@ function refresh() {
           return;
         }
         shell.view = await api().getView();
+        if (shell.loadError) {
+          // renderShell shows a run failure again if there is one
+          shell.loadError = false;
+          hideBanner();
+        }
         renderShell(shell.view);
         if (shell.page) pages[shell.page]?.refresh?.(shell.view);
       } while (refreshQueued);
     } catch (e) {
+      shell.loadError = true;
       showBanner(`加载失败：${e.message || e}`);
       Zotero.logError(e);
     } finally {
@@ -451,15 +475,24 @@ function toast(text, { tone = "info", key = null, duration = 2500 } = {}) {
 // ------------------------------------------------------------------ events
 
 function onAddonEvent(event) {
+  // shell.view keeps the run state current: the 60 s sidebar ticker repaints from it
   if (event.type === "start") {
     shell.bannerDismissed = null;
+    shell.loadError = false;
     hideBanner();
-    if (shell.view) shell.view.running = true;
+    if (shell.view) {
+      shell.view.running = true;
+      shell.view.progress = null;
+    }
     renderRunState(true, null);
     if (shell.view) renderShell(shell.view);
     return;
   }
   if (event.type === "progress") {
+    if (shell.view) {
+      shell.view.running = true;
+      shell.view.progress = event.progress;
+    }
     renderRunState(true, event.progress);
     return;
   }
@@ -495,8 +528,14 @@ function onKeyDown(event) {
   }
   if (event.key === "Escape") {
     if (isTextField(event.target)) {
-      // First Escape leaves the field (a search box is cleared first)
-      if (event.target.type === "search" && event.target.value) return;
+      // First Escape leaves the field; a search box is cleared first (Firefox
+      // does not clear search inputs on Escape itself)
+      if (event.target.type === "search" && event.target.value) {
+        event.preventDefault();
+        event.target.value = "";
+        event.target.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
       event.target.blur();
       return;
     }
@@ -562,12 +601,19 @@ function initShell() {
       Zotero.logError(e);
     }
   }
-  navigate(location.hash || "overview");
+  // The page to open on comes from openWindow() (api.lastPage); a #route in
+  // the URL (the preview harness) wins
+  navigate(location.hash || api()?.lastPage || "overview");
 
   api()?.addListener(onAddonEvent);
-  // Relative times in the sidebar ("2 小时前") stay current
+  // Relative times ("2 小时前") stay current in the sidebar and on the active page
   shell.ticker = setInterval(() => {
     if (shell.view) renderShell(shell.view);
+    try {
+      pages[shell.page]?.tick?.();
+    } catch (e) {
+      Zotero.logError(e);
+    }
   }, 60000);
   refresh().then(() => document.documentElement.setAttribute("data-ready", "true"));
 }

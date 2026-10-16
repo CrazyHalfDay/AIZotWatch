@@ -1,7 +1,7 @@
 // Visual QA harness (dev only; not part of the build or CI).
 //
 // Serves build/addon/content/ over a local HTTP server (chrome://zotwatch/content/
-// URLs rewritten to it), injects a mock ChromeUtils / Zotero / Services with the
+// URLs rewritten to it, other chrome:// scripts stubbed), injects a mock ChromeUtils / Zotero / Services with the
 // fixture data of scripts/preview-fixtures.mjs, and screenshots the main window
 // pages in light and dark at 1120x820 and 820x700 with Playwright's Chromium.
 // Chromium is not Firefox 115: this checks layout and visuals only.
@@ -83,6 +83,11 @@ function startServer() {
       res.writeHead(204).end();
       return;
     }
+    // Firefox / Zotero scripts the window loads (the edit-menu overlay) do not exist here
+    if (path.startsWith("/__chrome/")) {
+      res.writeHead(200, { "Content-Type": TYPES[".js"], "Cache-Control": "no-store" }).end("// stub\n");
+      return;
+    }
     const file = normalize(join(contentDir, path));
     if (!file.startsWith(contentDir + sep) || !existsSync(file)) {
       res.writeHead(404).end("not found");
@@ -90,7 +95,14 @@ function startServer() {
     }
     const type = TYPES[extname(file)] || "application/octet-stream";
     let body = readFileSync(file);
-    if (/^(text|application\/xhtml)|svg/.test(type)) body = Buffer.from(body.toString("utf8").replaceAll("chrome://zotwatch/content/", "/"));
+    if (/^(text|application\/xhtml)|svg/.test(type)) {
+      body = Buffer.from(
+        body
+          .toString("utf8")
+          .replaceAll("chrome://zotwatch/content/", "/")
+          .replace(/chrome:\/\/(\w+)\/content\//g, "/__chrome/$1/"),
+      );
+    }
     res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" }).end(body);
   });
   return new Promise((resolveServer) => server.listen(0, "127.0.0.1", () => resolveServer(server)));

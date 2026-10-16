@@ -63,6 +63,15 @@ test("xml parser handles namespaces, CDATA, entities and strict mode", () => {
   assert.equal(root.childrenNamed("b").length, 1);
   assert.throws(() => parseXml("<a><b></a>", { strict: true }));
   assert.throws(() => parseXml("<a><b>", { strict: true }));
+  // What makes an XML parser (Gecko's expat) reject our XHTML: no DTD defines &nbsp;
+  assert.throws(() => parseXml("<a>概&nbsp;览</a>", { strict: true }), /Undefined entity/);
+  assert.throws(() => parseXml("<a>A & B</a>", { strict: true }), /bare "&"/);
+  assert.throws(() => parseXml('<a title="A & B"/>', { strict: true }), /attribute title/);
+  assert.throws(() => parseXml("<a><span class=x>y</span></a>", { strict: true }), /Malformed attributes/);
+  assert.throws(() => parseXml('<a id="x" id="y"/>', { strict: true }), /Duplicate attribute id/);
+  assert.equal(parseXml('<a title="&#160;&amp;&lt;&quot;">&#xA0;&gt;&apos;</a>', { strict: true }).attr("title"), " &<\"");
+  // Lenient mode (feeds from the network) keeps going
+  assert.equal(parseXml("<a>A & B</a>").text, "A & B");
 });
 
 test("fuzzy ratios match rapidfuzz semantics", () => {

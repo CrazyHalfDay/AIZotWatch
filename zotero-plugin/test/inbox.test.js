@@ -109,6 +109,12 @@ function loadWindow(view, { now } = {}) {
     location,
     history: { replaceState: (state, title, url) => (location.hash = url) },
     Intl,
+    Event: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.bubbles = !!init.bubbles;
+      }
+    },
     setTimeout,
     clearTimeout,
     ...(now ? { Date: class extends Date {
@@ -327,19 +333,20 @@ test("shell helpers: formatting, run status and routes", () => {
   assert.deepEqual(plain(run("parseRoute('')")), { page: "overview", section: null, route: "overview" });
 });
 
-test("navigate switches pages, mirrors the hash and remembers the page", () => {
+test("navigate switches pages and remembers the page, without touching the URL", () => {
   const { run, api, location } = loadWindow(view());
   run("navigate('settings/flagship')");
-  assert.equal(location.hash, "#settings/flagship");
   assert.equal(api.lastPage, "settings/flagship");
   assert.deepEqual(plain(run("__shown")), [{ section: "flagship" }]);
   assert.equal(run("shell.page"), "settings");
   assert.equal(run("$('settings-nav').hidden"), false);
   assert.equal(run("$('page-title').textContent"), "设置");
   run("navigate('inbox')");
-  assert.equal(location.hash, "#inbox");
+  assert.equal(api.lastPage, "inbox");
   assert.equal(run("$('settings-nav').hidden"), true);
   assert.equal(run("$('page-title').textContent"), "推荐");
   run("navigate('#bogus')");
-  assert.equal(location.hash, "#overview");
+  assert.equal(api.lastPage, "overview");
+  // Zotero keys the window's persisted size and position by its document URI
+  assert.equal(location.hash, "", "the route never goes into the URL");
 });

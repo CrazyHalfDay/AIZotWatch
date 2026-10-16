@@ -22,10 +22,12 @@ var ZotWatchOverview = (() => {
   const GAP = 2; // surface gap between stacked segments
   const RADIUS = 4; // rounded data end of bars and columns
   const DEFAULT_WIDTH = 560; // chart width when the container cannot be measured
-  // Stages of the personal pipeline as recorded in lastRun.stats
+  // Stages of the personal pipeline as recorded in lastRun.stats. 抓取 and 去重后
+  // include the flagship journals' articles, which then leave for their own track
   const FUNNEL = [
     ["fetched", "抓取"],
     ["afterDedupe", "去重后"],
+    ["afterSplit", "分出顶刊后"],
     ["afterKeywords", "关键词过滤后"],
     ["afterAbstract", "有摘要"],
     ["afterGate", "通过相似度门槛"],
@@ -47,6 +49,8 @@ var ZotWatchOverview = (() => {
     width: 0,
     frame: 0,
     loadingTimer: null,
+    // Nodes with relative times, updated by tick() without a reload
+    live: null,
   };
 
   // ------------------------------------------------------------ pure helpers
@@ -238,17 +242,36 @@ var ZotWatchOverview = (() => {
     return { x0, rowH, barH, barMax: round1(barMax), width, height: rows.length * rowH, rows: items, valueAt };
   }
 
+  /** Personal candidates after the flagship articles left (runs before 0.3.0: derived from the flagship stats). */
+  function afterSplitOf(stats) {
+    if (Number.isFinite(stats.afterSplit)) return stats.afterSplit;
+    const f = stats.flagship;
+    return f && Number.isFinite(f.candidates) && Number.isFinite(stats.afterDedupe) ? Math.max(0, stats.afterDedupe - f.candidates) : null;
+  }
+
+  /**
+   * The filters the last run applied (recorded in its stats since 0.3.0);
+   * older runs fall back to the current settings.
+   */
+  function funnelOptions(stats, scoring = {}) {
+    return {
+      recentDays: Number.isFinite(stats?.recentDays) ? stats.recentDays : scoring.recentDays ?? null,
+      requireAbstract: typeof stats?.requireAbstract === "boolean" ? stats.requireAbstract : scoring.requireAbstract ?? true,
+    };
+  }
+
   /**
    * Bars of the selection funnel: the stages of the last run that exist in
    * stats, each with its drop from the previous stage and its share of the
-   * first. "有摘要" is left out when abstracts are not required, "最近 N 天"
-   * when the window is unlimited (0).
+   * first. "分出顶刊后" appears when the flagship track took articles out,
+   * "有摘要" is left out when abstracts are not required, "最近 N 天" when the
+   * window is unlimited (0).
    */
   function funnelStages(stats, { recentDays = null, requireAbstract = true } = {}) {
     if (!stats) return [];
     const stages = [];
     for (const [key, name] of FUNNEL) {
-      const value = stats[key];
+      const value = key === "afterSplit" ? afterSplitOf(stats) : stats[key];
       if (!Number.isFinite(value)) continue;
       if (key === "afterAbstract" && requireAbstract === false) continue;
       if (key === "afterRecent" && recentDays === 0) continue;
@@ -260,12 +283,19 @@ var ZotWatchOverview = (() => {
     return stages;
   }
 
-  /** Steps of the flagship track's own funnel (stats.flagship), [] without stats. */
+  /**
+   * Steps of the flagship track's own funnel (stats.flagship), [] without
+   * stats. 通过 is "–" (未完成) when the gate failed before judging (f.failed).
+   */
   function flagshipSteps(f, recentDays = null) {
     if (!f || !Number.isFinite(f.candidates)) return [];
-    const passed = Math.max(0, count(f.recent) - count(f.rejected));
+    let passed;
+    if (Number.isFinite(f.passed)) passed = f.passed;
+    else if (f.failed) passed = null;
+    else passed = Math.max(0, count(f.recent) - count(f.rejected)); // runs before 0.3.0
     const review = [`灰区 ${formatNumber(count(f.gray))}`];
     if (f.judged) review.push(`大模型复核 ${formatNumber(f.judged)}`);
+    if (f.failed) review.splice(0, review.length, "未完成");
     return [
       { label: "候选", value: f.candidates },
       { label: "有摘要", value: count(f.withAbstract) },
@@ -283,13 +313,19 @@ var ZotWatchOverview = (() => {
     return `顶刊：${steps.map((s) => `${s.label} ${formatNumber(s.value)}${s.note ? `（${s.note}）` : ""}`).join(" → ").replace(/） →/g, "）→")}`;
   }
 
-  /** Status of a data-source row: {tone, label} (the dot class and its text). */
+  /**
+   * Status of a data-source row: {tone, label} (the dot class and its text).
+   * `source.ran === false`: enabled, but not part of the last run (turned on since).
+   */
   function sourceStatus(source, hasRun) {
     if (!source.enabled) return { tone: "off", label: "未启用" };
     if (source.error) return { tone: "critical", label: "出错" };
-    if (!hasRun) return { tone: "idle", label: "未运行" };
+    if (!hasRun || source.ran === false) return { tone: "idle", label: "未运行" };
     return { tone: "good", label: "正常" };
   }
+
+  /** A run stopped by 取消 after its results were stored: lastRun without an end time. */
+  const wasCancelled = (last) => !!last && last.finishedAt === null;
 
   /**
    * Run health for the 运行状态 card: {tone, icon, label, problems}, where a
@@ -308,6 +344,8 @@ var ZotWatchOverview = (() => {
     if (dash.running) status = { tone: "running", icon: null, label: "正在检查…" };
     else if (failure) status = { tone: "critical", icon: "alert", label: "运行失败" };
     else if (!last) status = { tone: "idle", icon: "clock", label: "尚未运行" };
+    // Its works are stored, but it is missing from the 最近运行 chart (only finished runs are)
+    else if (wasCancelled(last)) status = { tone: "warning", icon: "alert", label: "上次运行已取消" };
     else if (errors.length) status = { tone: "warning", icon: "alert", label: `有 ${errors.length} 个问题` };
     else status = { tone: "good", icon: "check-circle", label: "正常" };
     return { ...status, problems, title: failure ? "最近的问题" : "上次运行的问题" };
@@ -319,7 +357,9 @@ var ZotWatchOverview = (() => {
     const schedule = dash.schedule || {};
     const facts = [];
     if (last) {
-      facts.push({ key: "last", label: "上次", text: `${formatDateTime(last.finishedAt || last.runAt)}（${formatRelative(last.finishedAt || last.runAt, now)}）` });
+      const at = last.finishedAt || last.runAt;
+      const cancelled = wasCancelled(last) ? "，已取消" : "";
+      facts.push({ key: "last", label: "上次", text: `${formatDateTime(at)}（${formatRelative(at, now)}${cancelled}）` });
       if (last.finishedAt) facts.push({ key: "took", label: "耗时", text: formatDuration(last.finishedAt - last.runAt) });
     } else {
       facts.push({ key: "last", label: "上次", text: "尚未运行" });
@@ -327,7 +367,7 @@ var ZotWatchOverview = (() => {
     if (!schedule.autoRun) facts.push({ key: "next", label: "下次", text: "自动检查已关闭", link: { href: "#settings/general", text: "去开启" } });
     else if (dash.running) facts.push({ key: "next", label: "下次", text: "正在检查" });
     else if (schedule.nextRunAt) facts.push({ key: "next", label: "下次", text: schedule.nextRunAt <= now ? "即将检查" : formatUntil(schedule.nextRunAt, now) });
-    if (schedule.intervalHours) facts.push({ key: "interval", label: "间隔", text: `每 ${formatNumber(schedule.intervalHours)} 小时自动检查` });
+    if (schedule.autoRun && schedule.intervalHours) facts.push({ key: "interval", label: "间隔", text: `每 ${formatNumber(schedule.intervalHours)} 小时自动检查` });
     return facts;
   }
 
@@ -348,7 +388,7 @@ var ZotWatchOverview = (() => {
     const finished = last ? last.finishedAt || last.runAt : 0;
     const took = last?.finishedAt ? formatDuration(last.finishedAt - last.runAt) : "";
     return [
-      { key: "new", label: "本次新增", value: last ? count(stats.newRecommendations) : null, caption: last ? breakdown : "尚未运行" },
+      { key: "new", label: "本次新增", value: last ? count(stats.newRecommendations) : null, caption: last ? (wasCancelled(last) ? `已取消 · ${breakdown}` : breakdown) : "尚未运行" },
       { key: "must", label: "必读", value: last ? count(stats.newMustRead) : null, caption: "本次新增中的必读" },
       { key: "added", label: "已加入 Zotero", value: count(dash.added), caption: `近 ${dash.addedDays || 60} 天` },
       {
@@ -398,8 +438,8 @@ var ZotWatchOverview = (() => {
     }
   };
 
-  /** A card with a title, an optional caption and header actions. */
-  function card(cls, title, { caption = null, actions = [] } = {}, ...body) {
+  /** A card with a title, an optional caption and header actions; `body` replaces the default body element. */
+  function card(cls, title, { caption = null, actions = [], body: bodyNode = null } = {}, ...body) {
     return el(
       "section",
       { class: `card ov-card ${cls}`, "aria-label": title },
@@ -409,7 +449,7 @@ var ZotWatchOverview = (() => {
         el("div", { class: "ov-heading" }, el("h2", { class: "card-title", text: title }), caption ? el("p", { class: "card-caption", text: caption }) : null),
         actions.length ? el("div", { class: "ov-actions" }, ...actions) : null,
       ),
-      el("div", { class: "card-body ov-card-body" }, ...body),
+      bodyNode || el("div", { class: "card-body ov-card-body" }, ...body),
     );
   }
 
@@ -592,7 +632,7 @@ var ZotWatchOverview = (() => {
         marks.push({
           hit,
           group,
-          label: `${formatDateTime(r.runAt)}：${tracks.map((t) => `${TRACK_NAMES[t].name} ${r[t]}`).join("，")}，合计 ${r.total}`,
+          label: `${formatDateTime(r.runAt)}：${tracks.map((t) => `${TRACK_NAMES[t].name} ${r[t]}`).join("，")}，合计 ${r.total}${r.mustRead ? `，必读 ${r.mustRead}` : ""}${r.errors ? `，${r.errors} 个问题` : ""}`,
           anchor: { x: col.cx, y: Math.min(col.top, baseY - 8), bottom: baseY },
           tip: () => [
             el("div", { class: "tip-head", text: formatDateTime(r.runAt) }),
@@ -690,20 +730,22 @@ var ZotWatchOverview = (() => {
     );
   }
 
-  function kpiGrid(dash) {
-    return el(
-      "div",
-      { class: "ov-kpis" },
-      ...kpiTiles(dash).map((t) =>
-        el(
-          "div",
-          { class: `tile ov-kpi ${t.key}` },
-          el("span", { class: "tile-label", text: t.label }),
-          el("span", { class: t.text ? "tile-value text" : "tile-value", text: t.text ?? (t.value === null ? "–" : formatCompact(t.value)) }),
-          el("span", { class: "tile-caption", text: t.caption }),
-        ),
+  function kpiTileNodes(dash) {
+    return kpiTiles(dash).map((t) =>
+      el(
+        "div",
+        { class: `tile ov-kpi ${t.key}` },
+        el("span", { class: "tile-label", text: t.label }),
+        el("span", { class: t.text ? "tile-value text" : "tile-value", text: t.text ?? (t.value === null ? "–" : formatCompact(t.value)) }),
+        el("span", { class: "tile-caption", text: t.caption }),
       ),
     );
+  }
+
+  function kpiGrid(dash) {
+    const node = el("div", { class: "ov-kpis" }, ...kpiTileNodes(dash));
+    state.live.kpis = node;
+    return node;
   }
 
   function runsCard(dash) {
@@ -727,9 +769,9 @@ var ZotWatchOverview = (() => {
       minHeight: 196,
       table: () =>
         dataTable(
-          ["时间", ...tracks.map((t) => TRACK_NAMES[t].name), "合计", "必读"],
-          [...rows].reverse().map((r) => [formatDateTime(r.runAt), ...tracks.map((t) => formatNumber(r[t])), formatNumber(r.total), formatNumber(r.mustRead)]),
-          [false, ...tracks.map(() => true), true, true],
+          ["时间", ...tracks.map((t) => TRACK_NAMES[t].name), "合计", "必读", "问题"],
+          [...rows].reverse().map((r) => [formatDateTime(r.runAt), ...tracks.map((t) => formatNumber(r[t])), formatNumber(r.total), formatNumber(r.mustRead), formatNumber(r.errors)]),
+          [false, ...tracks.map(() => true), true, true, true],
         ),
     });
     const caption = `${tracks.length > 1 ? "每次运行新增的推荐" : `每次运行新增的${TRACK_NAMES.personal.name}`} · 最近 ${rows.length} 次`;
@@ -737,6 +779,13 @@ var ZotWatchOverview = (() => {
   }
 
   function statusCard(dash) {
+    const body = el("div", { class: "card-body ov-card-body" }, ...statusParts(dash));
+    state.live.status = body;
+    return card("ov-status", "运行状态", { body });
+  }
+
+  /** Contents of the 运行状态 card (rebuilt by tick() as times pass). */
+  function statusParts(dash) {
     const health = runHealth(dash);
     const head = el(
       "div",
@@ -789,13 +838,14 @@ var ZotWatchOverview = (() => {
         ),
       );
     }
-    return card("ov-status", "运行状态", {}, ...body);
+    return body;
   }
 
   function funnelCard(dash) {
     const last = dash.lastRun;
-    const scoring = dash.scoring || {};
-    const stages = funnelStages(last?.stats, scoring);
+    // Labelled with the filters that run applied, not today's settings
+    const options = funnelOptions(last?.stats, dash.scoring || {});
+    const stages = funnelStages(last?.stats, options);
     if (!stages.length) {
       return card("ov-funnel", "筛选漏斗", { caption: "上次运行每一步筛选后剩下的篇数" }, emptyState({ icon: "filter", title: "运行一次后显示每一步筛选后剩下的篇数", compact: true }));
     }
@@ -820,12 +870,12 @@ var ZotWatchOverview = (() => {
         ),
     });
     const body = [host];
-    const steps = flagshipSteps(last?.stats?.flagship, scoring.recentDays);
+    const steps = flagshipSteps(last?.stats?.flagship, options.recentDays);
     if (steps.length) {
       body.push(
         el(
           "div",
-          { class: "ov-mini", "aria-label": flagshipText(last.stats.flagship, scoring.recentDays) },
+          { class: "ov-mini", "aria-label": flagshipText(last.stats.flagship, options.recentDays) },
           el("span", { class: "ov-mini-head" }, el("span", { class: "dot flagship" }), "顶刊地学"),
           el(
             "ol",
@@ -899,7 +949,11 @@ var ZotWatchOverview = (() => {
         ].filter(Boolean),
       }),
       minHeight: rows.length * 30,
-      table: () => dataTable(["研究方向", "文献数"], rows.map((r) => [r.label, r.valueText]), [false, true]),
+      // The same numbers as the chart and its tooltips (share of the library when known)
+      table: () =>
+        library
+          ? dataTable(["研究方向", "文献数", "占文库"], rows.map((r) => [r.label, r.valueText, formatPercent(r.value / library)]), [false, true, true])
+          : dataTable(["研究方向", "文献数"], rows.map((r) => [r.label, r.valueText]), [false, true]),
     });
     return card("ov-topics", "研究方向", { caption: `基于文库的语义聚类（共 ${formatNumber(total)} 个方向）`, actions: [toggle] }, host);
   }
@@ -1038,10 +1092,14 @@ var ZotWatchOverview = (() => {
 
   // ------------------------------------------------------------------ render
 
+  /** The loaded dashboard with the run state of the latest view. */
+  const currentDash = () => ({ ...state.dash, running: !!(state.dash.running || state.view?.running) });
+
   function render() {
     const root = $("overview-root");
     clearTimeout(state.loadingTimer);
     state.drawers = [];
+    state.live = null;
     $("overview-test").disabled = !!state.connections?.running;
     if (!state.dash) {
       if (state.error) {
@@ -1051,7 +1109,8 @@ var ZotWatchOverview = (() => {
       }
       return;
     }
-    const dash = { ...state.dash, running: !!(state.dash.running || state.view?.running) };
+    const dash = currentDash();
+    state.live = {};
     setSubtitle("overview", headerLine(dash));
     root.replaceChildren(
       ...[
@@ -1068,6 +1127,20 @@ var ZotWatchOverview = (() => {
       ].filter(Boolean),
     );
     drawCharts();
+  }
+
+  /**
+   * Called every minute by the shell while the overview is shown: relative
+   * times (上次检查, 下次, problem times) move on without a reload. Only the
+   * KPI tiles and the status card are rebuilt; the status card is left alone
+   * while it holds the focus.
+   */
+  function tick() {
+    if (!state.dash || !state.live?.kpis) return;
+    const dash = currentDash();
+    state.live.kpis.replaceChildren(...kpiTileNodes(dash));
+    const status = state.live.status;
+    if (status && !status.contains?.(document.activeElement)) status.replaceChildren(...statusParts(dash));
   }
 
   /** Draw (or redraw) every chart for the current container width. */
@@ -1191,6 +1264,7 @@ var ZotWatchOverview = (() => {
     init,
     show,
     refresh: refreshView,
+    tick,
     load,
     render,
     state,
@@ -1209,6 +1283,7 @@ var ZotWatchOverview = (() => {
     columnLayout,
     barListLayout,
     funnelStages,
+    funnelOptions,
     flagshipSteps,
     flagshipText,
     sourceStatus,

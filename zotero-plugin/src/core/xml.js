@@ -65,20 +65,37 @@ class XmlElement {
 }
 
 const ATTR_RE = /([^\s=/>]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+// The only references XML defines without a DTD: the five predefined entities and character references
+const BAD_REFERENCE_RE = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/;
 
-function parseAttrs(source) {
+/** Strict mode: an undefined entity (`&nbsp;`) or a bare `&` is a fatal XML error. */
+function checkReferences(text, where) {
+  const m = BAD_REFERENCE_RE.exec(text);
+  if (m) throw new Error(`Undefined entity or bare "&" in ${where}: ${text.slice(m.index, m.index + 12)}`);
+}
+
+function parseAttrs(source, strict = false) {
   const attrs = {};
   ATTR_RE.lastIndex = 0;
   let m;
   while ((m = ATTR_RE.exec(source))) {
-    attrs[m[1]] = decodeEntities(m[3] !== undefined ? m[3] : m[4]);
+    const raw = m[3] !== undefined ? m[3] : m[4];
+    if (strict) {
+      if (Object.hasOwn(attrs, m[1])) throw new Error(`Duplicate attribute ${m[1]}`);
+      checkReferences(raw, `attribute ${m[1]}`);
+    }
+    attrs[m[1]] = decodeEntities(raw);
   }
+  // Anything left besides quoted name="value" pairs (e.g. class=x) is not XML
+  if (strict && source.replace(ATTR_RE, "").trim()) throw new Error(`Malformed attributes: ${source.trim()}`);
   return attrs;
 }
 
 /**
  * Parse an XML string into a tree and return the root element.
- * With `strict`, mismatched or unclosed tags throw (used to validate our own XHTML).
+ * With `strict` (used to validate our own XHTML), the errors that make an
+ * XML parser reject a file throw: mismatched or unclosed tags, undefined
+ * entities (no DTD defines `&nbsp;`), a bare "&", unquoted or duplicate attributes.
  */
 export function parseXml(xml, { strict = false } = {}) {
   const root = new XmlElement("#document", {});
@@ -91,10 +108,14 @@ export function parseXml(xml, { strict = false } = {}) {
   while (i < len) {
     const lt = xml.indexOf("<", i);
     if (lt < 0) {
+      if (strict) checkReferences(xml.slice(i), "text");
       top().children.push(decodeEntities(xml.slice(i)));
       break;
     }
-    if (lt > i) top().children.push(decodeEntities(xml.slice(i, lt)));
+    if (lt > i) {
+      if (strict) checkReferences(xml.slice(i, lt), "text");
+      top().children.push(decodeEntities(xml.slice(i, lt)));
+    }
 
     if (xml.startsWith("<!--", lt)) {
       const end = xml.indexOf("-->", lt + 4);
@@ -160,7 +181,7 @@ export function parseXml(xml, { strict = false } = {}) {
         i = j + 1;
         continue;
       }
-      const el = new XmlElement(nameMatch[0], parseAttrs(body.slice(nameMatch[0].length)));
+      const el = new XmlElement(nameMatch[0], parseAttrs(body.slice(nameMatch[0].length), strict));
       top().children.push(el);
       if (!selfClosing) stack.push(el);
       i = j + 1;

@@ -111,6 +111,8 @@ function loadWindow(dashboard, { view = { works: [], running: false }, connectio
   const calls = { dashboard: 0, connections: 0, runNow: 0 };
   let current = dashboard;
   let failWith = null;
+  // The page's clock (Date.now() inside the window), moved by tests
+  const clock = { now: NOW };
   const api = {
     getView: async () => view,
     getDashboard: async () => {
@@ -152,10 +154,10 @@ function loadWindow(dashboard, { view = { works: [], running: false }, connectio
     structuredClone,
     Date: class extends Date {
       constructor(...args) {
-        super(...(args.length ? args : [NOW]));
+        super(...(args.length ? args : [clock.now]));
       }
       static now() {
-        return NOW;
+        return clock.now;
       }
     },
   });
@@ -171,6 +173,7 @@ function loadWindow(dashboard, { view = { works: [], running: false }, connectio
     listeners,
     view,
     setDashboard: (d) => (current = d),
+    clock,
     failNext: (e) => (failWith = e),
     async refresh(v = view) {
       context.__view = v;
@@ -205,15 +208,19 @@ function dashboard(overrides = {}) {
     stats: {
       fetched: 1284,
       afterDedupe: 1201,
-      afterKeywords: 1150,
-      afterAbstract: 1012,
+      // The 164 flagship candidates leave the personal funnel here
+      afterSplit: 1037,
+      afterKeywords: 1009,
+      afterAbstract: 871,
       afterGate: 86,
       afterRecent: 41,
       recommended: 30,
+      recentDays: 7,
+      requireAbstract: true,
       newRecommendations: 23,
       newByLabel: { personal: 18, flagship: 3, followed: 2 },
       newMustRead: 4,
-      flagship: { candidates: 164, withAbstract: 151, recent: 120, accepted: 9, gray: 14, judged: 14, rejected: 108, recommended: 12 },
+      flagship: { candidates: 164, withAbstract: 151, recent: 120, accepted: 9, gray: 14, judged: 14, passed: 12, rejected: 108, recommended: 12 },
     },
     errors: [{ stage: "fetch", source: "arXiv", message: "HTTP 503" }],
   };
@@ -250,7 +257,7 @@ function dashboard(overrides = {}) {
     flagship: { enabled: true, issnCount: 12, stats: lastRun.stats.flagship },
     journals: { count: 52, withImpactFactor: 47, autoFromLibrary: true, error: null },
     sources: [
-      { key: "crossref", name: "Crossref", enabled: true, count: 1102, detail: "52 个期刊", error: null },
+      { key: "crossref", name: "Crossref", enabled: true, count: 1102, detail: "48 个 ISSN", error: null, ran: true },
       { key: "arxiv", name: "arXiv", enabled: true, count: 18, detail: "physics.geo-ph", error: "HTTP 503" },
       { key: "eartharxiv", name: "EarthArXiv", enabled: false, count: null, detail: null, error: null },
       { key: "llm", name: "大模型", enabled: false, count: null, detail: "未启用", error: null },
@@ -399,8 +406,14 @@ test("funnel stages come from the last run's stats", () => {
   const { O } = loadWindow(dashboard());
   const stats = dashboard().lastRun.stats;
   const stages = O.funnelStages(stats, { recentDays: 7, requireAbstract: true });
-  assert.deepEqual(plain(stages.map((s) => s.label)), ["抓取", "去重后", "关键词过滤后", "有摘要", "通过相似度门槛", "最近 7 天", "推荐"]);
-  assert.deepEqual(plain(stages.map((s) => s.drop)), [0, 83, 51, 138, 926, 45, 11]);
+  assert.deepEqual(plain(stages.map((s) => s.label)), ["抓取", "去重后", "分出顶刊后", "关键词过滤后", "有摘要", "通过相似度门槛", "最近 7 天", "推荐"]);
+  // The flagship articles are a drop of their own, not one of the keyword filter
+  assert.deepEqual(plain(stages.map((s) => s.drop)), [0, 83, 164, 28, 138, 785, 45, 11]);
+  // Runs recorded before afterSplit existed: derived from the flagship stats
+  const { afterSplit, ...older } = stats;
+  assert.equal(afterSplit, 1037);
+  assert.equal(O.funnelStages(older, { recentDays: 7 }).find((s) => s.key === "afterSplit").value, 1037);
+  assert.ok(!O.funnelStages({ ...older, flagship: undefined }, {}).some((s) => s.key === "afterSplit"), "no flagship track, no split");
   assert.equal(stages[0].share, 1);
   assert.ok(Math.abs(stages.at(-1).share - 30 / 1284) < 1e-9);
   // Stages missing from stats (no candidates) are left out; so are filters that are off
@@ -411,9 +424,20 @@ test("funnel stages come from the last run's stats", () => {
   assert.equal(O.funnelStages(stats, {}).find((s) => s.key === "afterRecent").label, "时间范围内");
   assert.deepEqual(plain(O.funnelStages(null)), []);
 
+  // The filters come from the run, not from today's settings (older runs: the settings)
+  assert.deepEqual(plain(O.funnelOptions({ recentDays: 0, requireAbstract: false }, { recentDays: 7, requireAbstract: true })), { recentDays: 0, requireAbstract: false });
+  assert.deepEqual(plain(O.funnelOptions({}, { recentDays: 14, requireAbstract: true })), { recentDays: 14, requireAbstract: true });
+  const unlimited = O.funnelStages({ ...stats, recentDays: 0, afterRecent: 86 }, O.funnelOptions({ ...stats, recentDays: 0 }, { recentDays: 7 }));
+  assert.ok(!unlimited.some((s) => s.key === "afterRecent"), "no 最近 7 天 bar for a run without the window");
+
   assert.equal(O.flagshipText(stats.flagship, 7), "顶刊：候选 164 → 有摘要 151 → 最近 7 天 120 → 通过 12（灰区 14，大模型复核 14）→ 显示 12");
   assert.equal(O.flagshipText({ candidates: 3, withAbstract: 1, recent: 0, gray: 0, judged: 0, rejected: 0, recommended: 0 }), "顶刊：候选 3 → 有摘要 1 → 最近 0 → 通过 0（灰区 0）→ 显示 0");
   assert.equal(O.flagshipText(null), "");
+  // A gate that failed before judging (embedding error) passed nothing
+  assert.equal(
+    O.flagshipText({ candidates: 8, withAbstract: 7, recent: 6, accepted: 0, gray: 0, judged: 0, rejected: 0, recommended: 0, failed: true }, 7),
+    "顶刊：候选 8 → 有摘要 7 → 最近 7 天 6 → 通过 –（未完成）→ 显示 0",
+  );
 });
 
 test("run health, schedule lines and source statuses", () => {
@@ -443,11 +467,29 @@ test("run health, schedule lines and source statuses", () => {
   const off = O.scheduleFacts({ ...d, schedule: { ...d.schedule, autoRun: false } }, NOW);
   assert.deepEqual(plain(off.find((f) => f.key === "next")), { key: "next", label: "下次", text: "自动检查已关闭", link: { href: "#settings/general", text: "去开启" } });
   assert.equal(O.scheduleFacts({ ...d, schedule: { ...d.schedule, nextRunAt: NOW - 1 } }, NOW)[2].text, "即将检查");
+  // Automatic checks off: no "每 24 小时自动检查" under "自动检查已关闭"
+  assert.deepEqual(plain(off.map((f) => f.key)), ["last", "took", "next"]);
+
+  // A run cancelled after its results were stored (no end time): said so, not 正常
+  const cancelledRun = { ...d.lastRun, finishedAt: null, errors: [] };
+  const cancelled = O.runHealth({ ...d, lastRun: cancelledRun }, NOW);
+  assert.deepEqual(plain([cancelled.tone, cancelled.label]), ["warning", "上次运行已取消"]);
+  const cancelledFacts = O.scheduleFacts({ ...d, lastRun: cancelledRun }, NOW);
+  assert.match(cancelledFacts[0].text, /（2 小时前，已取消）$/);
+  assert.ok(!cancelledFacts.some((f) => f.key === "took"));
+  assert.equal(O.kpiTiles({ ...d, lastRun: cancelledRun }, NOW)[0].caption, "已取消 · 个性 18 · 顶刊 3 · 关注 2");
+  // Runs from before finishedAt existed are not "cancelled"
+  const { finishedAt, ...legacy } = d.lastRun;
+  assert.ok(finishedAt);
+  assert.equal(O.runHealth({ ...d, lastRun: { ...legacy, errors: [] } }, NOW).label, "正常");
 
   assert.deepEqual(plain(O.sourceStatus({ enabled: false }, true)), { tone: "off", label: "未启用" });
   assert.deepEqual(plain(O.sourceStatus({ enabled: true, error: "x" }, true)), { tone: "critical", label: "出错" });
   assert.deepEqual(plain(O.sourceStatus({ enabled: true }, false)), { tone: "idle", label: "未运行" });
   assert.deepEqual(plain(O.sourceStatus({ enabled: true }, true)), { tone: "good", label: "正常" });
+  // Enabled after the last run: it has not run yet
+  assert.deepEqual(plain(O.sourceStatus({ enabled: true, ran: false }, true)), { tone: "idle", label: "未运行" });
+  assert.deepEqual(plain(O.sourceStatus({ enabled: true, ran: true }, true)), { tone: "good", label: "正常" });
   assert.equal(O.connectionStatus({ ok: null }).label, "未启用");
 });
 
@@ -533,7 +575,9 @@ test("the run chart: legend, columns, tooltips on hover and keyboard focus, tabl
   assert.equal(hits.length, 14);
   assert.deepEqual(hits.map((h) => h.attributes.tabindex).filter((t) => t === "0").length, 1, "one tab stop per chart");
   assert.equal(hits[13].attributes.tabindex, "0", "the newest run is the tab stop");
-  assert.match(hits[13].attributes["aria-label"], /个性推荐 14，顶刊地学 0，关注作者 1，合计 15$/);
+  // The mark's name carries what the tooltip shows (必读, problems when there are any)
+  assert.match(hits[13].attributes["aria-label"], /个性推荐 14，顶刊地学 0，关注作者 1，合计 15，必读 1$/);
+  assert.match(hits[2].attributes["aria-label"], /合计 3，必读 2，1 个问题$/);
   // Only the newest column carries a direct label (its total on the cap)
   assert.deepEqual(all(card, "cap").map((n) => n.textContent), ["15"]);
   // Segments wear the track classes; each column's top segment is a path with the rounded end
@@ -573,10 +617,12 @@ test("the run chart: legend, columns, tooltips on hover and keyboard focus, tabl
   const table = byTag(card, "table")[0];
   assert.ok(table);
   assert.equal(all(card, "legend").length, 0);
-  assert.deepEqual(byTag(table, "th").map((n) => n.textContent), ["时间", "个性推荐", "顶刊地学", "关注作者", "合计", "必读"]);
+  assert.deepEqual(byTag(table, "th").map((n) => n.textContent), ["时间", "个性推荐", "顶刊地学", "关注作者", "合计", "必读", "问题"]);
   const bodyRows = byTag(byTag(table, "tbody")[0], "tr");
   assert.equal(bodyRows.length, 14);
-  assert.deepEqual(byTag(bodyRows[0], "td").slice(1).map((n) => n.textContent), ["14", "0", "1", "15", "1"]);
+  assert.deepEqual(byTag(bodyRows[0], "td").slice(1).map((n) => n.textContent), ["14", "0", "1", "15", "1", "0"]);
+  // The run with a problem (the tooltip's "· 1 个问题") says so in the table too
+  assert.deepEqual(byTag(bodyRows[11], "td").slice(1).map((n) => n.textContent), ["3", "0", "0", "3", "2", "1"]);
   // The choice survives a reload; toggling back restores the chart
   await w.refresh({ ...w.view });
   assert.ok(byTag(cardOf(w, "ov-runs"), "table").length);
@@ -588,13 +634,13 @@ test("the funnel, flagship mini funnel and research directions", async () => {
   const w = loadWindow(dashboard());
   await w.refresh();
   const funnel = cardOf(w, "ov-funnel");
-  assert.deepEqual(all(funnel, "label").map((n) => n.textContent), ["抓取", "去重后", "关键词过滤后", "有摘要", "通过相似度门槛", "最近 7 天", "推荐"]);
-  assert.deepEqual(all(funnel, "value").map((n) => n.textContent), ["1,284", "1,201−83", "1,150−51", "1,012−138", "86−926", "41−45", "30−11"]);
-  assert.equal(all(funnel, "bar").length, 7);
+  assert.deepEqual(all(funnel, "label").map((n) => n.textContent), ["抓取", "去重后", "分出顶刊后", "关键词过滤后", "有摘要", "通过相似度门槛", "最近 7 天", "推荐"]);
+  assert.deepEqual(all(funnel, "value").map((n) => n.textContent), ["1,284", "1,201−83", "1,037−164", "1,009−28", "871−138", "86−785", "41−45", "30−11"]);
+  assert.equal(all(funnel, "bar").length, 8);
   const tip = one(funnel, "chart-tip");
-  all(funnel, "hit")[4].focus();
+  all(funnel, "hit")[5].focus();
   assert.equal(one(tip, "tip-head").textContent, "通过相似度门槛");
-  assert.equal(one(tip, "tip-foot").textContent, "较上一步 −926 · 占抓取 6.7%");
+  assert.equal(one(tip, "tip-foot").textContent, "较上一步 −785 · 占抓取 6.7%");
   const mini = one(funnel, "ov-mini");
   assert.equal(mini.attributes["aria-label"], "顶刊：候选 164 → 有摘要 151 → 最近 7 天 120 → 通过 12（灰区 14，大模型复核 14）→ 显示 12");
   assert.equal(all(mini, "ov-step").length, 5);
@@ -606,7 +652,18 @@ test("the funnel, flagship mini funnel and research directions", async () => {
   all(topics, "hit")[0].fire("pointerenter");
   assert.equal(one(one(topics, "chart-tip"), "tip-foot").textContent, "占文库 13.5%");
   one(topics, "chart-toggle").click();
-  assert.deepEqual(byTag(one(topics, "chart-table"), "td").map((n) => n.textContent), ["斑岩铜矿成矿", "312", "俯冲带流体与氧化还原", "268", "岩浆挥发分", "221"]);
+  // The table has the tooltip's share of the library too
+  assert.deepEqual(byTag(one(topics, "chart-table"), "th").map((n) => n.textContent), ["研究方向", "文献数", "占文库"]);
+  assert.deepEqual(byTag(one(topics, "chart-table"), "td").map((n) => n.textContent), ["斑岩铜矿成矿", "312", "13.5%", "俯冲带流体与氧化还原", "268", "11.6%", "岩浆挥发分", "221", "9.5%"]);
+
+  // The run had no recency window although the settings now have one: no 最近 7 天 bar
+  const d = dashboard();
+  d.lastRun.stats = { ...d.lastRun.stats, recentDays: 0, afterRecent: 86 };
+  const unlimited = loadWindow(d);
+  await unlimited.refresh();
+  const labels = all(cardOf(unlimited, "ov-funnel"), "label").map((n) => n.textContent);
+  assert.ok(!labels.includes("最近 7 天"), labels.join(" | "));
+  assert.equal(all(cardOf(unlimited, "ov-funnel"), "ov-step")[2].textContent.startsWith("最近 "), true);
 });
 
 test("first run: callout and empty states point to the next step", async () => {
@@ -703,4 +760,26 @@ test("reloads: dimmed while loading, coalesced, skipped for a page switch, error
   await failing.refresh();
   assert.equal(one(failing.$("overview-root"), "empty-title").textContent, "无法加载概览");
   assert.equal(one(failing.$("overview-root"), "empty-text").textContent, "library locked");
+});
+
+test("relative times move on while the page stays open (the shell's minute tick)", async () => {
+  const w = loadWindow(dashboard());
+  await w.refresh();
+  const lastTile = () => one(cardOf(w, "ov-kpis"), "last");
+  const facts = () => all(cardOf(w, "ov-status"), "ov-facts")[0].childNodes.map((n) => n.textContent);
+  assert.equal(one(lastTile(), "tile-value").textContent, "2 小时前");
+  assert.ok(facts().includes("约 22 小时后"));
+
+  // Six hours later, without a reload
+  w.clock.now = NOW + 6 * HOUR;
+  w.run("ZotWatchOverview.tick()");
+  assert.equal(w.calls.dashboard, 1, "no reload");
+  assert.equal(one(lastTile(), "tile-value").textContent, "8 小时前");
+  assert.ok(facts().includes("约 16 小时后"), facts().join(" | "));
+  assert.match(facts()[1], /（8 小时前）$/);
+
+  // Past the next run: 即将检查
+  w.clock.now = NOW + 23 * HOUR;
+  w.run("ZotWatchOverview.tick()");
+  assert.ok(facts().includes("即将检查"));
 });

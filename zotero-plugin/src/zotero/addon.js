@@ -144,6 +144,9 @@ function errorMessage(errors, test) {
   return (errors || []).find(test)?.message || null;
 }
 
+// Data-source row of a run that failed in these stages (the embedding requests)
+const FAILED_STAGE_SOURCES = { profile: "embedding", embed: "embedding" };
+
 /** ProgressWindow parses its text as markup; keep arbitrary messages inert. */
 export function plainNoticeText(text) {
   return String(text ?? "").replace(/</g, "‹").replace(/>/g, "›");
@@ -432,7 +435,8 @@ export class ZotWatchAddon {
           return null;
         }
         Zotero.logError(e);
-        this.lastError = { message: e.message, at: Date.now() };
+        // The stage it failed in names the service on the dashboard (progress is cleared below)
+        this.lastError = { message: e.message, at: Date.now(), stage: this.progress?.stage ?? null };
         this.emit({ type: "error", message: e.message });
         if (background) this.notify("ZotWatch 运行失败", e.message, { sticky: true });
         throw e;
@@ -496,13 +500,15 @@ export class ZotWatchAddon {
       existing.ZotWatchMain?.navigate(route);
       return existing;
     }
-    const url = `${DIALOG_URL}#${route}`;
+    // The new window starts on lastPage. The route is not put in the URL:
+    // the persisted size and position are stored under the document URI
+    this.lastPage = route;
     const features = "chrome,dialog=no,resizable,centerscreen";
     const win = Zotero.getMainWindow();
     // On macOS Zotero can run without a main window
     return win
-      ? win.openDialog(url, "zotwatch-main", features)
-      : Services.ww.openWindow(null, url, "zotwatch-main", features, null);
+      ? win.openDialog(DIALOG_URL, "zotwatch-main", features)
+      : Services.ww.openWindow(null, DIALOG_URL, "zotwatch-main", features, null);
   }
 
   openRecommendations() {
@@ -580,6 +586,21 @@ export class ZotWatchAddon {
     const { followed, flagship, sources, abstracts, llm } = settings;
     const embedding = this.embeddingInfo(settings);
     const sourceCount = (name) => (Number.isFinite(perSource[name]) ? perSource[name] : null);
+    // A failure newer than the last run, matched to the service it stopped at
+    const finished = last ? last.finishedAt || last.runAt : 0;
+    const failure = this.lastError && (!finished || this.lastError.at > finished) ? this.lastError : null;
+    const failedSource = failure ? FAILED_STAGE_SOURCES[failure.stage] || null : null;
+    // A fetch source took part in the last run when it reported a count or an error
+    const fetchRow = (key, name, enabled, perSourceName, detail, error) => ({
+      key,
+      name,
+      enabled,
+      count: sourceCount(perSourceName),
+      detail,
+      error,
+      ran: Object.hasOwn(perSource, perSourceName) || !!error,
+    });
+    const followedError = errorMessage(errors, (e) => e.stage === "followed" && e.source === "OpenAlex");
     const pendingBy = (name) => pendingWorks.filter((w) => (w.followedAuthors || []).includes(name)).length;
     const abstractTiers = abstracts.crossref || abstracts.openalex || !!abstracts.elsevierKey || !!abstracts.springerKey;
 
@@ -615,31 +636,34 @@ export class ZotWatchAddon {
         error: this.whitelistError,
       },
       sources: [
-        {
-          key: "crossref",
-          name: "Crossref",
-          enabled: sources.crossref.enabled,
-          count: sourceCount("Crossref"),
-          detail: stats.journals ? `${stats.journals} 个期刊` : null,
-          error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "Crossref"),
-        },
-        {
-          key: "flagship",
-          name: "顶刊",
-          enabled: flagship.enabled,
-          count: sourceCount("顶刊"),
-          detail: `${flagship.issns.length} 个 ISSN`,
-          error: errorMessage(errors, (e) => e.stage === "flagship" || (e.stage === "fetch" && e.source === "Crossref 顶刊")),
-        },
-        { key: "arxiv", name: "arXiv", enabled: sources.arxiv.enabled, count: sourceCount("arXiv"), detail: sources.arxiv.categories.join(", ") || null, error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "arXiv") },
-        { key: "eartharxiv", name: "EarthArXiv", enabled: sources.eartharxiv.enabled, count: sourceCount("EarthArXiv"), detail: null, error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "EarthArXiv") },
+        fetchRow(
+          "crossref",
+          "Crossref",
+          sources.crossref.enabled,
+          "Crossref",
+          // ISSNs (a journal often has two), without the flagship ones queried by the 顶刊 row
+          Number.isFinite(stats.personalIssns ?? stats.journals) ? `${stats.personalIssns ?? stats.journals} 个 ISSN` : null,
+          errorMessage(errors, (e) => e.stage === "fetch" && e.source === "Crossref"),
+        ),
+        fetchRow(
+          "flagship",
+          "顶刊",
+          flagship.enabled,
+          "顶刊",
+          `${flagship.issns.length} 个 ISSN`,
+          errorMessage(errors, (e) => e.stage === "flagship" || (e.stage === "fetch" && e.source === "Crossref 顶刊")),
+        ),
+        fetchRow("arxiv", "arXiv", sources.arxiv.enabled, "arXiv", sources.arxiv.categories.join(", ") || null, errorMessage(errors, (e) => e.stage === "fetch" && e.source === "arXiv")),
+        fetchRow("eartharxiv", "EarthArXiv", sources.eartharxiv.enabled, "EarthArXiv", null, errorMessage(errors, (e) => e.stage === "fetch" && e.source === "EarthArXiv")),
         {
           key: "followed",
           name: "关注作者",
           enabled: followed.enabled,
           count: stats.followed ? stats.followed.fetched : null,
           detail: `OpenAlex，${followed.authors.length} 位`,
-          error: errorMessage(errors, (e) => e.stage === "followed"),
+          // The OpenAlex fetch only: unparseable author lines are warnings of the 关注作者 card
+          error: followedError,
+          ran: !!stats.followed || !!followedError,
         },
         {
           key: "abstracts",
@@ -649,7 +673,7 @@ export class ZotWatchAddon {
           detail: stats.abstracts ? `上次补全 ${stats.abstracts.filled ?? 0} / ${stats.abstracts.missing ?? 0}` : null,
           error: errorMessage(errors, (e) => e.stage === "enrich"),
         },
-        { key: "embedding", name: "向量化", enabled: true, count: null, detail: embedding.label, error: null },
+        { key: "embedding", name: "向量化", enabled: true, count: null, detail: embedding.label, error: failedSource === "embedding" ? failure.message : null },
         {
           key: "llm",
           name: "大模型",
@@ -751,8 +775,10 @@ export class ZotWatchAddon {
   async setJournalWhitelist(text) {
     const value = String(text ?? "");
     if (value === this.whitelist && !this.whitelistError) return;
-    this.whitelist = value;
+    // Written first: after a failed write the list in memory stays the saved
+    // one, so the settings page sees the edit as unsaved and retries it
     await this.storage.writeText(WHITELIST_FILE, value);
+    this.whitelist = value;
     this.whitelistError = null;
   }
 

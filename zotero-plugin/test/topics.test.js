@@ -496,7 +496,13 @@ test("the store follows labeled directions while another one stays unlabeled", a
   // A stored direction no cluster takes is kept while a cluster is unlabeled
   await storage.writeJSON("cluster-labels.json", { version: 1, clusters: [...store.clusters, { keys: ["GONE0", "GONE1"], label: "旧方向" }] });
   await engine({ "llm.enabled": false }).run();
-  assert.ok((await storage.readJSON("cluster-labels.json")).clusters.some((c) => c.label === "旧方向"));
+  const kept = (await storage.readJSON("cluster-labels.json")).clusters.find((c) => c.label === "旧方向");
+  assert.ok(kept);
+  // ... for matching only: it is no current direction, so the dashboard and the status leave it out
+  assert.equal(kept.stale, true);
+  const shown = (await engine().getTopics()).map((t) => t.label);
+  assert.deepEqual(shown.sort(), ["地幔动力学", "俯冲带流体", "铜同位素"].sort());
+  assert.ok(!shown.includes("旧方向"));
   // Once every cluster is labeled, the store holds exactly the current clusters
   const labeled = await engine().run();
   assert.deepEqual(labeled.stats.topics, { clusters: 4, labeled: 4, generated: 1 });

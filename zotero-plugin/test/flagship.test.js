@@ -467,14 +467,19 @@ test("flagship articles get their own Crossref query, skip the personal filters 
   assert.deepEqual(run.stats.perSource, { Crossref: 3, 顶刊: 9 });
   assert.equal(run.stats.fetched, 12);
   assert.equal(run.stats.afterDedupe, 11, "the library duplicate is gone; flagship articles still counted here");
+  assert.equal(run.stats.afterSplit, 3, "the 8 flagship articles leave the personal funnel here");
   assert.equal(run.stats.afterKeywords, 2, "the personal keyword filter drops p.2 only");
+  assert.equal(run.stats.personalIssns, personalQuery.match(/issn:/g).length, "ISSNs of the personal query, without the flagship ones");
+  assert.ok(run.stats.personalIssns < run.stats.journals);
+  assert.equal(run.stats.recentDays, 7);
+  assert.equal(run.stats.requireAbstract, true);
 
   // Anchors: one query embedding request per run
   const anchorCalls = http.calls.filter((c) => c.url.includes("embeddings") && JSON.parse(c.body).input[0] === "mantle subduction isotope");
   assert.equal(anchorCalls.length, 1);
   assert.deepEqual(JSON.parse(anchorCalls[0].body).input, ["mantle subduction isotope", "battery", "galaxy"]);
 
-  assert.deepEqual(run.stats.flagship, { candidates: 8, withAbstract: 7, recent: 6, accepted: 2, gray: 2, judged: 0, rejected: 2, recommended: 4 });
+  assert.deepEqual(run.stats.flagship, { candidates: 8, withAbstract: 7, recent: 6, accepted: 2, gray: 2, judged: 0, passed: 4, rejected: 2, recommended: 4 });
   assert.equal(run.stats.newByLabel.flagship, 4);
   assert.ok(stages.some((p) => p.stage === "flagship" && p.message === "顶刊地学：判断 6 篇文章是否属于地学…"));
   assert.match(stages.at(-1).message, /，顶刊地学 4 篇$/);
@@ -549,7 +554,7 @@ test("the LLM judges the gray zone with numbered papers and the flagship works j
       "User research interests:\nONLY copper deposits.\n\nPapers:\n- P1\n  Title: Copper sulfur deposits\n  Abstract: Copper copper sulfur mantle\n- P2\n  Title: Copper sulfur ores",
     ),
   );
-  assert.deepEqual(run.stats.flagship, { candidates: 8, withAbstract: 7, recent: 6, accepted: 2, gray: 2, judged: 2, rejected: 3, recommended: 3 });
+  assert.deepEqual(run.stats.flagship, { candidates: 8, withAbstract: 7, recent: 6, accepted: 2, gray: 2, judged: 2, passed: 3, rejected: 3, recommended: 3 });
 
   const works = (await engine().loadInbox()).works;
   assert.equal(works["doi:10.1038/c"].gate.judged, true);
@@ -607,6 +612,10 @@ test("flagship failures are reported without failing the run", async () => {
   assert.equal(run3.errors[0].stage, "flagship");
   assert.match(run3.errors[0].message, /anchor rejected/);
   assert.equal(run3.stats.flagship.recommended, 0);
+  // The gate never ran: no pass count, and the dashboard can say so
+  assert.equal(run3.stats.flagship.failed, true);
+  assert.equal(run3.stats.flagship.passed, undefined);
+  assert.equal(run.stats.flagship.failed, undefined, "an LLM failure inside the gate is not a failed gate");
   assert.equal(run3.stats.newByLabel.flagship, 0);
   assert.ok(run3.stats.recommended > 0);
 });
@@ -687,7 +696,7 @@ test("in local mode the LLM check judges every article the lexical bands cannot 
   const run = await engine().run();
   assert.deepEqual(run.errors, []);
   assert.deepEqual(judged, [ARTICLES[0].title[0], ARTICLES[1].title[0]], "everything but the clear materials article goes to the LLM");
-  assert.deepEqual(run.stats.flagship, { candidates: 3, withAbstract: 3, recent: 3, accepted: 0, gray: 2, judged: 2, rejected: 1, recommended: 2 });
+  assert.deepEqual(run.stats.flagship, { candidates: 3, withAbstract: 3, recent: 3, accepted: 0, gray: 2, judged: 2, passed: 2, rejected: 1, recommended: 2 });
   const works = (await engine().loadInbox()).works;
   for (const id of ["doi:10.1038/q", "doi:10.1038/z"]) {
     assert.equal(works[id].label, "flagship", id);

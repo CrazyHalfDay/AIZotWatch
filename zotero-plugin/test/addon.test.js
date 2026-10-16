@@ -478,7 +478,8 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   const counter = {};
-  const env = createEnvironment({ dataDir, items: libraryItems(), http: standardHttp(counter), zoteroVersion: 10 });
+  const items = libraryItems();
+  const env = createEnvironment({ dataDir, items, http: standardHttp(counter), zoteroVersion: 10 });
   t.after(env.cleanup);
   const { Zotero, mainWindow, menus } = env;
 
@@ -512,7 +513,10 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   menuOptions.menus[1].onCommand();
   menuOptions.menus[1].onCommand();
   assert.equal(mainWindow.opened.length, 1);
-  assert.equal(mainWindow.opened[0].url, "chrome://zotwatch/content/main.xhtml#inbox");
+  // No route in the URL (the window's persisted size and position are keyed by
+  // the document URI): the new window starts on lastPage
+  assert.equal(mainWindow.opened[0].url, "chrome://zotwatch/content/main.xhtml");
+  assert.equal(addon.lastPage, "inbox");
   assert.equal(mainWindow.opened[0].name, "zotwatch-main");
   assert.doesNotMatch(mainWindow.opened[0].features, /width=/, "size comes from persisted attributes");
   assert.deepEqual(plain(mainWindow.opened[0].routes), ["inbox"]);
@@ -590,11 +594,23 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.deepEqual(plain(dash.journals), { count: 1, withImpactFactor: 1, autoFromLibrary: true, error: null });
   assert.deepEqual(plain(dash.sources.map((s) => s.key)), ["crossref", "flagship", "arxiv", "eartharxiv", "followed", "abstracts", "embedding", "llm"]);
   const crossrefSource = dash.sources.find((s) => s.key === "crossref");
-  assert.deepEqual(plain(crossrefSource), { key: "crossref", name: "Crossref", enabled: true, count: 4, detail: "1 个期刊", error: null });
+  // ISSNs of the personal query (a journal often has two), not journals
+  assert.deepEqual(plain(crossrefSource), { key: "crossref", name: "Crossref", enabled: true, count: 4, detail: "1 个 ISSN", error: null, ran: true });
   assert.equal(dash.sources.find((s) => s.key === "llm").detail, "未启用");
   assert.equal(dash.dataDir, join(dataDir, "zotwatch"));
   assert.equal(addon.getDataDir(), dash.dataDir);
   assert.deepEqual(plain(dash.schedule), plain(view.schedule));
+  // The tiles' numbers: must-read among the pending works, items with an abstract
+  assert.equal(dash.pending.mustRead, view.works.filter((w) => w.status === "new" && w.label === "must_read").length);
+  assert.ok(dash.pending.mustRead > 0);
+  items.push({ key: "NOABS", itemType: "journalArticle", title: "Untitled note-like item", abstract: "", doi: "10.4444/noabs", issn: "0016-7037", venue: "GCA", dateAdded: "2024-05-01 10:00:00" });
+  assert.deepEqual(plain((await addon.getDashboard()).library), { name: "我的文库", items: 17, withAbstract: 16 });
+  items.pop();
+  // A source enabled after the last run has not run yet (未运行, not 正常)
+  env.prefs.set("extensions.zotwatch.sources.arxiv.enabled", true);
+  const arxivRow = (await addon.getDashboard()).sources.find((s) => s.key === "arxiv");
+  assert.deepEqual(plain([arxivRow.enabled, arxivRow.ran, arxivRow.count]), [true, false, null]);
+  env.prefs.set("extensions.zotwatch.sources.arxiv.enabled", false);
 
   // Helpers for the settings page
   assert.deepEqual(plain(addon.summarizeWhitelist("issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0\nbad line\n# note\n1234-5679,X")), {
@@ -632,10 +648,29 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.deepEqual(plain(item.tags), ["ZotWatch"]);
   assert.deepEqual(plain(item.collections), [env.collections[0].id]);
   assert.equal(addon.pendingCount, 0);
+  // Added works leave the pending counts; 已加入 counts them
+  const handled = (await addon.getView()).works;
+  const dash2 = await addon.getDashboard();
+  assert.ok(dash2.added > 0);
+  assert.equal(dash2.added, handled.filter((w) => w.status === "added").length);
+  assert.equal(dash2.pending.total, handled.filter((w) => w.status === "new").length);
+  assert.equal(dash2.pending.personal + dash2.pending.flagship + dash2.pending.followed, dash2.pending.total);
+  assert.equal(dash2.pending.mustRead, 0);
 
   // --- bulk status change, status text, journals, preferences, URLs
   await addon.setStatus([top.id, others[0]?.id].filter(Boolean), "dismissed");
   assert.equal((await addon.getView()).works.find((w) => w.id === top.id).status, "dismissed");
+
+  // --- a run that fails at the embedding service is shown on that source's row
+  env.prefs.set("extensions.zotwatch.embedding.apiKey", "");
+  await assert.rejects(addon.runNow(), /API Key/);
+  assert.equal(addon.lastError.stage, "profile");
+  const failedDash = await addon.getDashboard();
+  assert.match(failedDash.sources.find((s) => s.key === "embedding").error, /API Key/);
+  assert.equal(failedDash.sources.find((s) => s.key === "crossref").error, null);
+  assert.equal(Zotero.errors.length, 1, "the failure is logged");
+  Zotero.errors.length = 0;
+  env.prefs.set("extensions.zotwatch.embedding.apiKey", "sk-test");
   assert.match(await addon.getStatus(), /我的文库，16 个条目/);
   assert.match(await addon.loadPresetJournals(), /^issn,title,category,impact_factor/);
   assert.match(await addon.suggestJournals(), /0016-7037,GCA,GEO,5/);
@@ -819,11 +854,17 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   };
   const openalexQueries = [];
   const standard = standardHttp({});
+  let openalexDown = false;
   const http = {
     async request(req) {
       if (req.url.startsWith("https://api.openalex.org/works")) {
         openalexQueries.push(decodeURIComponent(req.url));
+        if (openalexDown) return { status: 403, data: { error: "Forbidden" } };
         return { status: 200, data: { meta: { next_cursor: null }, results: [followedWork] } };
+      }
+      // arXiv answers with an empty feed (counted as 0 fetched)
+      if (req.url.startsWith("https://export.arxiv.org/api/query")) {
+        return { status: 200, data: '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>' };
       }
       return standard.request(req);
     },
@@ -834,6 +875,7 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   useApiEmbeddings(env);
   env.prefs.set("extensions.zotwatch.followed.enabled", true);
   env.prefs.set("extensions.zotwatch.followed.authors", "Li Wang, https://orcid.org/0000-0002-1825-0097\nnot an author line");
+  env.prefs.set("extensions.zotwatch.sources.arxiv.enabled", true);
 
   const result = await addon.runNow({ background: true });
   assert.equal(result.stats.newByLabel.followed, 1);
@@ -853,6 +895,17 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   assert.equal(followed.score, 0);
   assert.match(await addon.getStatus(), /关注作者：1 位（Li Wang），检查最近 60 天；1 行无法识别：not an author line/);
 
+  // The dashboard: the author's pending works; an unparseable line is no source error
+  const dash = await addon.getDashboard();
+  const byLiWang = view.works.filter((w) => w.status === "new" && (w.followedAuthors || []).includes("Li Wang")).length;
+  assert.ok(byLiWang > 0);
+  assert.deepEqual(plain(dash.followed.authors), [{ name: "Li Wang", orcid: "0000-0002-1825-0097", openalexId: null, pending: byLiWang }]);
+  assert.deepEqual(plain(dash.followed.invalid), ["not an author line"]);
+  const followedRow = dash.sources.find((s) => s.key === "followed");
+  assert.deepEqual(plain([followedRow.count, followedRow.error, followedRow.ran]), [1, null, true]);
+  const arxivRow = dash.sources.find((s) => s.key === "arxiv");
+  assert.deepEqual(plain([arxivRow.count, arxivRow.error, arxivRow.ran, arxivRow.detail]), [0, null, true, "physics.geo-ph, astro-ph.EP"]);
+
   // OpenAlex preprints become preprint items
   const itemID = await addon.addToLibrary(followed.id);
   const item = env.savedItems.find((i) => i.id === itemID);
@@ -864,6 +917,13 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   // Shown once: the next run finds nothing new from the followed authors
   const again = await addon.runNow();
   assert.equal(again.stats.newByLabel.followed, 0);
+
+  // A failed OpenAlex fetch is the row's error (not the unparseable line listed before it)
+  openalexDown = true;
+  const down = await addon.runNow();
+  assert.deepEqual(plain(down.errors.map((e) => [e.stage, e.source ?? null])), [["followed", null], ["followed", "OpenAlex"]]);
+  assert.match((await addon.getDashboard()).sources.find((s) => s.key === "followed").error, /403/);
+  openalexDown = false;
 
   // Resetting forgets the seen-set with everything else
   await addon.resetData();
@@ -949,11 +1009,13 @@ test("Zotero 10: flagship-journal articles are gated into their own track", asyn
   });
   const flagshipQueries = [];
   const standard = standardHttp({});
+  let flagshipDown = false;
   const http = {
     async request(req) {
       const url = decodeURIComponent(req.url);
       if (req.url.startsWith("https://api.crossref.org/works?") && url.includes("issn:0028-0836")) {
         flagshipQueries.push(url);
+        if (flagshipDown) return { status: 400, data: { message: "bad filter" } };
         const items = [
           nature(1, "Copper isotope records of mantle sulfur", "Copper isotope and sulfur budgets of the mantle beneath arcs"),
           nature(2, "Fast-charging battery anodes", "Battery battery anodes for electric vehicles"),
@@ -991,8 +1053,21 @@ test("Zotero 10: flagship-journal articles are gated into their own track", asyn
     /顶刊地学速览：12 个 ISSN，接受阈值 0\.30，灰区下限 0\.22；上次运行 2 篇候选，2 篇有摘要且在时间范围内，入选 1 篇（灰区 0 篇）/,
   );
 
+  // The dashboard: the flagship funnel and the 顶刊 / Crossref rows
+  const dash = await addon.getDashboard();
+  assert.deepEqual(plain(dash.flagship.stats), plain(result.stats.flagship));
+  assert.equal(dash.flagship.stats.passed, 1);
+  const flagshipRow = dash.sources.find((s) => s.key === "flagship");
+  assert.deepEqual(plain([flagshipRow.count, flagshipRow.error, flagshipRow.ran]), [2, null, true]);
+  assert.equal(dash.sources.find((s) => s.key === "crossref").detail, `${result.stats.personalIssns} 个 ISSN`);
+
   const itemID = await addon.addToLibrary(flagship[0].id);
   assert.equal(env.savedItems.find((i) => i.id === itemID).itemType, "journalArticle");
+
+  // A failed flagship query is the 顶刊 row's error
+  flagshipDown = true;
+  await addon.runNow();
+  assert.match((await addon.getDashboard()).sources.find((s) => s.key === "flagship").error, /bad filter|400/);
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.deepEqual(env.Zotero.errors.map(String), []);
 });
@@ -1002,9 +1077,11 @@ test("Zotero 10: research directions are labeled from library titles and tags", 
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   const prompts = [];
   const standard = standardHttp({});
+  let llmDown = false;
   const http = {
     async request(req) {
       if (req.url === "https://llm.example/v1/chat/completions") {
+        if (llmDown) return { status: 401, data: { error: { message: "invalid key" } } };
         const prompt = JSON.parse(req.body).messages[0].content;
         prompts.push(prompt);
         const content = prompt.includes("研究方向标签")
@@ -1038,6 +1115,11 @@ test("Zotero 10: research directions are labeled from library titles and tags", 
   assert.equal(top.topic, "铜同位素分馏");
   assert.equal(view.works.find((w) => w.id === "doi:10.5555/new.2").topic, "地幔熔融");
   assert.match(await addon.getStatus(), /\n研究方向：铜同位素分馏（12 篇）、地幔熔融（4 篇）\n/);
+  const dash = await addon.getDashboard();
+  assert.deepEqual(plain(dash.topics), [{ label: "铜同位素分馏", size: 12 }, { label: "地幔熔融", size: 4 }]);
+  assert.equal(dash.topicCount, 2);
+  assert.equal(dash.clusters, 2);
+  assert.equal(dash.sources.find((s) => s.key === "llm").error, null);
 
   // The summary note names the research direction
   await addon.addToLibrary(top.id);
@@ -1051,6 +1133,13 @@ test("Zotero 10: research directions are labeled from library titles and tags", 
   await addon.runNow();
   assert.equal(prompts.filter((p) => p.includes("研究方向标签")).length, 1);
   assert.ok(!existsSync(join(dataDir, "zotwatch", "cluster-labels.json")), "labels are cleared with the cache");
+
+  // A failing LLM (summaries) is the 大模型 row's error
+  llmDown = true;
+  await addon.resetData();
+  const failing = await addon.runNow();
+  assert.ok(failing.errors.some((e) => e.stage === "llm"));
+  assert.match((await addon.getDashboard()).sources.find((s) => s.key === "llm").error, /invalid key/);
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.deepEqual(env.Zotero.errors.map(String), []);
 });
@@ -1075,6 +1164,19 @@ test("an unreadable journals.csv does not stop the plugin", async (t) => {
   env.Zotero.errors.length = 0;
   await addon.setJournalWhitelist("issn,title\n1234-5678,X");
   assert.doesNotMatch(await addon.getStatus(), /UTF-8/);
+
+  // A failed write (the CSV locked by Excel) keeps the saved list, so the
+  // settings page sees the edit as unsaved and the next attempt writes it
+  const writeUTF8 = env.context.IOUtils.writeUTF8;
+  env.context.IOUtils.writeUTF8 = async (p, text, opts) => {
+    if (p.endsWith("journals.csv")) throw new Error("The file is locked");
+    return writeUTF8(p, text, opts);
+  };
+  await assert.rejects(addon.setJournalWhitelist("issn,title\n0012-821X,EPSL"), /locked/);
+  assert.equal(addon.getJournalWhitelist(), "issn,title\n1234-5678,X");
+  env.context.IOUtils.writeUTF8 = writeUTF8;
+  await addon.setJournalWhitelist("issn,title\n0012-821X,EPSL");
+  assert.equal(readFileSync(join(dataDir, "zotwatch", "journals.csv"), "utf8"), "issn,title\n0012-821X,EPSL");
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
 });
 
@@ -1148,11 +1250,44 @@ test("preference pane initialises from Zotero's events inside a sandbox", async 
   await tick();
   assert.equal(elements.get("zw-last").textContent, "失败：网络连接失败");
 
+  // A finished run updates 上次检查 and the pending count
+  view.lastError = null;
+  view.works.push({ status: "new" });
+  view.lastRun = { runAt: now - 120000, finishedAt: now - 60000 };
+  [...addonListeners][0]({ type: "done" });
+  await tick();
+  assert.equal(elements.get("zw-pending").textContent, "3 篇");
+  assert.match(elements.get("zw-last").textContent, /^1 分钟前（/);
+  // A recommendation handled in the main window (inbox event)
+  view.works[0].status = "dismissed";
+  [...addonListeners][0]({ type: "inbox" });
+  await tick();
+  assert.equal(elements.get("zw-pending").textContent, "2 篇");
+  // A cancelled run no longer reads 正在检查…
+  view.running = true;
+  [...addonListeners][0]({ type: "start" });
+  await tick();
+  assert.equal(elements.get("zw-last").textContent, "正在检查…");
+  view.running = false;
+  [...addonListeners][0]({ type: "cancelled" });
+  await tick();
+  assert.match(elements.get("zw-last").textContent, /^1 分钟前（/);
+
   fire("unload", rootEl);
   assert.equal(addonListeners.size, 0, "the listener is removed when the pane closes");
 });
 
 const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "settings.js"];
+
+/** Every element below `node` (document order). */
+const allElements = (node, out = []) => {
+  for (const el of node.elements) {
+    out.push(el);
+    allElements(el, out);
+  }
+  return out;
+};
+const hasClass = (el, cls) => (el.attrs.class || "").split(/\s+/).includes(cls);
 
 const collectIds = (node, out) => {
   for (const el of node.elements) {
@@ -1196,6 +1331,10 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
     for (const [, id] of js.matchAll(/(?:\$|getElementById|segmented|setSegmented)\("([\w-]+)"/g)) {
       assert.ok(mainIds.has(id), `main.xhtml lacks #${id} (used by ${file})`);
     }
+    // Ids in selectors: querySelector("#page-inbox .tab") and friends
+    for (const [, id] of js.matchAll(/querySelector(?:All)?\(\s*["'`]#([\w-]+)/g)) {
+      assert.ok(mainIds.has(id), `main.xhtml lacks #${id} (used in a selector by ${file})`);
+    }
     // Ids built from a prefix: `count-${status}` and friends
     for (const [, prefix] of js.matchAll(/\$\(`([\w-]+)-\$\{/g)) {
       assert.ok([...mainIds].some((id) => id.startsWith(`${prefix}-`)), `main.xhtml has no #${prefix}-* element (used by ${file})`);
@@ -1203,6 +1342,34 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   }
   for (const s of ["new", "added", "dismissed"]) assert.ok(mainIds.has(`count-${s}`));
   for (const id of ["inbox-track", "inbox-label", "inbox-sort"]) assert.ok(mainIds.has(id));
+
+  // The values the scripts switch on: pages (main.js PAGE_KEYS), inbox tabs and filters
+  const mainJs = readFileSync(join(root, "addon/content/main.js"), "utf8");
+  const inboxJs = readFileSync(join(root, "addon/content/inbox.js"), "utf8");
+  const pageKeys = JSON.parse(mainJs.match(/const PAGE_KEYS = (\[[^\]]*\]);/)[1]);
+  assert.deepEqual(pageKeys, ["overview", "inbox", "settings"]);
+  const elements = allElements(mainDoc);
+  const dataOf = (cls, attr) => elements.filter((el) => hasClass(el, cls)).map((el) => el.attrs[attr]);
+  assert.deepEqual(dataOf("nav-item", "data-page"), pageKeys, "one sidebar button per page");
+  assert.deepEqual(dataOf("page", "data-page"), pageKeys, "one <section class=page> per page");
+  assert.deepEqual(dataOf("page-actions", "data-page"), pageKeys, "one header action group per page");
+  assert.equal(elements.find((el) => el.attrs.id === "page-inbox")?.attrs["data-page"], "inbox");
+  const tabs = elements.filter((el) => hasClass(el, "tab")).map((el) => el.attrs["data-tab"]);
+  assert.deepEqual(tabs, JSON.parse(inboxJs.match(/const TABS = (\[[^\]]*\]);/)[1]));
+  const segValues = (id) => allElements(elements.find((el) => el.attrs.id === id)).map((el) => el.attrs["data-value"]).filter(Boolean);
+  assert.deepEqual(segValues("inbox-track"), ["all", "personal", "flagship", "followed"]);
+  assert.deepEqual(segValues("inbox-label"), ["all", "must_read", "latest"]);
+  assert.deepEqual(segValues("inbox-sort"), ["score", "date"]);
+  for (const value of ["must_read", "latest"]) assert.match(inboxJs, new RegExp(`state\\.filter === "${value}"`), `inbox.js filters on ${value}`);
+  assert.match(inboxJs, /state\.sort === "date"/);
+
+  // Zotero's edit overlay gives the text fields their Cut / Copy / Paste context menu (before main.js)
+  const scripts = elements.filter((el) => el.name === "script").map((el) => el.attrs.src);
+  assert.deepEqual(scripts.slice(0, 3), ["chrome://global/content/globalOverlay.js", "chrome://zotero/content/editMenuOverlay.js", "chrome://zotwatch/content/main.js"]);
+  const l10n = elements.filter((el) => el.name === "link" && el.attrs.rel === "localization").map((el) => el.attrs.href);
+  assert.ok(l10n.includes("toolkit/global/textActions.ftl"), "the context menu's labels");
+  // addon.js switches an open window through window.ZotWatchMain.navigate (test/main.test.js drives it)
+  assert.match(mainJs, /window\.ZotWatchMain = \{[^}]*\bnavigate\b/);
   // Inline SVG must carry the SVG namespace (strict XHTML)
   for (const [tag] of mainXhtml.matchAll(/<svg\b[^>]*>/g)) assert.match(tag, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
   // Every icon used from the scripts exists in the sprite

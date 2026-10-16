@@ -7,6 +7,8 @@ import { FLAGSHIP_DEFAULTS, normalizeIssnList, parseAnchorLines } from "./core/f
 import { parseList } from "./core/text.js";
 
 export const PREF_PREFIX = "extensions.zotwatch.";
+// arXiv categories used when the field is left blank (the pref's default)
+export const DEFAULT_ARXIV_CATEGORIES = ["physics.geo-ph", "astro-ph.EP"];
 
 // Per-provider calibration: local TF-IDF cosines are much lower than neural ones.
 // The flagship gate bands were tuned on DashScope text-embedding-v4 (the
@@ -69,6 +71,7 @@ export function loadSettings(get) {
   const calib = PROVIDER_CALIBRATION[provider] || PROVIDER_CALIBRATION.default;
   const followedAuthors = parseFollowedAuthors(typeof get("followed.authors") === "string" ? get("followed.authors") : "");
   const flagshipMinScore = num(get("flagship.minScore"), calib.flagshipMinScore, { min: 0, max: 1 });
+  const arxivCategories = parseList(get("sources.arxiv.categories"));
 
   return {
     embedding: {
@@ -76,7 +79,8 @@ export function loadSettings(get) {
       apiKey: str(get("embedding.apiKey")),
       model: str(get("embedding.model")),
       baseURL: str(get("embedding.baseURL")),
-      dimensions: num(get("embedding.dimensions"), 1024, { min: 64, max: 4096, int: true }),
+      // Only DashScope uses it; text-embedding-v4 accepts 64 to 2048 (fixed sizes, see the settings page)
+      dimensions: num(get("embedding.dimensions"), 1024, { min: 64, max: 2048, int: true }),
       batchSize: num(get("embedding.batchSize"), 0, { min: 0, max: 1000, int: true }),
       concurrency: num(get("embedding.concurrency"), 3, { min: 1, max: 8, int: true }),
     },
@@ -101,7 +105,8 @@ export function loadSettings(get) {
       },
       arxiv: {
         enabled: bool(get("sources.arxiv.enabled"), false),
-        categories: parseList(get("sources.arxiv.categories")),
+        // Blank means the default categories (as the field's placeholder says), not "fetch nothing"
+        categories: arxivCategories.length ? arxivCategories : [...DEFAULT_ARXIV_CATEGORIES],
         daysBack: num(get("sources.arxiv.daysBack"), 7, { min: 1, max: 60, int: true }),
         maxResults: num(get("sources.arxiv.maxResults"), 500, { min: 1, max: 2000, int: true }),
       },

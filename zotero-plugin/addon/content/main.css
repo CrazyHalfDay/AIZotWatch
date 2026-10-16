@@ -517,11 +517,24 @@ p {
   }
 
   .brand-text,
+  .subnav {
+    display: none !important;
+  }
+
+  /* Hidden visually only: they stay the nav buttons' names ("推荐 16", not
+     "16") and the run status a screen reader reads */
   .nav-label,
-  .subnav,
   .run-status,
   .run-next {
-    display: none !important;
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .nav {

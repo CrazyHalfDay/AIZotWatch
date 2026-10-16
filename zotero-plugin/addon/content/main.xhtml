@@ -9,7 +9,13 @@
   <link rel="stylesheet" href="chrome://zotwatch/content/overview.css"/>
   <link rel="stylesheet" href="chrome://zotwatch/content/inbox.css"/>
   <link rel="stylesheet" href="chrome://zotwatch/content/settings.css"/>
-  <!-- main.js first: it defines the helpers and the page registry the page scripts use -->
+  <!-- Labels of the Cut / Copy / Paste context menu of text fields (as in Zotero's own windows) -->
+  <link rel="localization" href="browser/menubar.ftl"/>
+  <link rel="localization" href="toolkit/global/textActions.ftl"/>
+  <!-- HTML inputs in a chrome window get a context menu only from Zotero's edit overlay -->
+  <script src="chrome://global/content/globalOverlay.js"></script>
+  <script src="chrome://zotero/content/editMenuOverlay.js"></script>
+  <!-- main.js before the page scripts: it defines the helpers and the page registry they use -->
   <script src="chrome://zotwatch/content/main.js"></script>
   <script src="chrome://zotwatch/content/overview.js"></script>
   <script src="chrome://zotwatch/content/inbox.js"></script>
@@ -93,7 +99,7 @@
     <div class="main">
       <header class="page-header">
         <div class="page-heading">
-          <h1 id="page-title" class="page-title">概览</h1>
+          <h1 id="page-title" class="page-title" tabindex="-1">概览</h1>
           <p id="page-subtitle" class="page-subtitle"></p>
         </div>
         <div class="page-actions-bar">

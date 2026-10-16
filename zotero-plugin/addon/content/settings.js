@@ -28,9 +28,10 @@ var ZotWatchSettings = (() => {
       text: "text-embedding-v4，中英文效果都好",
       recommended: true,
       model: "text-embedding-v4",
+      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       keyHelp: "在阿里云百炼控制台创建，与 AIZotWatch 的 DASHSCOPE_API_KEY 相同。",
     },
-    voyage: { name: "Voyage AI", title: "Voyage AI", text: "voyage-3.5", model: "voyage-3.5", keyHelp: "在 dash.voyageai.com 创建。" },
+    voyage: { name: "Voyage AI", title: "Voyage AI", text: "voyage-3.5", model: "voyage-3.5", baseURL: "https://api.voyageai.com/v1", keyHelp: "在 dash.voyageai.com 创建。" },
     openai: {
       name: "OpenAI 兼容",
       title: "OpenAI 兼容接口",
@@ -50,6 +51,8 @@ var ZotWatchSettings = (() => {
   ];
 
   const isProvider = (...names) => (get) => names.includes(get("embedding.provider") || "local");
+  // Output sizes DashScope's text-embedding-v4 accepts (any other value fails every request)
+  const DASHSCOPE_DIMENSIONS = [64, 128, 256, 512, 768, 1024, 1536, 2048];
 
   /**
    * Every bound preference. kind: switch | number | text | password | textarea
@@ -74,15 +77,27 @@ var ZotWatchSettings = (() => {
     },
     { pref: "embedding.apiKey", kind: "password", label: "API Key", long: true, when: isProvider("dashscope", "voyage", "openai") },
     { pref: "embedding.model", kind: "text", label: "模型", help: "留空使用默认模型。", long: true, when: isProvider("dashscope", "voyage", "openai") },
-    { pref: "embedding.baseURL", kind: "text", label: "接口地址", help: "仅 OpenAI 兼容接口使用；留空为 OpenAI 官方地址。", long: true, placeholder: "https://api.openai.com/v1", when: isProvider("openai") },
-    { pref: "embedding.dimensions", kind: "number", label: "向量维度", help: "仅 DashScope 使用；更改后会重新向量化文库。", min: 64, max: 4096, int: true, fallback: 1024, advanced: true, when: isProvider("dashscope") },
+    // Every API service sends its requests here (blank: the service's official endpoint, the placeholder)
+    { pref: "embedding.baseURL", kind: "text", label: "接口地址", help: "留空使用所选服务的官方地址；用代理或国际站时填写。", long: true, when: isProvider("dashscope", "voyage", "openai") },
+    {
+      pref: "embedding.dimensions",
+      kind: "number",
+      label: "向量维度",
+      help: `仅 DashScope 使用；text-embedding-v4 支持 ${DASHSCOPE_DIMENSIONS.join(" / ")}。更改后会重新向量化文库。`,
+      min: 64,
+      max: 2048,
+      int: true,
+      fallback: 1024,
+      advanced: true,
+      when: isProvider("dashscope"),
+    },
 
     // 文献来源
     { pref: "sources.crossref.enabled", kind: "switch", label: "Crossref", help: "按关注期刊的 ISSN 抓取正式发表的论文。" },
     { pref: "sources.crossref.mailto", kind: "text", inputType: "email", label: "联系邮箱", help: "进入 Crossref 的礼貌池，请求更稳定（推荐填写）。", long: true, placeholder: "name@example.com" },
     { pref: "sources.crossref.daysBack", kind: "number", label: "回溯天数", help: "每次抓取最近这些天发表的论文。", unit: "天", min: 1, max: 60, int: true, fallback: 7 },
     { pref: "sources.arxiv.enabled", kind: "switch", label: "arXiv 预印本", help: "按分类抓取最近 7 天的预印本。" },
-    { pref: "sources.arxiv.categories", kind: "text", label: "分类", help: "逗号分隔；只保留主分类匹配的论文。", long: true, placeholder: "physics.geo-ph, astro-ph.EP" },
+    { pref: "sources.arxiv.categories", kind: "text", label: "分类", help: "逗号分隔，留空使用默认分类；只保留主分类匹配的论文。", long: true, placeholder: "physics.geo-ph, astro-ph.EP" },
     { pref: "sources.eartharxiv.enabled", kind: "switch", label: "EarthArXiv 地学预印本", help: "抓取最近 14 天的地学预印本（OAI-PMH）。" },
     { pref: "abstracts.crossref", kind: "switch", label: "从 Crossref 补全", help: "用于预印本等不是从 Crossref 抓到的论文。" },
     { pref: "sources.openalexAbstracts", kind: "switch", label: "从 OpenAlex 补全", help: "按 DOI 批量查询，最后一个尝试的来源。" },
@@ -353,6 +368,7 @@ var ZotWatchSettings = (() => {
     advancedGroups: [],
     toggleCards: [],
     sectionNodes: new Map(),
+    headings: new Map(),
     indexStatus: new Map(),
     testResults: [],
     viewTimer: null,
@@ -541,6 +557,8 @@ var ZotWatchSettings = (() => {
     }
     const model = state.bindings.get("embedding.model");
     if (model) model.control.setAttribute("placeholder", PROVIDERS[provider].model || "");
+    const endpoint = state.bindings.get("embedding.baseURL");
+    if (endpoint) endpoint.control.setAttribute("placeholder", PROVIDERS[provider].baseURL || "");
     if (state.keyHelp) state.keyHelp.textContent = PROVIDERS[provider].keyHelp || "";
     if (state.localCallout) state.localCallout.hidden = provider !== "local";
     const baseURL = String(get("llm.baseURL") || "").trim().replace(/\/+$/, "");
@@ -556,6 +574,10 @@ var ZotWatchSettings = (() => {
 
   function updateNote(b) {
     let text = clampNote(readControl(b), b.spec, fallbackOf(b.spec));
+    if (!text && b.spec.pref === "embedding.dimensions") {
+      const { value } = effectiveNumber(readControl(b), b.spec, fallbackOf(b.spec));
+      if (!DASHSCOPE_DIMENSIONS.includes(value)) text = `DashScope 不支持 ${value} 维，运行会失败`;
+    }
     if (!text && b.spec.pref === "flagship.grayLow") {
       // src/settings.js caps the gray-zone floor at the acceptance threshold
       const minScore = FIELD["flagship.minScore"];
@@ -1006,7 +1028,10 @@ var ZotWatchSettings = (() => {
       if (state.disposed) return;
       if (result) {
         wl.node.value = result.text;
+        // Until it is saved: a failed save is retried on the next blur, flush or section switch
+        wl.dirty = true;
         await api().setJournalWhitelist(result.text);
+        wl.dirty = false;
         setJournalsMessage(result.message, "info");
         toast("已保存", { key: "settings-saved", duration: 1600 });
       } else {
@@ -1302,6 +1327,13 @@ var ZotWatchSettings = (() => {
     }
   }
 
+  /** A section's heading; focusable from script, so a section switch can move focus to it. */
+  function sectionTitle(section) {
+    const node = el("h2", { class: "sf-section-title", tabindex: "-1", text: section.title });
+    state.headings.set(section.id, node);
+    return node;
+  }
+
   function sectionHead(section) {
     return el(
       "header",
@@ -1311,7 +1343,7 @@ var ZotWatchSettings = (() => {
         "div",
         { class: "sf-section-title-row" },
         el("span", { class: "sf-icon-tile" }, svgIcon(section.icon)),
-        el("div", { class: "sf-section-heading" }, el("h2", { class: "sf-section-title", text: section.title }), el("p", { class: "sf-section-desc", text: section.description })),
+        el("div", { class: "sf-section-heading" }, sectionTitle(section), el("p", { class: "sf-section-desc", text: section.description })),
       ),
     );
   }
@@ -1400,11 +1432,17 @@ var ZotWatchSettings = (() => {
     renderStatuses();
   }
 
+  /** Where focus goes after a switch that hid the focused control: the section's heading (null: the page title). */
+  function heading() {
+    return state.section ? state.headings.get(state.section) || null : null;
+  }
+
   return {
     init,
     show,
     refresh: refreshView,
     flush,
+    heading,
     // For tests: the field table and the pure helpers
     FIELDS,
     PROVIDERS,

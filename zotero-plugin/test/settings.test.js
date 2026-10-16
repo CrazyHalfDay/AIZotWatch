@@ -196,6 +196,9 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
 
   const saved = [];
   const checks = [];
+  const resets = [];
+  // failSaves: how many of the next whitelist saves fail (like the addon: nothing changes then)
+  const control = { failSaves: 0, confirmReply: true, allowErrors: false, errors: [] };
   const api = {
     version: "0.3.0",
     whitelistError: null,
@@ -205,8 +208,15 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
     summarizeWhitelist,
     getJournalWhitelist: () => whitelist,
     async setJournalWhitelist(text) {
+      if (control.failSaves > 0) {
+        control.failSaves -= 1;
+        throw new Error("journals.csv is locked");
+      }
       whitelist = text;
       saved.push(text);
+    },
+    async resetData() {
+      resets.push(true);
     },
     async suggestJournals() {
       return `${whitelist}\n0012-821X,EPSL,GEO,5.3`;
@@ -239,9 +249,42 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
     addEventListener() {},
   };
   const confirms = [];
+  const winListeners = {};
+  // 导入 CSV… picks this file; its text comes from Zotero.File.getContentsAsync
+  const picker = { file: "/home/me/journals.csv", text: "issn,title\n1234-5679,Imported" };
+  class FilePicker {
+    constructor() {
+      this.modeOpen = 0;
+      this.filterAll = 1;
+      this.returnOK = 0;
+      this.returnCancel = 1;
+    }
+    init() {}
+    appendFilter() {}
+    appendFilters() {}
+    async show() {
+      this.file = picker.file;
+      return picker.file ? this.returnOK : this.returnCancel;
+    }
+  }
+  const Zotero = {
+    ZotWatch: api,
+    Prefs,
+    isMac: false,
+    File: { getContentsAsync: async () => picker.text },
+    logError(e) {
+      // Unexpected errors fail the test; expected ones (a failing save) are recorded
+      if (!control.allowErrors) throw e;
+      control.errors.push(e);
+    },
+  };
   const context = vm.createContext({
-    ChromeUtils: { importESModule: () => ({ Zotero: { ZotWatch: api, Prefs, logError: (e) => { throw e; }, isMac: false } }) },
-    window: { addEventListener() {}, confirm: (text) => (confirms.push(text), true) },
+    ChromeUtils: { importESModule: (url) => (url.endsWith("filePicker.mjs") ? { FilePicker } : { Zotero }) },
+    window: {
+      addEventListener: (type, fn) => (winListeners[type] ||= []).push(fn),
+      confirm: (text) => (confirms.push(text), control.confirmReply),
+      close() {},
+    },
     document,
     location: { hash: "" },
     history: { replaceState() {} },
@@ -255,7 +298,9 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
   vm.runInContext(settingsCode, context, { filename: "settings.js" });
   const run = (src) => vm.runInContext(src, context);
   const page = run("ZotWatchSettings");
-  return { page, run, root: document.getElementById("settings-root"), values, writes, saved, checks, confirms, clock, api, toasts: document.getElementById("toasts") };
+  /** Fire a window event ("load" starts the shell like Zotero does, "unload" closes the window). */
+  const fire = (type) => (winListeners[type] || []).forEach((fn) => fn({ type }));
+  return { page, run, fire, root: document.getElementById("settings-root"), values, writes, saved, checks, confirms, resets, control, picker, clock, api, toasts: document.getElementById("toasts") };
 }
 
 // ------------------------------------------------------------- helpers
@@ -361,8 +406,8 @@ test("embedding providers and LLM presets match the services", () => {
   const { page } = loadSettingsPage();
   for (const [key, preset] of Object.entries(EMBEDDING_PRESETS)) {
     assert.equal(page.PROVIDERS[key].model, preset.model, `${key} model`);
+    assert.equal(page.PROVIDERS[key].baseURL, preset.baseURL, `${key} endpoint (the 接口地址 placeholder)`);
   }
-  assert.equal(page.PROVIDERS.openai.baseURL, EMBEDDING_PRESETS.openai.baseURL);
   assert.deepEqual(plain(page.FIELDS.find((f) => f.pref === "embedding.provider").options.map((o) => o.value)), ["local", "dashscope", "voyage", "openai"]);
   // The default LLM endpoint and model are the OpenRouter preset
   const defaults = prefDefaults();
@@ -458,7 +503,9 @@ test("provider radio cards switch the fields, placeholders and the flagship noti
   assert.equal(radios.length, 4);
   assert.equal(radios.find((r) => r.checked).value, "dashscope");
   assert.equal(rowOf(root, "embedding.apiKey").hidden, false);
-  assert.equal(rowOf(root, "embedding.baseURL").hidden, true, "the endpoint is only for OpenAI-compatible services");
+  // Every API service sends its requests to 接口地址 (a stored one stays visible and editable)
+  assert.equal(rowOf(root, "embedding.baseURL").hidden, false);
+  assert.equal(byPref(root, "embedding.baseURL")[0].getAttribute("placeholder"), "https://dashscope.aliyuncs.com/compatible-mode/v1");
   assert.equal(rowOf(root, "embedding.dimensions").hidden, false);
   assert.equal(byPref(root, "embedding.model")[0].getAttribute("placeholder"), "text-embedding-v4");
   assert.equal(byPref(root, "scoring.minSimilarity")[0].getAttribute("placeholder"), "自动（0.20）");
@@ -469,6 +516,7 @@ test("provider radio cards switch the fields, placeholders and the flagship noti
   assert.equal(values.get("embedding.provider"), "local");
   assert.equal(rowOf(root, "embedding.apiKey").hidden, true);
   assert.equal(rowOf(root, "embedding.model").hidden, true);
+  assert.equal(rowOf(root, "embedding.baseURL").hidden, true, "local mode sends nothing");
   assert.equal(byClass(byId(root, "settings-embedding"), "sf-advanced")[0].hidden, true, "no empty advanced group");
   assert.equal(byPref(root, "scoring.minSimilarity")[0].getAttribute("placeholder"), "自动（0.06）");
   assert.equal(byPref(root, "flagship.minScore")[0].getAttribute("placeholder"), "自动（0.12）");
@@ -478,8 +526,20 @@ test("provider radio cards switch the fields, placeholders and the flagship noti
   for (const r of radios) r.checked = r.value === "openai";
   radios.find((r) => r.value === "openai").dispatch("change");
   assert.equal(rowOf(root, "embedding.baseURL").hidden, false);
+  assert.equal(byPref(root, "embedding.baseURL")[0].getAttribute("placeholder"), "https://api.openai.com/v1");
   assert.equal(rowOf(root, "embedding.dimensions").hidden, true);
   assert.equal(callout.hidden, true);
+
+  // An endpoint entered for one service is still shown after switching to another, which uses it too
+  const [endpoint] = byPref(root, "embedding.baseURL");
+  endpoint.value = "https://api.siliconflow.cn/v1";
+  endpoint.dispatch("change");
+  for (const r of radios) r.checked = r.value === "voyage";
+  radios.find((r) => r.value === "voyage").dispatch("change");
+  assert.equal(rowOf(root, "embedding.baseURL").hidden, false);
+  assert.equal(endpoint.value, "https://api.siliconflow.cn/v1");
+  assert.equal(endpoint.getAttribute("placeholder"), "https://api.voyageai.com/v1");
+  assert.equal(loadSettings((k) => values.get(k)).embedding.baseURL, "https://api.siliconflow.cn/v1");
 
   // The password field has a show/hide button
   const [key] = byPref(root, "embedding.apiKey");
@@ -493,7 +553,7 @@ test("provider radio cards switch the fields, placeholders and the flagship noti
 });
 
 test("followed authors and the journal list have live previews; whitelist edits are saved", async () => {
-  const { page, root, values, saved, clock, confirms } = loadSettingsPage({ whitelist: "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0" });
+  const { page, root, values, saved, clock, confirms, api } = loadSettingsPage({ whitelist: "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0" });
   page.init();
   page.show({ section: "followed" });
 
@@ -528,10 +588,19 @@ test("followed authors and the journal list have live previews; whitelist edits 
   assert.deepEqual(saved, [list.value]);
 
   // Generating the list locks the field and its buttons until it is done
+  let finishSuggest;
+  api.suggestJournals = () => new Promise((r) => (finishSuggest = r));
   const suggest = byId(root, "sp-journals-suggest");
+  const buttons = ["sp-journals-suggest", "sp-journals-import", "sp-journals-preset"].map((id) => byId(root, id));
   suggest.dispatch("click");
   await new Promise((r) => setImmediate(r));
+  assert.equal(list.disabled, true, "the list is locked while it is generated");
+  assert.deepEqual(buttons.map((b) => b.disabled), [true, true, true]);
+  assert.match(byClass(root, "sf-action-message")[0].textContent, /正在分析文库期刊/);
+  finishSuggest(`${list.value}\n0012-821X,EPSL,GEO,5.3`);
+  await new Promise((r) => setImmediate(r));
   assert.equal(list.disabled, false);
+  assert.deepEqual(buttons.map((b) => b.disabled), [false, false, false]);
   assert.match(list.value, /0012-821X,EPSL,GEO,5\.3$/);
   assert.equal(saved.at(-1), list.value);
   assert.match(byClass(root, "sf-action-message")[0].textContent, /已根据文库生成期刊列表/);
@@ -603,4 +672,132 @@ test("恢复默认, LLM presets and inline connection tests", async () => {
   const result = byClass(test, "sf-result")[0];
   assert.equal(result.classList.contains("critical"), true);
   assert.equal(result.textContent, "失败：HTTP 401");
+});
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test("pending edits are saved on a page switch, a section switch and when the window closes", async () => {
+  const { page, run, fire, root, values, saved } = loadSettingsPage({ whitelist: "issn,title\n0016-7037,GCA" });
+  // The shell starts the way Zotero starts it (init() of every page, then the first page)
+  fire("load");
+  await tick();
+  run("navigate('settings/general')");
+
+  // Typed, then a page switch before the 600 ms debounce
+  const [interval] = byPref(root, "schedule.intervalHours");
+  interval.value = "12";
+  interval.dispatch("input");
+  assert.equal(values.get("schedule.intervalHours"), "24");
+  run("navigate('inbox')");
+  assert.equal(values.get("schedule.intervalHours"), "12");
+
+  // Typed, then another section
+  run("navigate('settings/ranking')");
+  const [topK] = byPref(root, "scoring.topK");
+  topK.value = "50";
+  topK.dispatch("input");
+  run("navigate('settings/ai')");
+  assert.equal(values.get("scoring.topK"), "50");
+
+  // The journal list (800 ms debounce), then the window closes
+  run("navigate('settings/journals')");
+  const list = byId(root, "sp-whitelist");
+  list.value += "\n0012-821X,EPSL";
+  list.dispatch("input");
+  assert.deepEqual(saved, []);
+  fire("unload");
+  await tick();
+  assert.deepEqual(saved, [list.value]);
+  assert.equal(page.state.disposed, true);
+});
+
+test("guards and retries: reset and import confirmations, 测试向量化, failed whitelist saves", async () => {
+  const original = "issn,title\n0016-7037,GCA";
+  const { page, root, saved, checks, confirms, resets, control, picker, clock, toasts } = loadSettingsPage({ whitelist: original });
+  page.init();
+
+  // 清除缓存与推荐记录… asks first; declining deletes nothing
+  page.show({ section: "data" });
+  const reset = byClass(byId(root, "settings-data"), "danger")[0];
+  control.confirmReply = false;
+  reset.dispatch("click");
+  await tick();
+  assert.match(confirms.at(-1), /^将删除向量缓存、聚类结果和全部推荐记录/);
+  assert.equal(resets.length, 0);
+  control.confirmReply = true;
+  reset.dispatch("click");
+  await tick();
+  assert.equal(resets.length, 1);
+
+  // 导入 CSV… replaces a non-empty list only after a confirmation
+  page.show({ section: "journals" });
+  const list = byId(root, "sp-whitelist");
+  const importButton = byId(root, "sp-journals-import");
+  control.confirmReply = false;
+  importButton.dispatch("click");
+  await tick();
+  assert.match(confirms.at(-1), /^将替换当前列表中的 1 个期刊/);
+  assert.equal(list.value, original);
+  assert.deepEqual(saved, []);
+  control.confirmReply = true;
+  importButton.dispatch("click");
+  await tick();
+  assert.equal(list.value, picker.text);
+  assert.deepEqual(saved, [picker.text]);
+
+  // 测试向量化 tests the embedding service only
+  page.show({ section: "embedding" });
+  const testRow = byClass(byId(root, "settings-embedding"), "sf-test")[0];
+  testRow.childNodes[0].dispatch("click");
+  await tick();
+  assert.deepEqual(plain(checks.at(-1)), ["embedding"]);
+  assert.equal(byClass(testRow, "sf-result")[0].textContent, "正常，维度 1024");
+
+  // A failed save (journals.csv locked) is retried by the next flush
+  page.show({ section: "journals" });
+  control.allowErrors = true;
+  control.failSaves = 1;
+  list.value += "\n0012-821X,EPSL";
+  list.dispatch("input");
+  await clock.advance(800);
+  assert.notEqual(saved.at(-1), list.value);
+  assert.match(toasts.textContent, /期刊列表保存失败：journals.csv is locked/);
+  await page.flush();
+  assert.equal(saved.at(-1), list.value, "retried");
+
+  // ... also when the list came from a button (载入地学期刊示例)
+  control.failSaves = 1;
+  byId(root, "sp-journals-preset").dispatch("click");
+  await tick();
+  assert.equal(list.value, "issn,title\n0016-7037,GCA");
+  assert.notEqual(saved.at(-1), list.value);
+  await page.flush();
+  assert.equal(saved.at(-1), list.value, "retried");
+  assert.equal(control.errors.length, 2);
+});
+
+test("向量维度 warns about sizes DashScope rejects; blank arXiv categories mean the defaults", () => {
+  const { page, root } = loadSettingsPage({ prefs: { "embedding.provider": "dashscope" } });
+  page.init();
+  page.show({ section: "embedding" });
+  const [dims] = byPref(root, "embedding.dimensions");
+  const note = byClass(rowOf(root, "embedding.dimensions"), "field-note")[0];
+  dims.value = "1000";
+  dims.dispatch("input");
+  assert.equal(note.hidden, false);
+  assert.match(note.textContent, /^DashScope 不支持 1000 维/);
+  dims.value = "1536";
+  dims.dispatch("input");
+  assert.equal(note.hidden, true);
+  dims.value = "4096";
+  dims.dispatch("input");
+  assert.equal(note.textContent, "超出范围，将按 2048 使用");
+  assert.equal(loadSettings((k) => (k === "embedding.dimensions" ? "4096" : undefined)).embedding.dimensions, 2048);
+
+  // The 分类 placeholder is what a blank field uses (it no longer turns arXiv off)
+  const spec = page.FIELDS.find((f) => f.pref === "sources.arxiv.categories");
+  const defaults = prefDefaults();
+  const blank = loadSettings((k) => (k === "sources.arxiv.categories" ? " " : defaults[k]));
+  assert.deepEqual(blank.sources.arxiv.categories, spec.placeholder.split(/,\s*/));
+  assert.deepEqual(blank.sources.arxiv.categories, loadSettings((k) => defaults[k]).sources.arxiv.categories);
 });

@@ -462,6 +462,7 @@ export class ZotWatchEngine {
 
       const keep = new Set([...part.accepted.map((i) => works[i]), ...keptGray]);
       const passed = works.filter((w) => keep.has(w));
+      stats.passed = passed.length;
       stats.rejected = works.length - passed.length;
       this.log(`Flagship geoscience gate: ${passed.length}/${works.length} passed (${gray.length} gray-zone, ${stats.judged} judged by the LLM)`);
 
@@ -480,6 +481,8 @@ export class ZotWatchEngine {
       if (e?.cancelled || e instanceof CancelledError) throw e;
       errors.push({ stage: "flagship", message: e?.message || String(e) });
       this.log(`Flagship track failed: ${e?.message || e}`);
+      // The gate did not finish: its counts (passed, rejected) say nothing
+      stats.failed = true;
       return { works: [], stats };
     }
   }
@@ -557,11 +560,12 @@ export class ZotWatchEngine {
     const entries = storedLabelEntries(stored);
     const taken = matchStoredEntries(clusters, entries);
     const labels = taken.map((j) => (j === null ? null : entries[j].label.trim()));
-    if (labels.some(Boolean)) {
+    if (entries.length) {
       const next = labelStoreOf(clusters, labels);
       if (!labels.every(Boolean)) {
         const used = new Set(taken);
-        next.clusters.push(...entries.filter((_, j) => !used.has(j)).map(({ keys, label }) => ({ keys, label })));
+        // Kept for matching only: no current cluster has them, so they are not shown as directions
+        next.clusters.push(...entries.filter((_, j) => !used.has(j)).map(({ keys, label }) => ({ keys, label, stale: true })));
       }
       if (!sameLabelStore(stored, next)) await this.storage.writeJSON(TOPIC_LABELS_FILE, next);
     }
@@ -766,6 +770,10 @@ export class ZotWatchEngine {
     const flagshipCfg = this.settings.flagship;
     const flagshipIssns = flagshipCfg?.enabled ? flagshipCfg.issns : [];
 
+    // ISSNs of the personal Crossref query (the flagship journals have their own)
+    const flagshipSet = new Set(flagshipIssns);
+    stats.personalIssns = issns.filter((issn) => !flagshipSet.has(normalizeIssn(issn))).length;
+
     progress("fetch", "抓取最新文献…");
     const fetched = await this.fetchCandidates(issns, { flagshipIssns });
     errors.push(...fetched.errors);
@@ -806,6 +814,8 @@ export class ZotWatchEngine {
     let flagshipCandidates = [];
     if (flagshipIssns.length) {
       ({ flagship: flagshipCandidates, personal: candidates } = splitFlagship(candidates, new Set(flagshipIssns)));
+      // The personal funnel continues from here (afterDedupe still counts the flagship articles)
+      stats.afterSplit = candidates.length;
     }
 
     // Followed works: no scoring and no filters (Python parity), only a
@@ -835,6 +845,9 @@ export class ZotWatchEngine {
     checkpoint();
 
     const sc = this.settings.scoring;
+    // The filters this run applied (the dashboard's funnel labels its stages with them)
+    stats.recentDays = sc.recentDays;
+    stats.requireAbstract = sc.requireAbstract;
     candidates = includeByKeywords(candidates, sc.includeKeywords);
     candidates = excludeByKeywords(candidates, sc.excludeKeywords);
     stats.afterKeywords = candidates.length;

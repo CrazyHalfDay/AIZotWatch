@@ -110,12 +110,18 @@ export function sameLabelStore(a, b) {
   const x = storedLabelEntries(a);
   const y = storedLabelEntries(b);
   if (x.length !== y.length) return false;
-  return x.every((c, i) => c.label === y[i].label && c.keys.length === y[i].keys.length && c.keys.every((k, j) => k === y[i].keys[j]));
+  return x.every(
+    (c, i) => c.label === y[i].label && !!c.stale === !!y[i].stale && c.keys.length === y[i].keys.length && c.keys.every((k, j) => k === y[i].keys[j]),
+  );
 }
 
-/** Topics for display: [{label, size}] by size, largest first. */
+/**
+ * Topics for display: [{label, size}] by size, largest first. Stale entries
+ * (kept for matching after a recluster, but taken by no current cluster) are left out.
+ */
 export function topicsOf(data) {
   return storedLabelEntries(data)
+    .filter((c) => !c.stale)
     .map((c) => ({ label: c.label.trim(), size: c.keys.length }))
     .sort((a, b) => b.size - a.size);
 }
