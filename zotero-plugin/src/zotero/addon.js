@@ -1,14 +1,17 @@
 // Plugin object: lifecycle, Tools menu, scheduler, and the API used by the
-// recommendations window and the preference pane (exposed as Zotero.ZotWatch).
+// ZotWatch main window and the preference pane (exposed as Zotero.ZotWatch).
 
 /* global Zotero, Services */
 
 import { createCancelSignal } from "../core/http.js";
-import { libraryVenues, parseWhitelist, serializeWhitelist } from "../core/journals.js";
+import { parseFollowedAuthors } from "../core/authors.js";
+import { libraryVenues, parseWhitelist, serializeWhitelist, summarizeWhitelist } from "../core/journals.js";
+import { countByTrack } from "../core/tracks.js";
 import { CancelledError, ZotWatchEngine } from "../engine.js";
-import { createEmbedder } from "../embedding/providers.js";
+import { EMBEDDING_PRESETS, createEmbedder } from "../embedding/providers.js";
 import { createLlmClient } from "../llm/llm.js";
-import { checkPublisherKeys } from "../sources/abstracts.js";
+import { autoValues } from "../settings.js";
+import { checkPublisherKeyRows } from "../sources/abstracts.js";
 import { addWorkToZotero } from "./items.js";
 import {
   createZoteroLibrary,
@@ -25,8 +28,9 @@ import {
 const PANE_ID = "zotwatch-prefpane";
 // README of the installed release (each release is tagged zotero-plugin-v<version>)
 const helpURL = (version) => `https://github.com/CrazyHalfDay/AIZotWatch/blob/zotero-plugin-v${version}/zotero-plugin/README.md`;
-const DIALOG_URL = "chrome://zotwatch/content/recommendations.xhtml";
-const DIALOG_TYPE = "zotwatch:recommendations";
+const DIALOG_URL = "chrome://zotwatch/content/main.xhtml";
+const DIALOG_TYPE = "zotwatch:main";
+const PAGES = new Set(["overview", "inbox", "settings"]);
 const MENU_ICON = "chrome://zotwatch/content/icons/menu.svg";
 const MAIN_WINDOW_FTL = "zotwatch-mainWindow.ftl";
 const WHITELIST_FILE = "journals.csv";
@@ -108,6 +112,38 @@ export function topicsStatusLine(topics, max = 8) {
   return `研究方向：${shown}${topics.length > max ? ` 等 ${topics.length} 个` : ""}`;
 }
 
+/**
+ * Route of the main window: "overview", "inbox", "settings" or
+ * "settings/<section>"; anything else falls back to "overview".
+ */
+export function normalizePage(page) {
+  const [name, section] = String(page ?? "").replace(/^#/, "").split("/");
+  if (!PAGES.has(name)) return "overview";
+  return name === "settings" && /^[a-z]+$/.test(section || "") ? `settings/${section}` : name;
+}
+
+/**
+ * When the scheduler starts the next automatic run (ms since the epoch), or
+ * null when automatic runs are off. Same rule as isRunDue: the interval since
+ * the last successful run and the retry delay since the last attempt must both
+ * have passed (a past time means "at the next check", which happens every 30 minutes).
+ */
+export function nextRunAt({ autoRun, intervalHours, lastRun, lastAttempt }, retryMs = RETRY_AFTER_FAILURE) {
+  if (!autoRun) return null;
+  return Math.max((lastRun || 0) + intervalHours * 3600000, (lastAttempt || 0) + retryMs);
+}
+
+/** Connection check result as a text line ("✅ Crossref：可访问"). */
+export function connectionLine(row) {
+  const icon = row.ok === true ? "✅" : row.ok === false ? "❌" : "ℹ️";
+  return `${icon} ${row.name}${row.target ? `（${row.target}）` : ""}：${row.detail}`;
+}
+
+/** First message of the run errors matching `test`, or null. */
+function errorMessage(errors, test) {
+  return (errors || []).find(test)?.message || null;
+}
+
 /** ProgressWindow parses its text as markup; keep arbitrary messages inert. */
 export function plainNoticeText(text) {
   return String(text ?? "").replace(/</g, "‹").replace(/>/g, "›");
@@ -135,6 +171,10 @@ export class ZotWatchAddon {
     this.menuKey = null;
     this.windowHooks = new Map();
     this.pendingNotice = null;
+    // Message and time of the last failed run (cleared when a run starts)
+    this.lastError = null;
+    // Last page shown in the main window during this session
+    this.lastPage = null;
   }
 
   // ------------------------------------------------------------- lifecycle
@@ -296,12 +336,23 @@ export class ZotWatchAddon {
     this.timers = [];
   }
 
-  isRunDue(now = Date.now()) {
-    const settings = readSettings();
-    if (!settings.schedule.autoRun) return false;
+  /** Automatic-run settings and timestamps (ms, null when never) with the next scheduled run. */
+  getSchedule(settings = readSettings()) {
     const lastRun = Number(getPref("schedule.lastRun")) || 0;
     const lastAttempt = Number(getPref("schedule.lastAttempt")) || 0;
-    return now - lastRun >= settings.schedule.intervalHours * 3600000 && now - lastAttempt >= RETRY_AFTER_FAILURE;
+    const { autoRun, intervalHours } = settings.schedule;
+    return {
+      autoRun,
+      intervalHours,
+      lastRun: lastRun || null,
+      lastAttempt: lastAttempt || null,
+      nextRunAt: nextRunAt({ autoRun, intervalHours, lastRun, lastAttempt }),
+    };
+  }
+
+  isRunDue(now = Date.now()) {
+    const next = this.getSchedule().nextRunAt;
+    return next !== null && now >= next;
   }
 
   maybeAutoRun() {
@@ -358,6 +409,7 @@ export class ZotWatchAddon {
     const engine = this.createEngine(this.getSettings(), createZoteroTransport({ signal }));
 
     this.running = (async () => {
+      this.lastError = null;
       this.emit({ type: "start" });
       try {
         const result = await engine.run({
@@ -380,6 +432,7 @@ export class ZotWatchAddon {
           return null;
         }
         Zotero.logError(e);
+        this.lastError = { message: e.message, at: Date.now() };
         this.emit({ type: "error", message: e.message });
         if (background) this.notify("ZotWatch 运行失败", e.message, { sticky: true });
         throw e;
@@ -428,24 +481,48 @@ export class ZotWatchAddon {
     return this.pendingCount;
   }
 
-  // ------------------------------------------------------ dialog API (inbox)
+  // ------------------------------------------------------- main window API
 
-  openRecommendations() {
+  /**
+   * Open the ZotWatch window on `page` ("overview", "inbox", "settings" or
+   * "settings/<section>"; default: the page last shown this session), or
+   * focus the open one and switch it to that page.
+   */
+  openWindow(page) {
+    const route = normalizePage(page || this.lastPage || "overview");
     const existing = Services.wm.getMostRecentWindow(DIALOG_TYPE);
     if (existing) {
       existing.focus();
+      existing.ZotWatchMain?.navigate(route);
       return existing;
     }
+    const url = `${DIALOG_URL}#${route}`;
     const features = "chrome,dialog=no,resizable,centerscreen";
     const win = Zotero.getMainWindow();
     // On macOS Zotero can run without a main window
     return win
-      ? win.openDialog(DIALOG_URL, "zotwatch-recommendations", features)
-      : Services.ww.openWindow(null, DIALOG_URL, "zotwatch-recommendations", features, null);
+      ? win.openDialog(url, "zotwatch-main", features)
+      : Services.ww.openWindow(null, url, "zotwatch-main", features, null);
   }
 
+  openRecommendations() {
+    return this.openWindow("inbox");
+  }
+
+  /** Zotero's settings window on the ZotWatch pane (the main window has its own settings page). */
   openPreferences() {
     Zotero.Utilities.Internal.openPreferences(PANE_ID);
+  }
+
+  /** Show the data directory (<Zotero data dir>/zotwatch) in the file manager. */
+  async revealDataDir() {
+    const dir = this.storage?.dir;
+    if (!dir) return false;
+    // Zotero.File.reveal throws for a missing path (e.g. right after a reset)
+    await this.storage.ensureDir?.();
+    if (typeof Zotero.File?.reveal === "function") await Zotero.File.reveal(dir);
+    else Zotero.launchFile?.(dir);
+    return true;
   }
 
   async getView() {
@@ -454,11 +531,128 @@ export class ZotWatchAddon {
     return {
       works: Object.values(inbox.works),
       lastRun: inbox.lastRun,
+      history: inbox.history || [],
       running: !!this.running,
       progress: this.progress,
+      lastError: this.lastError,
       llmEnabled: settings.llm.enabled && !!settings.llm.apiKey,
       provider: settings.embedding.provider,
       collection: settings.output.collection,
+      version: this.version,
+      schedule: this.getSchedule(settings),
+    };
+  }
+
+  /** Display name of the embedding service ("阿里云 DashScope · text-embedding-v4"). */
+  embeddingInfo(settings = this.getSettings()) {
+    const { provider } = settings.embedding;
+    const preset = EMBEDDING_PRESETS[provider];
+    if (!preset) return { provider, model: "", label: "本地模式", local: true };
+    const model = settings.embedding.model || preset.model;
+    return { provider, model, label: `${preset.label} · ${model}`, local: false };
+  }
+
+  /**
+   * Everything the overview page shows. Reads the library (item counts), so
+   * call it when the page loads, not on every progress event.
+   */
+  async getDashboard() {
+    const settings = this.getSettings();
+    const engine = this.createEngine(settings);
+    const [items, inbox, allTopics] = await Promise.all([
+      createZoteroLibrary().getItems(),
+      engine.loadInbox(),
+      settings.llm.topicLabels ? engine.getTopics() : [],
+    ]);
+    const works = Object.values(inbox.works);
+    const pendingWorks = works.filter((w) => w.status === "new");
+    const last = inbox.lastRun;
+    const stats = last?.stats || {};
+    const errors = last?.errors || [];
+    const perSource = stats.perSource || {};
+    const library = Zotero.Libraries.get(profileLibraryID());
+    const journals = [...parseWhitelist(this.whitelist).values()];
+    const { followed, flagship, sources, abstracts, llm } = settings;
+    const embedding = this.embeddingInfo(settings);
+    const sourceCount = (name) => (Number.isFinite(perSource[name]) ? perSource[name] : null);
+    const pendingBy = (name) => pendingWorks.filter((w) => (w.followedAuthors || []).includes(name)).length;
+    const abstractTiers = abstracts.crossref || abstracts.openalex || !!abstracts.elsevierKey || !!abstracts.springerKey;
+
+    return {
+      version: this.version,
+      library: { name: library?.name || "我的文库", items: items.length, withAbstract: items.filter((i) => i.abstract).length },
+      embedding,
+      llm: { enabled: llm.enabled, configured: !!llm.apiKey, model: llm.model, topicLabels: llm.topicLabels },
+      schedule: this.getSchedule(settings),
+      running: !!this.running,
+      pending: { total: pendingWorks.length, ...countByTrack(pendingWorks), mustRead: pendingWorks.filter((w) => w.label === "must_read").length },
+      added: works.filter((w) => w.status === "added").length,
+      lastRun: last,
+      lastError: this.lastError,
+      history: inbox.history || [],
+      topics: allTopics.slice(0, 10),
+      topicCount: allTopics.length,
+      clusters: stats.topics?.clusters ?? stats.profile?.clusters ?? null,
+      followed: {
+        enabled: followed.enabled,
+        daysBack: followed.daysBack,
+        authors: followed.authors.map((a) => ({ name: a.name, orcid: a.orcid || null, openalexId: a.openalexId || null, pending: pendingBy(a.name) })),
+        invalid: followed.invalid,
+      },
+      flagship: { enabled: flagship.enabled, issnCount: flagship.issns.length, stats: stats.flagship || null },
+      journals: {
+        count: journals.length,
+        withImpactFactor: journals.filter((j) => j.impactFactor !== null).length,
+        autoFromLibrary: settings.journals.autoFromLibrary,
+        error: this.whitelistError,
+      },
+      sources: [
+        {
+          key: "crossref",
+          name: "Crossref",
+          enabled: sources.crossref.enabled,
+          count: sourceCount("Crossref"),
+          detail: stats.journals ? `${stats.journals} 个期刊` : null,
+          error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "Crossref"),
+        },
+        {
+          key: "flagship",
+          name: "顶刊",
+          enabled: flagship.enabled,
+          count: sourceCount("顶刊"),
+          detail: `${flagship.issns.length} 个 ISSN`,
+          error: errorMessage(errors, (e) => e.stage === "flagship" || (e.stage === "fetch" && e.source === "Crossref 顶刊")),
+        },
+        { key: "arxiv", name: "arXiv", enabled: sources.arxiv.enabled, count: sourceCount("arXiv"), detail: sources.arxiv.categories.join(", ") || null, error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "arXiv") },
+        { key: "eartharxiv", name: "EarthArXiv", enabled: sources.eartharxiv.enabled, count: sourceCount("EarthArXiv"), detail: null, error: errorMessage(errors, (e) => e.stage === "fetch" && e.source === "EarthArXiv") },
+        {
+          key: "followed",
+          name: "关注作者",
+          enabled: followed.enabled,
+          count: stats.followed ? stats.followed.fetched : null,
+          detail: `OpenAlex，${followed.authors.length} 位`,
+          error: errorMessage(errors, (e) => e.stage === "followed"),
+        },
+        {
+          key: "abstracts",
+          name: "摘要补全",
+          enabled: abstractTiers,
+          count: stats.abstracts ? stats.abstracts.filled ?? 0 : null,
+          detail: stats.abstracts ? `上次补全 ${stats.abstracts.filled ?? 0} / ${stats.abstracts.missing ?? 0}` : null,
+          error: errorMessage(errors, (e) => e.stage === "enrich"),
+        },
+        { key: "embedding", name: "向量化", enabled: true, count: null, detail: embedding.label, error: null },
+        {
+          key: "llm",
+          name: "大模型",
+          enabled: llm.enabled && !!llm.apiKey,
+          count: null,
+          detail: llm.enabled ? (llm.apiKey ? llm.model : "未填写 API Key") : "未启用",
+          error: errorMessage(errors, (e) => e.stage === "llm"),
+        },
+      ],
+      abstracts: stats.abstracts || null,
+      dataDir: this.storage.dir,
     };
   }
 
@@ -554,38 +748,82 @@ export class ZotWatchAddon {
     this.whitelistError = null;
   }
 
-  // ------------------------------------------------- preference pane helpers
+  // ---------------------------------------------------------- settings helpers
 
-  async testConnections() {
+  /**
+   * Check the configured services: [{key, name, target, ok, detail}], where ok
+   * is true, false, or null for a service that is not enabled. `only` limits
+   * the checks to some keys ("embedding", "llm", "crossref", "elsevier", "springer");
+   * publisher keys are only checked when filled in.
+   */
+  async checkConnections(only = null) {
     const settings = this.getSettings();
-    const lines = [];
-    try {
-      const embedder = createEmbedder(settings.embedding, this.transport, { retry: { retries: 0 } });
-      if (embedder.requiresFit) embedder.fit(["test"]);
-      const [vec] = await embedder.embed(["ZotWatch connection test"]);
-      lines.push(`✅ 向量化（${settings.embedding.provider}）：正常，维度 ${vec.length}`);
-    } catch (e) {
-      lines.push(`❌ 向量化（${settings.embedding.provider}）：${e.message}`);
-    }
-    if (settings.llm.enabled) {
+    const want = (key) => !only || only.includes(key);
+    const rows = [];
+    if (want("embedding")) {
+      const row = { key: "embedding", name: "向量化", target: settings.embedding.provider, ok: false, detail: "" };
       try {
-        const reply = await createLlmClient(settings.llm, this.transport, { retry: { retries: 0 } }).chat("请只回复：OK", { maxTokens: 20 });
-        lines.push(`✅ 大模型（${settings.llm.model}）：${reply.trim().slice(0, 30)}`);
+        const embedder = createEmbedder(settings.embedding, this.transport, { retry: { retries: 0 } });
+        if (embedder.requiresFit) embedder.fit(["test"]);
+        const [vec] = await embedder.embed(["ZotWatch connection test"]);
+        Object.assign(row, { ok: true, detail: `正常，维度 ${vec.length}` });
       } catch (e) {
-        lines.push(`❌ 大模型（${settings.llm.model}）：${e.message}`);
+        row.detail = String(e?.message || e);
       }
-    } else {
-      lines.push("ℹ️ 大模型：未启用");
+      rows.push(row);
     }
-    try {
-      const res = await this.transport.request({ url: "https://api.crossref.org/works?rows=0", timeout: 20000 });
-      lines.push(res.status === 200 ? "✅ Crossref：可访问" : `❌ Crossref：HTTP ${res.status}`);
-    } catch (e) {
-      lines.push(`❌ Crossref：${e.message}`);
+    if (want("llm")) {
+      if (settings.llm.enabled) {
+        const row = { key: "llm", name: "大模型", target: settings.llm.model, ok: false, detail: "" };
+        try {
+          const reply = await createLlmClient(settings.llm, this.transport, { retry: { retries: 0 } }).chat("请只回复：OK", { maxTokens: 20 });
+          Object.assign(row, { ok: true, detail: reply.trim().slice(0, 30) });
+        } catch (e) {
+          row.detail = String(e?.message || e);
+        }
+        rows.push(row);
+      } else {
+        rows.push({ key: "llm", name: "大模型", target: null, ok: null, detail: "未启用" });
+      }
     }
-    lines.push(...(await checkPublisherKeys(this.transport, settings.abstracts)));
-    return lines.join("\n");
+    if (want("crossref")) {
+      const row = { key: "crossref", name: "Crossref", target: null, ok: false, detail: "" };
+      try {
+        const res = await this.transport.request({ url: "https://api.crossref.org/works?rows=0", timeout: 20000 });
+        Object.assign(row, res.status === 200 ? { ok: true, detail: "可访问" } : { detail: `HTTP ${res.status}` });
+      } catch (e) {
+        row.detail = String(e?.message || e);
+      }
+      rows.push(row);
+    }
+    if (want("elsevier") || want("springer")) {
+      const keys = await checkPublisherKeyRows(this.transport, settings.abstracts);
+      rows.push(...keys.filter((r) => want(r.key)).map((r) => ({ ...r, target: null })));
+    }
+    return rows;
   }
+
+  /** The connection checks as text, one line per service (Zotero settings pane). */
+  async testConnections() {
+    return (await this.checkConnections()).map(connectionLine).join("\n");
+  }
+
+  /** Parsed followed-authors text ({authors, invalid}) for the settings preview. */
+  parseFollowedAuthors(text) {
+    return parseFollowedAuthors(text);
+  }
+
+  /** Whitelist CSV summary ({count, withImpactFactor, invalidLines}) for the settings preview. */
+  summarizeWhitelist(text) {
+    return summarizeWhitelist(text);
+  }
+
+  /** Values used for blank fields with the current embedding provider (placeholders, restore default). */
+  getAutoValues() {
+    return autoValues(this.getSettings().embedding.provider);
+  }
+
+  // ------------------------------------------------- preference pane helpers
 
   async getStatus() {
     const settings = this.getSettings();

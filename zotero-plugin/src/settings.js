@@ -16,6 +16,27 @@ const PROVIDER_CALIBRATION = {
   default: { minSimilarity: 0.2, minMustRead: 0.55, minConsider: 0.35, flagshipMinScore: 0.3, flagshipGrayLow: 0.22 },
 };
 
+/**
+ * Values used when the corresponding fields are left blank: the provider-calibrated
+ * thresholds and the flagship defaults (placeholders and "restore default" in the UI).
+ */
+export function autoValues(provider) {
+  const calib = PROVIDER_CALIBRATION[provider || "local"] || PROVIDER_CALIBRATION.default;
+  return {
+    provider: provider || "local",
+    minSimilarity: calib.minSimilarity,
+    flagshipMinScore: calib.flagshipMinScore,
+    flagshipGrayLow: calib.flagshipGrayLow,
+    flagship: {
+      issns: [...FLAGSHIP_DEFAULTS.issns],
+      positiveAnchor: FLAGSHIP_DEFAULTS.positiveAnchor,
+      negativeAnchors: [...FLAGSHIP_DEFAULTS.negativeAnchors],
+      llmBoundary: FLAGSHIP_DEFAULTS.llmBoundary,
+      maxResults: FLAGSHIP_DEFAULTS.maxResults,
+    },
+  };
+}
+
 function num(value, fallback, { min = -Infinity, max = Infinity, int = false } = {}) {
   if (value === undefined || value === null || String(value).trim() === "") return fallback;
   const n = int ? parseInt(value, 10) : parseFloat(value);

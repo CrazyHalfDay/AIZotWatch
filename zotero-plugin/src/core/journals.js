@@ -63,6 +63,26 @@ function csvField(value) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/**
+ * Summary of whitelist CSV text for live previews: journals (unique ISSNs), how
+ * many have an impact factor, and the data lines that yield no journal (the
+ * header row, blank lines and "#" comments are not counted as invalid).
+ */
+export function summarizeWhitelist(text) {
+  const journals = parseWhitelist(text);
+  const invalidLines = [];
+  let first = true;
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const isHeader = first && /^"?issn"?$/i.test(splitCsvLine(line)[0]);
+    first = false;
+    if (!isHeader && !normalizeIssn(splitCsvLine(line)[0])) invalidLines.push(line);
+  }
+  const values = [...journals.values()];
+  return { count: values.length, withImpactFactor: values.filter((j) => j.impactFactor !== null).length, invalidLines };
+}
+
 export function serializeWhitelist(entries) {
   const lines = ["issn,title,category,impact_factor"];
   for (const e of entries) {

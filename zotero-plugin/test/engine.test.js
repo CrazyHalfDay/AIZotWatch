@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CancelledError, ZotWatchEngine } from "../src/engine.js";
+import { CancelledError, HISTORY_LIMIT, ZotWatchEngine, appendHistory, historyEntry } from "../src/engine.js";
 import { createEmbedder } from "../src/embedding/providers.js";
 import { createLlmClient, labelClusters, parseJsonReply, summarizePaper, translateTitles } from "../src/llm/llm.js";
 import { loadSettings } from "../src/settings.js";
@@ -163,6 +163,43 @@ test("source failures are reported without failing the run", async () => {
   assert.equal(run.errors[0].source, "arXiv");
   assert.ok(run.stats.recommended > 0);
   assert.ok(http.calls.some((c) => c.url.startsWith("https://export.arxiv.org")));
+});
+
+test("finished runs are recorded in the inbox history", async () => {
+  const { engine, storage } = setup();
+  let clock = NOW;
+  engine.now = () => (clock += 1000);
+  // A missing or damaged history is tolerated
+  assert.deepEqual((await engine.loadInbox()).history, []);
+  await storage.writeJSON("inbox.json", { version: 1, works: {}, lastRun: null, history: [{ runAt: "x" }, null, 7] });
+  assert.deepEqual((await engine.loadInbox()).history, []);
+
+  const first = await engine.run();
+  const second = await engine.run();
+  const { history } = await engine.loadInbox();
+  assert.equal(history.length, 2);
+  assert.deepEqual(history[0], {
+    runId: first.runId,
+    runAt: first.runAt,
+    finishedAt: first.finishedAt,
+    fetched: 7,
+    recommended: first.stats.recommended,
+    newByLabel: first.stats.newByLabel,
+    newMustRead: first.stats.newMustRead,
+    errors: 0,
+  });
+  assert.equal(history[1].runId, second.runId);
+  assert.equal(history[1].newByLabel.personal, 0, "nothing new the second time");
+
+  // Cancelled runs record nothing; the history keeps the newest HISTORY_LIMIT runs
+  await assert.rejects(engine.run({ isCancelled: () => true }), CancelledError);
+  assert.equal((await engine.loadInbox()).history.length, 2);
+  let list = [];
+  for (let i = 0; i < HISTORY_LIMIT + 5; i++) list = appendHistory(list, historyEntry({ runId: `r${i}`, runAt: i, stats: {}, errors: [{}] }));
+  assert.equal(list.length, HISTORY_LIMIT);
+  assert.equal(list[0].runId, "r5");
+  assert.deepEqual(list.at(-1), { runId: `r${HISTORY_LIMIT + 4}`, runAt: HISTORY_LIMIT + 4, finishedAt: null, fetched: 0, recommended: 0, newByLabel: { personal: 0, flagship: 0, followed: 0 }, newMustRead: 0, errors: 1 });
+  assert.equal(appendHistory(list, { ...list.at(-1), fetched: 9 }).filter((h) => h.runId === list.at(-1).runId).length, 1, "one entry per run");
 });
 
 test("cancellation stops the run", async () => {

@@ -36,6 +36,8 @@ const FOLLOWED_SEEN_GRACE_DAYS = 60;
 // Independent of clusters.json (never written in local mode): labels follow
 // clusters by member overlap, whatever the embedder
 const TOPIC_LABELS_FILE = "cluster-labels.json";
+// Finished runs kept in inbox.history for the dashboard (newest last)
+export const HISTORY_LIMIT = 30;
 // One write queue per storage backend, shared by all engine instances
 const inboxLocks = new WeakMap();
 
@@ -63,6 +65,39 @@ function pick(work) {
   const out = {};
   for (const f of WORK_FIELDS) if (work[f] !== undefined) out[f] = work[f];
   return out;
+}
+
+/**
+ * Compact record of a finished run for inbox.history (the dashboard's run chart).
+ * @param {object} run - the run summary (inbox.lastRun)
+ */
+export function historyEntry(run) {
+  const stats = run.stats || {};
+  const byLabel = stats.newByLabel || {};
+  const count = (n) => (Number.isFinite(n) ? n : 0);
+  return {
+    runId: run.runId,
+    runAt: run.runAt,
+    finishedAt: run.finishedAt ?? null,
+    fetched: count(stats.fetched),
+    recommended: count(stats.recommended),
+    newByLabel: { personal: count(byLabel.personal), flagship: count(byLabel.flagship), followed: count(byLabel.followed) },
+    newMustRead: count(stats.newMustRead),
+    errors: Array.isArray(run.errors) ? run.errors.length : 0,
+  };
+}
+
+/** Valid entries of a stored history (anything else, e.g. from a damaged file, is dropped). */
+export function validHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history.filter((h) => h && typeof h === "object" && !Array.isArray(h) && Number.isFinite(h.runAt));
+}
+
+/** History with `entry` appended (replacing an entry of the same run), capped to the newest `limit`. */
+export function appendHistory(history, entry, limit = HISTORY_LIMIT) {
+  const list = validHistory(history).filter((h) => h.runId !== entry.runId);
+  list.push(entry);
+  return list.slice(-limit);
 }
 
 function profileItemsOf(items) {
@@ -571,7 +606,9 @@ export class ZotWatchEngine {
 
   async loadInbox() {
     const inbox = await this.storage.readJSON(INBOX_FILE).catch(() => null);
-    return inbox && inbox.works ? inbox : { version: 1, works: {}, lastRun: null };
+    if (!inbox || !inbox.works) return { version: 1, works: {}, lastRun: null, history: [] };
+    inbox.history = validHistory(inbox.history);
+    return inbox;
   }
 
   /**
@@ -884,8 +921,10 @@ export class ZotWatchEngine {
     }
 
     lastRun.finishedAt = this.now();
+    // Only a run that got here (not cancelled, not failed) enters the history
     await this.withInbox((inbox) => {
       inbox.lastRun = lastRun;
+      inbox.history = appendHistory(inbox.history, historyEntry(lastRun));
     });
     const { personal, flagship, followed } = stats.newByLabel;
     const others = `${flagship ? `，顶刊地学 ${flagship} 篇` : ""}${followed ? `，关注作者 ${followed} 篇` : ""}`;

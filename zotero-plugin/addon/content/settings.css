@@ -1,0 +1,30 @@
+/* 设置 page: a centered column of section cards. */
+
+.settings-inner {
+  max-width: 808px;
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-section {
+  scroll-margin-top: 16px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-section-heading .icon {
+  color: var(--ink-3);
+}
+
+.settings-section-text {
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}

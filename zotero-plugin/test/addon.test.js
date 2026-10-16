@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 import { parseXml } from "../src/core/xml.js";
+import { connectionLine, nextRunAt, normalizePage } from "../src/zotero/addon.js";
 import { embeddingHandler, mockHttp } from "./helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -93,7 +94,8 @@ function fakeWindow() {
       },
     },
     openDialog(url, name, features) {
-      const dialog = { url, name, features, closed: false, focus() {}, close() { this.closed = true; } };
+      const routes = [];
+      const dialog = { url, name, features, closed: false, routes, focus() {}, close() { this.closed = true; }, ZotWatchMain: { navigate: (route) => routes.push(route) } };
       opened.push(dialog);
       return dialog;
     },
@@ -287,6 +289,11 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     },
     File: {
       getResourceAsync: async (url) => readFileSync(join(addonDir, url.replace("chrome://zotwatch/", "")), "utf8"),
+      revealed: [],
+      async reveal(path) {
+        assert.ok(existsSync(path), "only existing paths can be revealed");
+        Zotero.File.revealed.push(path);
+      },
     },
   };
   if (zoteroVersion >= 8) {
@@ -337,7 +344,7 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
       locale: { appLocaleAsBCP47: "zh-CN" },
       wm: {
         getMostRecentWindow: (type) => {
-          assert.equal(type, "zotwatch:recommendations");
+          assert.equal(type, "zotwatch:main");
           return mainWindow.opened.findLast((d) => !d.closed) || null;
         },
       },
@@ -501,12 +508,22 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.equal(mainWindow.document.getElementById("menu_ToolsPopup").children.length, 0);
   assert.ok(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), "Fluent file inserted");
 
-  // Opening twice focuses the existing window
+  // Opening twice focuses the existing window, which switches to the requested page
   menuOptions.menus[1].onCommand();
   menuOptions.menus[1].onCommand();
   assert.equal(mainWindow.opened.length, 1);
-  assert.equal(mainWindow.opened[0].url, "chrome://zotwatch/content/recommendations.xhtml");
+  assert.equal(mainWindow.opened[0].url, "chrome://zotwatch/content/main.xhtml#inbox");
+  assert.equal(mainWindow.opened[0].name, "zotwatch-main");
   assert.doesNotMatch(mainWindow.opened[0].features, /width=/, "size comes from persisted attributes");
+  assert.deepEqual(plain(mainWindow.opened[0].routes), ["inbox"]);
+  addon.openWindow("settings/ai");
+  addon.openWindow("settings/<script>");
+  assert.deepEqual(plain(mainWindow.opened[0].routes), ["inbox", "settings/ai", "settings"]);
+  assert.equal(mainWindow.opened.length, 1);
+  // Without a page: the page last shown in this session (reported by the window)
+  addon.lastPage = "settings/journals";
+  addon.openWindow();
+  assert.equal(mainWindow.opened[0].routes.at(-1), "settings/journals");
 
   // --- run
   useApiEmbeddings(env);
@@ -538,6 +555,63 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   const top = view.works.sort((a, b) => b.score - a.score)[0];
   assert.equal(top.id, "doi:10.5555/new.1");
   assert.ok(!view.works.some((w) => w.id === "doi:10.5555/new.3"), "off-topic paper is gated");
+  // The main window's view: run history, version and the schedule
+  assert.equal(view.version, "0.1.0");
+  assert.equal(view.history.length, 1);
+  assert.equal(view.history[0].runId, result.runId);
+  assert.equal(view.history[0].fetched, 4);
+  assert.deepEqual(plain(view.history[0].newByLabel), plain(result.stats.newByLabel));
+  assert.equal(view.lastError, null);
+  assert.equal(view.schedule.autoRun, true);
+  assert.equal(view.schedule.intervalHours, 24);
+  assert.equal(view.schedule.lastRun, Number(env.prefs.get("extensions.zotwatch.schedule.lastRun")));
+  assert.equal(view.schedule.nextRunAt, view.schedule.lastRun + 24 * 3600000);
+  assert.equal(addon.isRunDue(), false);
+  assert.equal(addon.isRunDue(view.schedule.nextRunAt), true, "isRunDue and nextRunAt agree");
+
+  // The dashboard
+  const dash = await addon.getDashboard();
+  assert.equal(dash.version, "0.1.0");
+  assert.deepEqual(plain(dash.library), { name: "我的文库", items: 16, withAbstract: 16 });
+  assert.deepEqual(plain(dash.embedding), { provider: "dashscope", model: "text-embedding-v4", label: "阿里云 DashScope · text-embedding-v4", local: false });
+  assert.deepEqual(plain(dash.llm), { enabled: false, configured: false, model: "deepseek/deepseek-chat", topicLabels: true });
+  assert.equal(dash.pending.total, view.works.filter((w) => w.status === "new").length);
+  assert.equal(dash.pending.personal + dash.pending.flagship + dash.pending.followed, dash.pending.total);
+  assert.equal(dash.added, 0);
+  assert.equal(dash.lastRun.runId, result.runId);
+  assert.equal(dash.history.length, 1);
+  assert.deepEqual(plain(dash.topics), []);
+  assert.equal(dash.topicCount, 0);
+  assert.deepEqual(plain(dash.followed), { enabled: false, daysBack: 60, authors: [], invalid: [] });
+  assert.deepEqual(plain(dash.flagship), { enabled: false, issnCount: 12, stats: null });
+  assert.deepEqual(plain(dash.journals), { count: 1, withImpactFactor: 1, autoFromLibrary: true, error: null });
+  assert.deepEqual(plain(dash.sources.map((s) => s.key)), ["crossref", "flagship", "arxiv", "eartharxiv", "followed", "abstracts", "embedding", "llm"]);
+  const crossrefSource = dash.sources.find((s) => s.key === "crossref");
+  assert.deepEqual(plain(crossrefSource), { key: "crossref", name: "Crossref", enabled: true, count: 4, detail: "1 个期刊", error: null });
+  assert.equal(dash.sources.find((s) => s.key === "llm").detail, "未启用");
+  assert.equal(dash.dataDir, join(dataDir, "zotwatch"));
+  assert.deepEqual(plain(dash.schedule), plain(view.schedule));
+
+  // Helpers for the settings page
+  assert.deepEqual(plain(addon.summarizeWhitelist("issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0\nbad line\n# note\n1234-5679,X")), {
+    count: 2,
+    withImpactFactor: 1,
+    invalidLines: ["bad line"],
+  });
+  assert.deepEqual(plain(addon.parseFollowedAuthors("Li Wang, 0000-0002-1825-0097\nnobody")), {
+    authors: [{ name: "Li Wang", key: "orcid:0000-0002-1825-0097", orcid: "0000-0002-1825-0097" }],
+    invalid: ["nobody"],
+  });
+  const auto = addon.getAutoValues();
+  assert.equal(auto.provider, "dashscope");
+  assert.equal(auto.minSimilarity, 0.2);
+  assert.equal(auto.flagshipMinScore, 0.3);
+  assert.equal(auto.flagshipGrayLow, 0.22);
+  assert.equal(auto.flagship.issns.length, 12);
+  assert.equal(auto.flagship.negativeAnchors.length, 6);
+  assert.match(auto.flagship.llmBoundary, /^ONLY solid-earth/);
+  assert.equal(await addon.revealDataDir(), true);
+  assert.deepEqual(plain(Zotero.File.revealed), [join(dataDir, "zotwatch")]);
 
   // --- two quick adds create a single collection
   const others = view.works.filter((w) => w.id !== top.id && w.status === "new");
@@ -611,6 +685,13 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   release();
   const status = await addon.testConnections();
   assert.match(status, /✅ Crossref/, "UI requests still work after a run was cancelled");
+  assert.equal(status, ["✅ 向量化（dashscope）：正常，维度 8", "ℹ️ 大模型：未启用", "✅ Crossref：可访问"].join("\n"));
+  assert.deepEqual(plain(await addon.checkConnections(["crossref", "llm"])), [
+    { key: "llm", name: "大模型", target: null, ok: null, detail: "未启用" },
+    { key: "crossref", name: "Crossref", target: null, ok: true, detail: "可访问" },
+  ]);
+  // A cancelled run records no history entry
+  assert.equal((await addon.getView()).history.length, 1);
 
   // --- shutdown cancels a run and waits for it before tearing anything down
   slow = standardHttp(counter, { gate: new Promise(() => {}) });
@@ -661,11 +742,25 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
   vm.runInContext("onMainWindowLoad({ window: __win })", Object.assign(env.context, { __win: mainWindow }));
   assert.equal(menu.children.length, 3);
 
+  // A failed run is reported to the main window (banner, sidebar) until the next run starts
+  env.prefs.set("extensions.zotwatch.embedding.provider", "dashscope");
+  const failures = [];
+  addon.addListener((e) => e.type === "error" && failures.push(e.message));
+  await assert.rejects(addon.runNow(), /API Key/);
+  assert.equal(failures.length, 1);
+  const failedView = await addon.getView();
+  assert.match(failedView.lastError.message, /API Key/);
+  assert.ok(failedView.lastError.at > 0);
+  assert.equal(failedView.history.length, 0, "a failed run records no history");
+  assert.equal(failedView.schedule.nextRunAt, failedView.schedule.lastAttempt + 2 * 3600000, "retried 2 hours after the failure");
+  Zotero.errors.length = 0;
+
   // Background run while Zotero is in the background: the notice waits for focus
   useApiEmbeddings(env);
   mainWindow.document.focused = false;
   const result = await addon.runNow({ background: true });
   assert.ok(result.stats.newRecommendations > 0);
+  assert.equal((await addon.getView()).lastError, null, "cleared by the next run");
   assert.equal(Zotero.notifications.length, 0, "deferred until Zotero is focused");
   mainWindow.fire("activate");
   assert.equal(Zotero.notifications.length, 1);
@@ -1025,25 +1120,78 @@ test("preference pane initialises from Zotero's events inside a sandbox", async 
   assert.deepEqual(saved, ["edited"], "pending edits are saved on unload");
 });
 
+// Pref keys the 0.2.0 settings pane bound; all must stay editable in the main window
+const PREFS_0_2_0 = `abstracts.crossref abstracts.elsevierKey abstracts.springerKey embedding.apiKey embedding.baseURL
+  embedding.model embedding.provider flagship.enabled flagship.grayLow flagship.issns flagship.llmBoundary
+  flagship.llmFallback flagship.maxResults flagship.minScore flagship.negativeAnchors flagship.positiveAnchor
+  followed.authors followed.daysBack followed.enabled journals.autoFromLibrary journals.autoTopN llm.apiKey
+  llm.baseURL llm.enabled llm.model llm.summaryTopN llm.topicLabels llm.translateTitles output.collection
+  output.summaryNote output.tag output.useTranslator schedule.autoRun schedule.intervalHours
+  scoring.excludeKeywords scoring.includeKeywords scoring.maxPreprintRatio scoring.minSimilarity scoring.recentDays
+  scoring.requireAbstract scoring.topK sources.arxiv.categories sources.arxiv.enabled sources.crossref.daysBack
+  sources.crossref.enabled sources.crossref.mailto sources.eartharxiv.enabled sources.openalexAbstracts`.split(/\s+/);
+
+const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "settings.js"];
+
+const collectIds = (node, out) => {
+  for (const el of node.elements) {
+    if (el.attrs.id) out.add(el.attrs.id);
+    collectIds(el, out);
+  }
+  return out;
+};
+
+/** data-pref keys bound by the main window: in its markup or set from its scripts. */
+function mainWindowPrefKeys() {
+  const sources = ["addon/content/main.xhtml", ...MAIN_SCRIPTS.map((f) => `addon/content/${f}`)].map((f) => readFileSync(join(root, f), "utf8"));
+  const keys = new Set();
+  for (const text of sources) {
+    for (const [, key] of text.matchAll(/data-pref(?:=|"?\s*:\s*)"([\w.]+)"/g)) keys.add(key);
+  }
+  return keys;
+}
+
 test("XHTML files are well-formed and scripts reference existing element ids", () => {
-  const recXhtml = readFileSync(join(root, "addon/content/recommendations.xhtml"), "utf8");
-  const recDoc = parseXml(recXhtml, { strict: true });
-  const recIds = new Set();
-  const collectIds = (node, out) => {
-    for (const el of node.elements) {
-      if (el.attrs.id) out.add(el.attrs.id);
-      collectIds(el, out);
+  const mainXhtml = readFileSync(join(root, "addon/content/main.xhtml"), "utf8");
+  const mainDoc = parseXml(mainXhtml, { strict: true });
+  const mainIds = collectIds(mainDoc, new Set());
+  assert.equal(mainDoc.attr("id"), "zotwatch-main");
+  assert.equal(mainDoc.attr("windowtype"), "zotwatch:main");
+  assert.equal(mainDoc.attr("persist"), "screenX screenY width height sizemode");
+  assert.doesNotMatch(mainXhtml, /\son[a-z]+=/, "no inline handlers in the main window");
+  assert.doesNotMatch(mainXhtml, /<select[\s>]/, "no HTML <select> in the chrome window");
+  for (const file of MAIN_SCRIPTS) {
+    assert.match(mainXhtml, new RegExp(`<script src="chrome://zotwatch/content/${file}">`), `main.xhtml loads ${file}`);
+    const css = file.replace(/\.js$/, ".css");
+    assert.match(mainXhtml, new RegExp(`href="chrome://zotwatch/content/${css}"`), `main.xhtml loads ${css}`);
+    const js = readFileSync(join(root, "addon/content", file), "utf8");
+    assert.doesNotMatch(js, /\.innerHTML\s*=|insertAdjacentHTML/, `${file} inserts text with textContent only`);
+    // Ids reach $() / getElementById directly or through segmented("…") / setSegmented("…")
+    for (const [, id] of js.matchAll(/(?:\$|getElementById|segmented|setSegmented)\("([\w-]+)"/g)) {
+      assert.ok(mainIds.has(id), `main.xhtml lacks #${id} (used by ${file})`);
     }
-    return out;
-  };
-  collectIds(recDoc, recIds);
-  assert.equal(recDoc.attr("persist"), "screenX screenY width height sizemode");
-  const recJs = readFileSync(join(root, "addon/content/recommendations.js"), "utf8");
-  // Ids reach $() directly or through segmented("…")
-  const usedIds = [...recJs.matchAll(/(?:\$|segmented)\("([\w-]+)"/g)].map(([, id]) => id);
-  for (const id of ["track-filter", "label-filter", "sort"]) assert.ok(usedIds.includes(id), `${id} is checked`);
-  for (const id of usedIds) assert.ok(recIds.has(id), `recommendations.xhtml lacks #${id}`);
-  for (const s of ["new", "added", "dismissed"]) assert.ok(recIds.has(`count-${s}`));
+    // Ids built from a prefix: `count-${status}` and friends
+    for (const [, prefix] of js.matchAll(/\$\(`([\w-]+)-\$\{/g)) {
+      assert.ok([...mainIds].some((id) => id.startsWith(`${prefix}-`)), `main.xhtml has no #${prefix}-* element (used by ${file})`);
+    }
+  }
+  for (const s of ["new", "added", "dismissed"]) assert.ok(mainIds.has(`count-${s}`));
+  for (const id of ["inbox-track", "inbox-label", "inbox-sort"]) assert.ok(mainIds.has(id));
+  // Inline SVG must carry the SVG namespace (strict XHTML)
+  for (const [tag] of mainXhtml.matchAll(/<svg\b[^>]*>/g)) assert.match(tag, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  // Every icon used from the scripts exists in the sprite
+  const symbols = new Set([...mainXhtml.matchAll(/<symbol id="i-([\w-]+)"/g)].map(([, name]) => name));
+  for (const [, name] of mainXhtml.matchAll(/href="#i-([\w-]+)"/g)) assert.ok(symbols.has(name), `missing icon ${name}`);
+  for (const file of MAIN_SCRIPTS) {
+    const js = readFileSync(join(root, "addon/content", file), "utf8");
+    for (const [, name] of js.matchAll(/(?:svgIcon\(|icon: )"([\w-]+)"/g)) assert.ok(symbols.has(name), `missing icon ${name} (used by ${file})`);
+  }
+
+  // Every preference the main window binds has a default in prefs.js
+  const prefsJs = readFileSync(join(root, "addon/prefs.js"), "utf8");
+  for (const key of mainWindowPrefKeys()) {
+    assert.ok(prefsJs.includes(`pref("extensions.zotwatch.${key}",`), `no default for ${key}`);
+  }
 
   const prefXhtml = readFileSync(join(root, "addon/content/preferences.xhtml"), "utf8");
   assert.doesNotMatch(prefXhtml, /\son[a-z]+=/, "no inline handlers: pane scripts are sandboxed on Zotero 8+");
@@ -1057,7 +1205,6 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   for (const [, id] of prefJs.matchAll(/(?:on|getElementById)\("(zw-[\w-]+)"/g)) assert.ok(prefIds.has(id), `preferences.xhtml lacks #${id}`);
 
   // Every preference bound in the pane has a default in prefs.js
-  const prefsJs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   for (const [, key] of prefXhtml.matchAll(/preference="([\w.]+)"/g)) {
     assert.ok(prefsJs.includes(`pref("${key}",`), `no default for ${key}`);
   }
@@ -1067,4 +1214,29 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
     const ftl = readFileSync(join(root, `addon/locale/${locale}/zotwatch-mainWindow.ftl`), "utf8");
     for (const id of ["zotwatch-menu-open", "zotwatch-menu-run"]) assert.match(ftl, new RegExp(`^${id} =`, "m"), `${locale} lacks ${id}`);
   }
+});
+
+test("every setting of the 0.2.0 settings pane is editable in the main window", { todo: "settings page (built after the shell)" }, () => {
+  const bound = mainWindowPrefKeys();
+  const missing = PREFS_0_2_0.filter((key) => !bound.has(key));
+  assert.deepEqual(missing, []);
+});
+
+test("window routes and the run schedule", () => {
+  assert.equal(normalizePage("inbox"), "inbox");
+  assert.equal(normalizePage("#settings/ai"), "settings/ai");
+  assert.equal(normalizePage("settings/../x"), "settings");
+  assert.equal(normalizePage("chrome://evil"), "overview");
+  assert.equal(normalizePage(undefined), "overview");
+
+  const H = 3600000;
+  assert.equal(nextRunAt({ autoRun: false, intervalHours: 24, lastRun: 0, lastAttempt: 0 }), null);
+  assert.equal(nextRunAt({ autoRun: true, intervalHours: 24, lastRun: 100 * H, lastAttempt: 100 * H }), 124 * H);
+  // A failed attempt after the last success: retried 2 hours later, not before the interval is over
+  assert.equal(nextRunAt({ autoRun: true, intervalHours: 1, lastRun: 100 * H, lastAttempt: 110 * H }), 112 * H);
+  assert.equal(nextRunAt({ autoRun: true, intervalHours: 24, lastRun: 0, lastAttempt: 0 }), 24 * H, "never run: due at once");
+
+  assert.equal(connectionLine({ name: "向量化", target: "local", ok: true, detail: "正常，维度 1024" }), "✅ 向量化（local）：正常，维度 1024");
+  assert.equal(connectionLine({ name: "Elsevier", target: null, ok: false, detail: "Key 无效（HTTP 401）" }), "❌ Elsevier：Key 无效（HTTP 401）");
+  assert.equal(connectionLine({ name: "大模型", ok: null, detail: "未启用" }), "ℹ️ 大模型：未启用");
 });

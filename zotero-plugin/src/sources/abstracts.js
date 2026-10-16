@@ -428,23 +428,31 @@ export async function enrichMissingAbstracts(
 }
 
 /**
- * Connection-test lines for the publisher keys that are set. Any 2xx or 404
- * means the key was accepted (the test DOI need not exist).
+ * Connection checks for the publisher keys that are set:
+ * [{key: "elsevier" | "springer", name, ok, detail}]. Any 2xx or 404 means the
+ * key was accepted (the test DOI need not exist).
  */
-export async function checkPublisherKeys(http, { elsevierKey = "", springerKey = "" } = {}) {
+export async function checkPublisherKeyRows(http, { elsevierKey = "", springerKey = "" } = {}) {
   const checks = [];
-  if (elsevierKey) checks.push([PROVIDER_NAMES.elsevier, elsevierRequest(TEST_DOIS.elsevier, elsevierKey)]);
-  if (springerKey) checks.push([PROVIDER_NAMES.springer, { url: springerUrl(TEST_DOIS.springer, springerKey) }]);
-  const lines = [];
-  for (const [name, req] of checks) {
+  if (elsevierKey) checks.push(["elsevier", elsevierRequest(TEST_DOIS.elsevier, elsevierKey)]);
+  if (springerKey) checks.push(["springer", { url: springerUrl(TEST_DOIS.springer, springerKey) }]);
+  const rows = [];
+  for (const [key, req] of checks) {
+    const row = { key, name: PROVIDER_NAMES[key], ok: false, detail: "" };
     try {
       const res = await http.request({ ...req, timeout: REQUEST_TIMEOUT });
-      if ((res.status >= 200 && res.status < 300) || res.status === 404) lines.push(`✅ ${name}：Key 有效`);
-      else if (res.status === 401 || res.status === 403) lines.push(`❌ ${name}：Key 无效（HTTP ${res.status}）`);
-      else lines.push(`❌ ${name}：HTTP ${res.status}`);
+      if ((res.status >= 200 && res.status < 300) || res.status === 404) Object.assign(row, { ok: true, detail: "Key 有效" });
+      else if (res.status === 401 || res.status === 403) row.detail = `Key 无效（HTTP ${res.status}）`;
+      else row.detail = `HTTP ${res.status}`;
     } catch (e) {
-      lines.push(`❌ ${name}：${e?.message || e}`);
+      row.detail = String(e?.message || e);
     }
+    rows.push(row);
   }
-  return lines;
+  return rows;
+}
+
+/** Connection-test lines for the publisher keys that are set ("✅ Elsevier：Key 有效"). */
+export async function checkPublisherKeys(http, keys = {}) {
+  return (await checkPublisherKeyRows(http, keys)).map((r) => `${r.ok ? "✅" : "❌"} ${r.name}：${r.detail}`);
 }

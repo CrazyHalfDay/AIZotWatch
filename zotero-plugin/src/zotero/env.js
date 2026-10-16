@@ -65,6 +65,11 @@ export function createZoteroStorage() {
 
   return {
     dir,
+    /** Create the directory if needed (e.g. before revealing it). */
+    async ensureDir() {
+      await ensureDir();
+      return dir;
+    },
     async readJSON(name) {
       await ensureDir();
       return (await IOUtils.exists(path(name))) ? IOUtils.readJSON(path(name)) : null;
