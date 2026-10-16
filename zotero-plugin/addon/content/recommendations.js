@@ -234,13 +234,17 @@ function actionButton(text, onclick, { primary = false, busyKey = null } = {}) {
   return el("button", { type: "button", class: primary ? "primary small" : "small", disabled: !!busy, onclick }, busy || text);
 }
 
-/** Score shown on a card: personal works only; flagship scores are muted, followed-only works have none. */
+/**
+ * Score shown on a card: personal works show their score; flagship works show
+ * their (muted) library similarity, as in the saved note; followed-only works have none.
+ */
 function scoreBadge(work) {
   const track = trackOf(work);
   if (track === "followed") return null;
-  const text = `${Math.round((work.score || 0) * 100)} 分`;
-  if (track === "flagship") return el("span", { class: "score muted", title: "与文库相似度（仅供参考）", text });
-  return el("span", { class: "score", title: `相似度 ${((work.similarity || 0) * 100).toFixed(1)}`, text });
+  if (track === "flagship") {
+    return el("span", { class: "score muted", title: "与文库相似度（仅供参考）", text: `相似度 ${Math.round((work.similarity || 0) * 100)}` });
+  }
+  return el("span", { class: "score", title: `相似度 ${((work.similarity || 0) * 100).toFixed(1)}`, text: `${Math.round((work.score || 0) * 100)} 分` });
 }
 
 /** Tooltip with the flagship gate details ({pos, neg, judged}). */

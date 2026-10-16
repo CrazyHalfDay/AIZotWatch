@@ -66,7 +66,9 @@ export function plainMenuLabels(count, locale) {
 export function newRecommendationsNotice(stats) {
   const { flagship = 0, followed = 0 } = stats.newByLabel || {};
   const tracks = `${flagship ? `，顶刊地学 ${flagship} 篇` : ""}${followed ? `，关注作者 ${followed} 篇` : ""}`;
-  return `发现 ${stats.newRecommendations} 篇新推荐（${stats.mustRead ?? 0} 篇必读）${tracks}。在「工具 → ZotWatch 文献推荐」中查看。`;
+  // Must-read papers among the new ones only (stats.mustRead also counts earlier ones)
+  const mustRead = stats.newMustRead ?? 0;
+  return `发现 ${stats.newRecommendations} 篇新推荐${mustRead ? `（${mustRead} 篇必读）` : ""}${tracks}。在「工具 → ZotWatch 文献推荐」中查看。`;
 }
 
 /** Status line for the followed-authors setting (so unparseable lines show up before a run). */

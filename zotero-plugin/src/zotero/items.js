@@ -7,6 +7,15 @@ import { trackOf } from "../core/tracks.js";
 import { SUMMARY_FIELDS } from "../llm/llm.js";
 
 const PREPRINT_SOURCES = new Set(["arxiv", "eartharxiv"]);
+// Zotero item type (and the field taking the venue) of OpenAlex types kept for
+// followed authors that are not journal articles. An OpenAlex dissertation's
+// source is a repository such as ProQuest, not the university, so it is not used.
+const OPENALEX_ITEM_TYPES = {
+  "book-chapter": ["bookSection", "bookTitle"],
+  book: ["book", null],
+  report: ["report", "institution"],
+  dissertation: ["thesis", null],
+};
 
 /** arXiv / EarthArXiv works and OpenAlex works typed "preprint". */
 function isPreprint(work) {
@@ -29,7 +38,8 @@ function originLines(work) {
   const track = trackOf(work);
   const lines = [];
   if (track === "followed") {
-    lines.push(`来源：关注作者（${names}）`);
+    // Names may be unknown (a long author list that names no followed author)
+    lines.push(names ? `来源：关注作者（${names}）` : "来源：关注作者");
   } else {
     if (track === "flagship") lines.push(`来源：顶刊地学速览（与文库相似度 ${percent(work.similarity)}）`);
     else if (typeof work.score === "number") lines.push(`推荐分数：${percent(work.score)}（相似度 ${percent(work.similarity)}）`);
@@ -92,7 +102,8 @@ async function importByIdentifier(work, libraryID, collection, log) {
 
 function createItemFromWork(work, libraryID) {
   const preprint = isPreprint(work) && Zotero.ItemTypes.getID("preprint");
-  const item = new Zotero.Item(preprint ? "preprint" : "journalArticle");
+  const mapped = !preprint && work.source === "openalex" && Object.hasOwn(OPENALEX_ITEM_TYPES, work.type) ? OPENALEX_ITEM_TYPES[work.type] : null;
+  const item = new Zotero.Item(preprint ? "preprint" : mapped ? mapped[0] : "journalArticle");
   item.libraryID = libraryID;
   const set = (field, value) => {
     if (!value) return;
@@ -110,6 +121,8 @@ function createItemFromWork(work, libraryID) {
   if (preprint) {
     set("repository", work.venue);
     if (work.arxivId) set("archiveID", `arXiv:${work.arxivId}`);
+  } else if (mapped) {
+    if (mapped[1]) set(mapped[1], work.venue);
   } else {
     set("publicationTitle", work.venue);
     set("ISSN", (work.issns || []).join(" "));

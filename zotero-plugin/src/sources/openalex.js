@@ -11,6 +11,8 @@ const OPENALEX_WORKS = "https://api.openalex.org/works";
 const MAX_ABSTRACT_WORDS = 20000;
 /** DOIs per batched abstract lookup (OpenAlex allows up to 50 values in an OR filter). */
 export const OPENALEX_BATCH_SIZE = 50;
+// Records per batched lookup (the OpenAlex maximum): several records may share a DOI
+const OPENALEX_PAGE_SIZE = 200;
 
 export function reconstructAbstract(inverted) {
   if (!inverted || typeof inverted !== "object") return null;
@@ -35,7 +37,7 @@ export function openAlexAbstractsUrl(dois, mailto = "") {
   return buildUrl(OPENALEX_WORKS, {
     filter: `doi:${dois.map((doi) => `https://doi.org/${doi}`).join("|")}`,
     select: "doi,abstract_inverted_index",
-    "per-page": OPENALEX_BATCH_SIZE,
+    "per-page": OPENALEX_PAGE_SIZE,
     mailto,
   });
 }

@@ -53,12 +53,15 @@ export function createLlmClient(cfg, http, { retry = {} } = {}) {
   if (!cfg.apiKey) throw new Error("请先在 ZotWatch 设置中填写大模型 API Key");
   const baseURL = (cfg.baseURL || LLM_PRESETS.openrouter).replace(/\/+$/, "");
   const reasoning = /reasoner|thinking|-r1\b/i.test(cfg.model || "");
+  // Reasoning tokens count against max_tokens: a small budget would end the
+  // reply before any content (Python DeepSeekClient / KimiClient minimums)
+  const minTokens = reasoning ? (/thinking/i.test(cfg.model || "") ? 16000 : 8192) : 0;
 
   async function chat(prompt, { maxTokens = cfg.maxTokens || 2048, temperature = cfg.temperature ?? 0.3 } = {}) {
     const body = {
       model: cfg.model,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: maxTokens,
+      max_tokens: Math.max(maxTokens, minTokens),
     };
     if (!reasoning) body.temperature = temperature;
     const data = await postJson(http, `${baseURL}/chat/completions`, body, {

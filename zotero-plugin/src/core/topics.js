@@ -65,8 +65,16 @@ export function storedLabelEntries(data) {
  * @param {{keys: string[], label: string}[]} stored - see storedLabelEntries
  * @returns {(string|null)[]} label per cluster (null: unlabeled)
  */
-export function matchStoredLabels(clusters, stored, { minJaccard = LABEL_CARRY_OVER_JACCARD } = {}) {
-  const labels = clusters.map(() => null);
+export function matchStoredLabels(clusters, stored, options = {}) {
+  return matchStoredEntries(clusters, stored, options).map((j) => (j === null ? null : stored[j].label.trim()));
+}
+
+/**
+ * Index of the stored entry each current cluster takes (see matchStoredLabels).
+ * @returns {(number|null)[]} index into `stored` per cluster (null: unlabeled)
+ */
+export function matchStoredEntries(clusters, stored, { minJaccard = LABEL_CARRY_OVER_JACCARD } = {}) {
+  const taken = clusters.map(() => null);
   const storedSets = stored.map((s) => new Set(s.keys));
   const pairs = [];
   clusters.forEach((c, i) => {
@@ -80,11 +88,11 @@ export function matchStoredLabels(clusters, stored, { minJaccard = LABEL_CARRY_O
   pairs.sort((a, b) => b.score - a.score || a.i - b.i || a.j - b.j);
   const usedStored = new Set();
   for (const { i, j } of pairs) {
-    if (labels[i] !== null || usedStored.has(j)) continue;
-    labels[i] = stored[j].label.trim();
+    if (taken[i] !== null || usedStored.has(j)) continue;
+    taken[i] = j;
     usedStored.add(j);
   }
-  return labels;
+  return taken;
 }
 
 /** Stored label file for the labeled current clusters. */

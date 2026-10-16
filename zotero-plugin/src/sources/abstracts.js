@@ -4,11 +4,14 @@
 // api_fallback.py and the API path of pipeline/enrich.py).
 //
 // Differences from Python, all deliberate:
-// - transient failures (429, 5xx, network, timeouts) are never negative-cached,
-//   and a negative entry remembers which tiers missed, so adding a publisher key
-//   retries the DOIs it can serve
-// - a rejected publisher key (401/403) disables that publisher for the run with
-//   one reported error, and a provider failing repeatedly is skipped for the run
+// - transient failures (429, 5xx, network, timeouts, a 2xx body that is not a
+//   JSON object) are never negative-cached, and a negative entry remembers which
+//   tiers missed, so adding a publisher key retries the DOIs it can serve
+// - misses of works published in the last two weeks are kept for less than a
+//   day only: aggregators (OpenAlex) often add a new DOI days after it appears
+// - a rejected publisher key (401) disables that publisher for the run with one
+//   reported error; a 403 may concern one article only, so it counts like other
+//   failures: a provider failing repeatedly is skipped for the run
 // - OpenAlex is queried in batches of 50 DOIs instead of once per DOI
 // - lookups that would re-read the record a work was just fetched from (Crossref
 //   for Crossref works, OpenAlex for OpenAlex works) are skipped
@@ -25,6 +28,9 @@ export const MIN_ABSTRACT_CHARS = 80;
 export const ABSTRACT_CACHE_FILE = "abstracts-cache.json";
 const POSITIVE_TTL = 30 * DAY;
 const NEGATIVE_TTL = 7 * DAY;
+// Works published this recently get a short negative entry: retried by the next daily run
+const FRESH_WINDOW = 14 * DAY;
+const FRESH_NEGATIVE_TTL = 20 * 3600000;
 const CACHE_MAX_ENTRIES = 5000;
 const REQUEST_TIMEOUT = 20000;
 // Per-DOI chains running at once; Elsevier and Springer share a smaller limit
@@ -111,6 +117,14 @@ export function parseSpringerAbstract(data) {
 
 function hasAbstract(work) {
   return typeof work.abstract === "string" ? work.abstract.trim() !== "" : !!work.abstract;
+}
+
+/** Whether any work was published within FRESH_WINDOW of `now` (an unknown date counts as fresh). */
+function isFresh(works, now) {
+  return works.some((w) => {
+    const t = Date.parse(w.published || "");
+    return !Number.isFinite(t) || now - t < FRESH_WINDOW;
+  });
 }
 
 /** Tiers that can serve a DOI with the current settings, in chain order. */
@@ -306,6 +320,8 @@ export async function enrichMissingAbstracts(
     if (provider.disabled) return {};
     try {
       const data = await request();
+      // A 2xx whose body is not JSON (an HTML block or maintenance page) says nothing about the DOI
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("unexpected non-JSON response");
       provider.failures = 0;
       return { data };
     } catch (e) {
@@ -315,7 +331,7 @@ export async function enrichMissingAbstracts(
         provider.failures = 0;
         return { miss: true };
       }
-      if ((status === 401 || status === 403) && (tier === "elsevier" || tier === "springer")) {
+      if (status === 401 && (tier === "elsevier" || tier === "springer")) {
         disable(provider, `API Key 无效或无权限（HTTP ${status}），本次运行已停用`);
         return {};
       }
@@ -380,9 +396,12 @@ export async function enrichMissingAbstracts(
       checkpoint();
       const res = await call("openalex", () => getJson(http, openAlexAbstractsUrl(batch.map((g) => g.doi), mailto), requestOptions));
       const byDoi = "data" in res ? parseOpenAlexAbstracts(res.data) : null;
+      // A DOI missing from a cut-off page may well be on the next one
+      const results = Array.isArray(res.data?.results) ? res.data.results.length : 0;
+      const complete = !(Number(res.data?.meta?.count) > results);
       for (const group of batch) {
         const abstract = byDoi ? acceptAbstract(byDoi.get(group.doi)) : null;
-        group.outcomes.openalex = abstract ? "hit" : byDoi || res.miss ? "miss" : "unavailable";
+        group.outcomes.openalex = abstract ? "hit" : (byDoi && complete) || res.miss ? "miss" : "unavailable";
         if (abstract) found(group, "openalex", abstract);
       }
       step(batch.length);
@@ -392,7 +411,7 @@ export async function enrichMissingAbstracts(
     let negatives = 0;
     for (const group of pending) {
       if (group.abstract || !group.toQuery.every((tier) => group.outcomes[tier] === "miss")) continue;
-      remember(group.doi, { a: null, s: group.applicable, exp: now + NEGATIVE_TTL });
+      remember(group.doi, { a: null, s: group.applicable, exp: now + (isFresh(group.works, now) ? FRESH_NEGATIVE_TTL : NEGATIVE_TTL) });
       negatives++;
     }
     const result = finish();

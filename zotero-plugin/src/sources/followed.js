@@ -15,7 +15,11 @@ const OPENALEX_WORKS = "https://api.openalex.org/works";
 const DAY = 86400000;
 const PAGE_SIZE = 200;
 const AUTHORS_PER_QUERY = 25;
+// Singleton lookups per run for works whose (truncated) authorship list names no followed author
+const MAX_ATTRIBUTION_LOOKUPS = 20;
 const KEPT_TYPES = new Set(["article", "review", "letter", "preprint", "book-chapter", "book", "report", "dissertation"]);
+// is_authors_truncated is not selected: an unknown select field fails the whole
+// query, and an unmatched work of a multi-author query is looked up anyway
 const SELECT = "id,doi,title,display_name,publication_date,type,authorships,primary_location,abstract_inverted_index,cited_by_count,is_paratext";
 
 /** OpenAlex work id ("W123") from its URL form; "" when absent. */
@@ -48,6 +52,11 @@ function matchFollowed(authorships, authors) {
 
 /**
  * Map an OpenAlex work to the plugin work shape; null for records to skip.
+ * `followedAuthors` names the configured authors listed in its authorships.
+ * When none is listed, the query's author is certain only for a one-author
+ * query or a record without authorships; otherwise (OpenAlex lists show the
+ * first 100 authors only) it stays empty and `needsAttribution` is set, and
+ * fetchFollowedWorks looks the full author list up.
  * @param {object[]} authors - configured authors of the query that returned it (fallback attribution)
  * @param {object[]} allAuthors - every configured author (attribution, in configuration order)
  */
@@ -67,9 +76,14 @@ export function parseOpenAlexWork(work, authors = [], allAuthors = authors) {
   const authorships = Array.isArray(work.authorships) ? work.authorships.filter((a) => a && typeof a === "object") : [];
   const names = authorships.map((a) => parseAuthorName(a.author?.display_name || a.raw_author_name)).filter(Boolean);
   let followedAuthors = matchFollowed(authorships, allAuthors);
-  // OpenAlex matched the filter, so some queried author wrote it even when the
-  // (possibly truncated) authorship list does not show who
-  if (!followedAuthors.length) followedAuthors = namesOf(authors);
+  let needsAttribution = false;
+  if (!followedAuthors.length) {
+    // OpenAlex matched the filter, so some queried author wrote it; never name
+    // every author of a multi-author query (most of them did not)
+    const queried = namesOf(authors);
+    if (queried.length === 1 || !authorships.length) followedAuthors = queried;
+    else needsAttribution = work.is_authors_truncated !== false;
+  }
   const issns = Array.isArray(source?.issn) ? [...new Set(source.issn.map(normalizeIssn).filter(Boolean))] : null;
   const landing = typeof location.landing_page_url === "string" && /^https?:\/\//i.test(location.landing_page_url) ? location.landing_page_url : null;
 
@@ -88,7 +102,24 @@ export function parseOpenAlexWork(work, authors = [], allAuthors = authors) {
     citations: Number(work.cited_by_count) || 0,
     followedAuthors,
     openalexId: workId || null,
+    ...(needsAttribution ? { needsAttribution } : {}),
   };
+}
+
+/**
+ * Followed authors of a work from its full author list (the singleton
+ * endpoint is not truncated); [] when the lookup fails or still names none.
+ */
+async function lookupFollowed(http, work, authors, { mailto, retry, log }) {
+  try {
+    const data = await getJson(http, buildUrl(`${OPENALEX_WORKS}/${work.openalexId}`, { select: "id,authorships", mailto }), retry);
+    const authorships = Array.isArray(data?.authorships) ? data.authorships.filter((a) => a && typeof a === "object") : [];
+    return matchFollowed(authorships, authors);
+  } catch (e) {
+    if (e?.cancelled) throw e;
+    log(`OpenAlex author lookup failed for ${work.openalexId}: ${e?.message || e}`);
+    return [];
+  }
 }
 
 function chunks(list, size) {
@@ -145,6 +176,7 @@ export async function fetchFollowedWorks(http, { authors, daysBack = 60, mailto 
         if (seen) {
           const names = new Set([...seen.followedAuthors, ...work.followedAuthors]);
           seen.followedAuthors = namesOf(list).filter((n) => names.has(n));
+          if (work.needsAttribution) seen.needsAttribution = true;
         } else {
           byId.set(work.id, work);
         }
@@ -153,6 +185,17 @@ export async function fetchFollowedWorks(http, { authors, daysBack = 60, mailto 
       cursor = typeof data?.meta?.next_cursor === "string" ? data.meta.next_cursor : null;
     }
     records += read;
+  }
+  // Works whose shown authorships name no followed author: read the full list
+  let lookups = 0;
+  for (const work of byId.values()) {
+    if (!work.needsAttribution) continue;
+    delete work.needsAttribution;
+    if (!work.openalexId || lookups >= MAX_ATTRIBUTION_LOOKUPS) continue;
+    lookups++;
+    const found = await lookupFollowed(http, work, list, { mailto, retry, log });
+    const names = new Set([...work.followedAuthors, ...found]);
+    work.followedAuthors = namesOf(list).filter((n) => names.has(n));
   }
   const works = [...byId.values()].sort((a, b) => (Date.parse(b.published || "") || 0) - (Date.parse(a.published || "") || 0));
   log(`OpenAlex followed authors: ${works.length} works (${records} records) for ${list.length} authors since ${since}`);

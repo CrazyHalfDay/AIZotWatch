@@ -743,7 +743,7 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   assert.match(openalexQueries[0], /filter=author\.orcid:https:\/\/orcid\.org\/0000-0002-1825-0097,from_publication_date:\d{4}-\d{2}-\d{2}&/);
   assert.ok(env.Zotero.HTTP.requests.every((r) => r.options.anon === true));
   assert.equal(env.Zotero.notifications.length, 1);
-  assert.match(env.Zotero.notifications[0].text, /^发现 \d+ 篇新推荐（\d+ 篇必读），关注作者 1 篇。/);
+  assert.match(env.Zotero.notifications[0].text, /^发现 \d+ 篇新推荐(?:（\d+ 篇必读）)?，关注作者 1 篇。/);
   assert.ok(existsSync(join(dataDir, "zotwatch", "followed.json")));
 
   const view = await addon.getView();
@@ -1039,7 +1039,10 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   collectIds(recDoc, recIds);
   assert.equal(recDoc.attr("persist"), "screenX screenY width height sizemode");
   const recJs = readFileSync(join(root, "addon/content/recommendations.js"), "utf8");
-  for (const [, id] of recJs.matchAll(/\$\("([\w-]+)"\)/g)) assert.ok(recIds.has(id), `recommendations.xhtml lacks #${id}`);
+  // Ids reach $() directly or through segmented("…")
+  const usedIds = [...recJs.matchAll(/(?:\$|segmented)\("([\w-]+)"/g)].map(([, id]) => id);
+  for (const id of ["track-filter", "label-filter", "sort"]) assert.ok(usedIds.includes(id), `${id} is checked`);
+  for (const id of usedIds) assert.ok(recIds.has(id), `recommendations.xhtml lacks #${id}`);
   for (const s of ["new", "added", "dismissed"]) assert.ok(recIds.has(`count-${s}`));
 
   const prefXhtml = readFileSync(join(root, "addon/content/preferences.xhtml"), "utf8");

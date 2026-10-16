@@ -12,7 +12,7 @@ import { loadSettings } from "../src/settings.js";
 import { fetchFollowedWorks, parseOpenAlexWork } from "../src/sources/followed.js";
 import { createMemoryStorage } from "../src/store.js";
 import { followedStatusLine, newRecommendationsNotice } from "../src/zotero/addon.js";
-import { summaryNoteHtml } from "../src/zotero/items.js";
+import { addWorkToZotero, summaryNoteHtml } from "../src/zotero/items.js";
 import { embeddingHandler, mockHttp, noSleep } from "./helpers.js";
 
 const NOW = Date.UTC(2024, 9, 10, 12);
@@ -167,11 +167,54 @@ test("malformed openalex records never throw", () => {
   assert.deepEqual(w.authors.map((a) => a.name), ["Raw Name"]);
   assert.equal(w.abstract, "ok");
   assert.equal(w.citations, 0);
-  assert.deepEqual(w.followedAuthors, ["Ann Lee", "汪在聪"], "attributed to the queried authors when no authorship matches");
+  assert.deepEqual(w.followedAuthors, [], "no authorship matches: not credited to every queried author");
+  assert.equal(w.needsAttribution, true);
+  // A one-author query can only have found its own author's work
+  assert.deepEqual(parseOpenAlexWork(raw, [ANN]).followedAuthors, ["Ann Lee"]);
+  assert.equal(parseOpenAlexWork(raw, [ANN]).needsAttribution, undefined);
+  // A complete author list without a match needs no lookup
+  assert.equal(parseOpenAlexWork({ ...raw, is_authors_truncated: false }, [ANN, WANG]).needsAttribution, undefined);
   const none = parseOpenAlexWork({ ...oaWork(2), authorships: null, primary_location: { source: { issn: "x" } } }, [ANN]);
   assert.deepEqual(none.authors, []);
   assert.deepEqual(none.followedAuthors, ["Ann Lee"]);
   assert.equal(none.issns, null);
+  assert.deepEqual(parseOpenAlexWork({ ...oaWork(2), authorships: null }, [ANN, WANG]).followedAuthors, ["Ann Lee", "汪在聪"], "missing authorships");
+});
+
+test("works with a truncated author list are attributed from their full author list", async () => {
+  const others = (n) => Array.from({ length: n }, (_, i) => ({ name: `Member ${i}`, orcid: `0000-0001-0000-${String(i).padStart(4, "0")}` }));
+  // A consortium paper: OpenAlex lists show its first 100 authors only, without 汪在聪
+  const big = oaWork(50, { authors: others(100), is_authors_truncated: true });
+  const failing = oaWork(51, { authors: others(100), is_authors_truncated: true });
+  const complete = oaWork(52, { authors: others(3), is_authors_truncated: false });
+  const http = mockHttp([
+    [(r) => decodeURIComponent(r.url).includes("author.orcid:"), () => ({ meta: { next_cursor: null }, results: [big, failing, complete] })],
+    ["https://api.openalex.org/works/W1050?", () => ({ id: big.id, authorships: [...big.authorships, ...oaWork(50, { authors: [...others(30), WANG] }).authorships] })],
+    ["https://api.openalex.org/works/W1051?", () => ({ status: 500, data: {} })],
+  ]);
+  const logs = [];
+  const works = await fetchFollowedWorks(http, { authors: [ANN, WANG], mailto: "me@x.org", now: NOW, retry: noSleep, log: (m) => logs.push(m) });
+  const byId = Object.fromEntries(works.map((w) => [w.id, w]));
+  assert.deepEqual(byId["doi:10.8888/f.50"].followedAuthors, ["汪在聪"], "only the author actually on the paper");
+  assert.deepEqual(byId["doi:10.8888/f.51"].followedAuthors, [], "a failed lookup names nobody and keeps the work");
+  assert.deepEqual(byId["doi:10.8888/f.52"].followedAuthors, []);
+  assert.ok(works.every((w) => !("needsAttribution" in w)));
+  const lookups = http.calls.map((c) => decodeURIComponent(c.url)).filter((u) => u.startsWith("https://api.openalex.org/works/"));
+  assert.deepEqual(lookups.map((u) => u.split("?")[0]), ["https://api.openalex.org/works/W1050", "https://api.openalex.org/works/W1051", "https://api.openalex.org/works/W1051", "https://api.openalex.org/works/W1051"]);
+  assert.match(lookups[0], /\?select=id,authorships&mailto=me@x\.org$/);
+  assert.ok(logs.some((m) => /author lookup failed for W1051/.test(m)));
+
+  // The note never shows an empty list of names
+  assert.match(summaryNoteHtml({ label: "followed", score: 0, followedAuthors: [], summary: {} }), /<p>来源：关注作者<\/p>/);
+
+  // Cancelling a lookup cancels the fetch
+  const cancelled = mockHttp([
+    [(r) => decodeURIComponent(r.url).includes("author.orcid:"), () => ({ meta: { next_cursor: null }, results: [big] })],
+    ["https://api.openalex.org/works/W1050?", () => {
+      throw new CancelledRequestError();
+    }],
+  ]);
+  await assert.rejects(fetchFollowedWorks(cancelled, { authors: [ANN, WANG], now: NOW, retry: noSleep }), (e) => e.cancelled === true);
 });
 
 test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors and merges duplicates", async () => {
@@ -180,10 +223,9 @@ test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors
       { meta: { next_cursor: "page2" }, results: [oaWork(1, { authors: [ANN] }), oaWork(2, { authors: [WANG, ANN], date: "2024-09-20" })] },
       { meta: { next_cursor: null }, results: [oaWork(3, { type: "dataset" }), oaWork(4, { authors: [ANN], date: "2024-10-05" })] },
     ],
-    id: [{ meta: { next_cursor: "ignored" }, results: [] }],
+    // The same work found through the OpenAlex-id author as well
+    id: [{ meta: { next_cursor: null }, results: [oaWork(2, { authors: [CHEN, WANG], date: "2024-09-20" })] }],
   };
-  // The same work found through the OpenAlex-id author as well
-  pages.id[0] = { meta: { next_cursor: null }, results: [oaWork(2, { authors: [CHEN, WANG], date: "2024-09-20" })] };
   let orcidPage = 0;
   const http = mockHttp([
     [(r) => decodeURIComponent(r.url).includes("author.orcid:"), () => pages.orcid[orcidPage++]],
@@ -199,7 +241,7 @@ test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors
   assert.match(first, /sort=publication_date:desc/);
   assert.match(first, /per-page=200/);
   assert.match(first, /cursor=\*/);
-  assert.match(first, /select=id,doi,title,display_name,publication_date,type,authorships,primary_location,abstract_inverted_index,cited_by_count,is_paratext/);
+  assert.match(first, /select=id,doi,title,display_name,publication_date,type,authorships,primary_location,abstract_inverted_index,cited_by_count,is_paratext&/);
   assert.match(first, /mailto=me@x.org/);
   assert.match(second, /cursor=page2/);
   assert.match(third, /filter=authorships\.author\.id:A5023888391,from_publication_date:2024-08-11&/);
@@ -207,6 +249,17 @@ test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors
   assert.deepEqual(works.map((w) => w.id), ["doi:10.8888/f.4", "doi:10.8888/f.1", "doi:10.8888/f.2"], "newest first, dataset skipped, duplicate merged");
   assert.deepEqual(works[2].followedAuthors, ["Ann Lee", "汪在聪", "Bo Chen"]);
   assert.match(logs.at(-1), /3 works/);
+
+  // An empty page ends the paging even when it carries a cursor
+  let emptyPages = 0;
+  const empty = mockHttp([
+    ["https://api.openalex.org/works", () => {
+      if (++emptyPages > 1) throw new Error("paged past an empty page");
+      return { meta: { next_cursor: "again" }, results: [] };
+    }],
+  ]);
+  assert.deepEqual(await fetchFollowedWorks(empty, { authors: [ANN], now: NOW, retry: noSleep }), []);
+  assert.equal(empty.calls.length, 1);
 
   // No usable author: no request at all
   const idle = mockHttp([]);
@@ -282,15 +335,55 @@ test("notes, notices and status lines describe the track of a work", () => {
   assert.doesNotMatch(summaryNoteHtml({ label: "consider", score: 0.5, summary: {} }), /NaN/);
 
   assert.equal(
-    newRecommendationsNotice({ newRecommendations: 5, mustRead: 1, newByLabel: { personal: 2, flagship: 1, followed: 2 } }),
+    newRecommendationsNotice({ newRecommendations: 5, mustRead: 3, newMustRead: 1, newByLabel: { personal: 2, flagship: 1, followed: 2 } }),
     "发现 5 篇新推荐（1 篇必读），顶刊地学 1 篇，关注作者 2 篇。在「工具 → ZotWatch 文献推荐」中查看。",
   );
   assert.equal(
-    newRecommendationsNotice({ newRecommendations: 3, mustRead: 0 }),
-    "发现 3 篇新推荐（0 篇必读）。在「工具 → ZotWatch 文献推荐」中查看。",
+    newRecommendationsNotice({ newRecommendations: 3, mustRead: 2, newMustRead: 0 }),
+    "发现 3 篇新推荐。在「工具 → ZotWatch 文献推荐」中查看。",
+    "must-read papers announced by an earlier run are not counted again",
   );
   assert.equal(followedStatusLine({ authors: [ANN, WANG], invalid: [], daysBack: 60 }), "关注作者：2 位（Ann Lee、汪在聪），检查最近 60 天");
   assert.equal(followedStatusLine({ authors: [], invalid: ["x", "y"], daysBack: 30 }), "关注作者：未填写有效的作者；2 行无法识别：x");
+});
+
+test("followed works that are not journal articles are saved with their own item type", async (t) => {
+  const saved = [];
+  class Item {
+    constructor(itemType) {
+      this.itemType = itemType;
+      this.fields = {};
+    }
+    setField(field, value) {
+      // Zotero rejects fields that the item type lacks
+      const valid = { journalArticle: ["publicationTitle", "ISSN"], bookSection: ["bookTitle"], report: ["institution"], thesis: ["university"], book: [] };
+      if (!["title", "abstractNote", "DOI", "url", "date"].includes(field) && !valid[this.itemType]?.includes(field)) throw new Error(`invalid field ${field}`);
+      this.fields[field] = value;
+    }
+    setCreators(creators) {
+      this.creators = creators;
+    }
+    async saveTx() {
+      saved.push(this);
+    }
+  }
+  globalThis.Zotero = { Item, ItemTypes: { getID: () => 31 }, Collections: {} };
+  t.after(() => delete globalThis.Zotero);
+  const save = (type, extra = {}) =>
+    addWorkToZotero({ id: "openalex:W1", source: "openalex", type, title: `A ${type}`, venue: "ProQuest", issns: ["1234-5678"], authors: [], ...extra }, { libraryID: 1, useTranslator: false });
+
+  const thesis = await save("dissertation");
+  assert.equal(thesis.itemType, "thesis");
+  assert.deepEqual(thesis.fields, { title: "A dissertation" }, "the repository is not the university");
+  assert.equal((await save("report", { venue: "USGS" })).fields.institution, "USGS");
+  assert.equal((await save("book-chapter", { venue: "Treatise on Geochemistry" })).fields.bookTitle, "Treatise on Geochemistry");
+  assert.equal((await save("book")).itemType, "book");
+  const article = await save("article", { venue: "EPSL" });
+  assert.equal(article.itemType, "journalArticle");
+  assert.deepEqual([article.fields.publicationTitle, article.fields.ISSN], ["EPSL", "1234-5678"]);
+  assert.equal((await save("preprint")).itemType, "preprint");
+  // Other sources keep the journal-article default
+  assert.equal((await save("report", { source: "crossref" })).itemType, "journalArticle");
 });
 
 // ------------------------------------------------------------------ engine
@@ -420,6 +513,9 @@ test("followed works join the inbox once, annotate matching recommendations and 
   assert.equal(Object.values(works).filter((w) => w.title === "Copper isotope fractionation in arc magmas").length, 1);
   // Followed works are never embedded
   const embedded = counter.texts;
+  const embeddedTexts = http.calls.filter((c) => c.url.startsWith("https://dashscope.aliyuncs.com/")).flatMap((c) => JSON.parse(c.body).input);
+  assert.ok(embeddedTexts.length > 0);
+  assert.ok(!embeddedTexts.some((t) => /A new copper isotope tracer|Galaxy survey notes/.test(t)), "followed-only works are not embedded");
 
   const seen = await storage.readJSON("followed.json");
   assert.equal(seen.version, 1);
@@ -444,6 +540,8 @@ test("followed works join the inbox once, annotate matching recommendations and 
   const stored = (await engine().loadInbox()).works["doi:10.8888/new.9"];
   assert.equal(stored.label, "followed");
   state.candidates = [...CANDIDATES, crossrefWork(9, "Galaxy survey notes on copper isotope", "Copper copper isotope isotope", { doi: "10.8888/new.9" })];
+  // The followed fetch no longer returns it: the annotation can only come from the stored entry
+  state.followed = FOLLOWED;
   const run4 = await engine().run();
   const promoted = (await engine().loadInbox()).works["doi:10.8888/new.9"];
   assert.notEqual(promoted.label, "followed");
@@ -451,6 +549,11 @@ test("followed works join the inbox once, annotate matching recommendations and 
   assert.deepEqual(promoted.followedAuthors, ["Ann Lee"], "the annotation survives the overwrite");
   assert.equal(promoted.firstRunId, stored.firstRunId);
   assert.deepEqual(run4.stats.newByLabel, { personal: 0, flagship: 0, followed: 0 });
+
+  // Found through another followed author: the stored names are kept (configuration order)
+  state.followed = [...FOLLOWED, oaWork(9, { doi: "10.8888/new.9", title: "Galaxy survey notes on copper isotope", authors: [WANG] })];
+  await engine().run();
+  assert.deepEqual((await engine().loadInbox()).works["doi:10.8888/new.9"].followedAuthors, ["Ann Lee", "汪在聪"]);
 });
 
 test("a followed work already in the inbox only gains its authors", async () => {
@@ -483,6 +586,48 @@ test("a followed work already in the inbox only gains its authors", async () => 
   assert.ok(!inbox["doi:10.5555/arx.1"]);
   assert.deepEqual(inbox["arxiv:2410.00001"].followedAuthors, ["汪在聪"]);
   assert.equal(inbox["arxiv:2410.00001"].label, "consider");
+});
+
+test("the notice counts only the must-read papers this run added", async () => {
+  const { engine, state } = setup();
+  state.followed = [];
+  const first = await engine().run();
+  assert.ok(first.stats.mustRead > 0);
+  assert.equal(first.stats.newMustRead, first.stats.mustRead, "every must-read paper is new on the first run");
+
+  // Only a followed-author paper is new; the must-read papers are still ranked
+  state.followed = [FOLLOWED[0]];
+  const second = await engine().run();
+  assert.equal(second.stats.newRecommendations, 1);
+  assert.equal(second.stats.mustRead, first.stats.mustRead);
+  assert.equal(second.stats.newMustRead, 0);
+  assert.equal(newRecommendationsNotice(second.stats), "发现 1 篇新推荐，关注作者 1 篇。在「工具 → ZotWatch 文献推荐」中查看。");
+});
+
+test("followed works fetched again annotate their stored entries in any status", async () => {
+  const { engine, state, setNow } = setup({ prefs: { "followed.authors": `${ANN.name}, ${ANN.orcid}` } });
+  state.followed = [
+    oaWork(30, { title: "Joint copper paper", authors: [ANN, WANG] }),
+    oaWork(31, { title: "Joint mantle paper", authors: [WANG, ANN] }),
+  ];
+  await engine().run();
+  const before = (await engine().loadInbox()).works;
+  assert.deepEqual(before["doi:10.8888/f.30"].followedAuthors, ["Ann Lee"]);
+  await engine().updateWork("doi:10.8888/f.31", { status: "dismissed" });
+  const dismissed = (await engine().loadInbox()).works["doi:10.8888/f.31"];
+
+  // 汪在聪 is followed too from now on: the works were seen, so they are not new
+  setNow(NOW + DAY);
+  const run = await engine({ "followed.authors": AUTHOR_LINES }).run();
+  assert.deepEqual(run.stats.followed, { authors: 2, fetched: 2, new: 0 });
+  assert.equal(run.stats.newByLabel.followed, 0);
+  const after = (await engine().loadInbox()).works;
+  assert.deepEqual(after["doi:10.8888/f.30"].followedAuthors, ["Ann Lee", "汪在聪"]);
+  assert.equal(after["doi:10.8888/f.30"].lastSeen, before["doi:10.8888/f.30"].lastSeen, "an annotation is not a sighting");
+  assert.equal(after["doi:10.8888/f.30"].lastRunId, before["doi:10.8888/f.30"].lastRunId);
+  assert.deepEqual(after["doi:10.8888/f.31"].followedAuthors, ["Ann Lee", "汪在聪"], "handled entries are annotated as well");
+  assert.equal(after["doi:10.8888/f.31"].status, "dismissed");
+  assert.equal(after["doi:10.8888/f.31"].statusAt, dismissed.statusAt);
 });
 
 test("invalid author lines and OpenAlex failures do not fail the run", async () => {

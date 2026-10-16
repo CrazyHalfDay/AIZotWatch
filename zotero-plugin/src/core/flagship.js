@@ -122,6 +122,23 @@ export function partitionByAnchors(vectors, positive, negatives, { minScore, gra
   return out;
 }
 
+/** neg - pos from which a local-mode article is clearly in another field (see lexicalGray). */
+export const LEXICAL_NEGATIVE_MARGIN = 0.15;
+
+/**
+ * Lexical (local-mode) vectors only see word overlap with the one-sentence
+ * anchors, so an on-topic abstract sharing no words with them scores as noise
+ * and the bands reject it. When the LLM judges, local mode widens the gray zone
+ * to every article not accepted, except those clearly closer to a negative
+ * anchor (neg - pos >= margin).
+ * @param {{accepted: number[], scores: {pos: number, neg: number}[]}} part - see partitionByAnchors
+ * @returns {number[]} indices of the widened gray zone, in input order
+ */
+export function lexicalGray(part, margin = LEXICAL_NEGATIVE_MARGIN) {
+  const accepted = new Set(part.accepted);
+  return part.scores.map((_, i) => i).filter((i) => !accepted.has(i) && part.scores[i].neg - part.scores[i].pos < margin);
+}
+
 /** Newest first by publication date (unknown dates last, ties keep their order), capped at `max` (0 = no cap). */
 export function newestFirst(works, max = 0) {
   const time = (w) => {

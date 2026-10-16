@@ -161,7 +161,7 @@ test("cards show track badges, scores and chips", () => {
   const score = withClass(flagship, "score")[0];
   assert.equal(score.className, "score muted");
   assert.equal(score.attributes.title, "与文库相似度（仅供参考）");
-  assert.equal(score.textContent, "31 分");
+  assert.equal(score.textContent, "相似度 20", "the library similarity, as in the saved note (not the 31 score)");
 
   const followed = cards["Followed older"];
   assert.equal(followed.className, "card followed");

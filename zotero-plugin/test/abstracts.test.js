@@ -40,7 +40,8 @@ function invert(value) {
 }
 
 const elsevierBody = (description) => ({ "full-text-retrieval-response": { coredata: { "dc:description": description } } });
-const work = (doi, source = "crossref", extra = {}) => ({ id: `doi:${doi}`, doi, source, title: `Work ${doi}`, abstract: null, ...extra });
+// Published long enough ago for the 7-day negative entries (fresh works: see the freshness test)
+const work = (doi, source = "crossref", extra = {}) => ({ id: `doi:${doi}`, doi, source, title: `Work ${doi}`, abstract: null, published: "2024-08-01T00:00:00Z", ...extra });
 const urls = (http) => http.calls.map((c) => decodeURIComponent(c.url));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -163,7 +164,7 @@ test("each DOI tries Crossref, Elsevier, Springer Nature and OpenAlex in order u
   assert.equal(called.filter((u) => u.includes("api.elsevier.com")).length, 2, "one request per DOI");
   assert.deepEqual(called.filter((u) => u.includes("springernature")), ["https://api.springernature.com/meta/v2/json?q=doi:10.1038/c&api_key=spr-key"]);
   assert.deepEqual(called.filter((u) => u.includes("openalex")), [
-    "https://api.openalex.org/works?filter=doi:https://doi.org/10.1029/d&select=doi,abstract_inverted_index&per-page=50&mailto=me@example.org",
+    "https://api.openalex.org/works?filter=doi:https://doi.org/10.1029/d&select=doi,abstract_inverted_index&per-page=200&mailto=me@example.org",
   ]);
   const elsevier = http.calls.find((c) => c.url.includes("api.elsevier.com"));
   assert.deepEqual(elsevier.headers, { "X-ELS-APIKey": "els-key", Accept: "application/json" });
@@ -255,6 +256,55 @@ test("transient failures are never cached as misses", async () => {
   assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null, "OpenAlex was still unavailable");
 });
 
+test("misses of freshly published works are retried by the next daily run", async () => {
+  const storage = createMemoryStorage();
+  let indexed = false;
+  const http = mockHttp([
+    ["https://api.openalex.org/works", () => ({
+      // OpenAlex has not ingested the new DOI yet on the first day
+      results: indexed ? [{ doi: "https://doi.org/10.1016/j.fresh", abstract_inverted_index: invert(text("Fresh")) }] : [],
+    })],
+  ]);
+  const batch = () => [work("10.1016/j.fresh", "crossref", { published: new Date(NOW - DAY).toISOString() }), work("10.1016/j.old")];
+  const first = await enrichMissingAbstracts(http, batch(), { cache: storage, now: NOW, retry: noSleep });
+  assert.equal(first.failed, 2);
+  const entries = (await storage.readJSON(ABSTRACT_CACHE_FILE)).entries;
+  assert.equal(entries["10.1016/j.fresh"].exp, NOW + 20 * 3600000);
+  assert.equal(entries["10.1016/j.old"].exp, NOW + 7 * DAY);
+
+  // Same day: both misses are still known
+  http.calls.length = 0;
+  assert.equal((await enrichMissingAbstracts(http, batch(), { cache: storage, now: NOW + 3600000, retry: noSleep })).negativeSkips, 2);
+  assert.equal(http.calls.length, 0);
+
+  indexed = true;
+  const works = batch();
+  const next = await enrichMissingAbstracts(http, works, { cache: storage, now: NOW + DAY, retry: noSleep });
+  assert.equal(next.openalex, 1);
+  assert.equal(next.negativeSkips, 1, "the old work's miss still holds");
+  assert.equal(works[0].abstract, text("Fresh"));
+});
+
+test("a 2xx without a JSON body and a cut-off OpenAlex page are never cached as misses", async () => {
+  const storage = createMemoryStorage();
+  // A filtering proxy answers with an HTML page: the JSON transport yields no data
+  const blocked = mockHttp([["https://api.", () => ({ status: 200, data: null })]]);
+  const works = ["a", "b", "c"].map((s) => work(`10.31223/${s}`, "eartharxiv"));
+  const result = await enrichMissingAbstracts(blocked, works, { cache: storage, now: NOW, retry: noSleep, concurrency: 1 });
+  assert.equal(result.failed, 3);
+  assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null);
+  assert.deepEqual(result.errors, [{ source: "Crossref", message: "连续 3 次请求失败，本次运行已跳过（unexpected non-JSON response）" }]);
+
+  // More records than one page holds (several records per DOI): absent DOIs may be on the next page
+  const record = { doi: "https://doi.org/10.1029/a", abstract_inverted_index: invert(text("Paged")) };
+  const paged = mockHttp([["https://api.openalex.org/works", () => ({ meta: { count: 3 }, results: [record, record] })]]);
+  const pagedWorks = [work("10.1029/a"), work("10.1029/b")];
+  const cut = await enrichMissingAbstracts(paged, pagedWorks, { cache: storage, now: NOW, retry: noSleep });
+  assert.equal(cut.openalex, 1);
+  assert.equal(pagedWorks[0].abstract, text("Paged"));
+  assert.deepEqual(Object.keys((await storage.readJSON(ABSTRACT_CACHE_FILE)).entries), ["10.1029/a"]);
+});
+
 test("the cache tolerates corrupt files, prunes expired entries and keeps at most 5000", async () => {
   const http = mockHttp([["https://api.crossref.org/works/", () => ({ message: { abstract: text("New") } })]]);
   const broken = { ...createMemoryStorage(), readJSON: async () => { throw new SyntaxError("bad json"); } };
@@ -285,18 +335,28 @@ test("a rejected publisher key disables that publisher for the run with one erro
     ["https://api.springernature.com/", () => ({ status: 403, data: { message: "Forbidden" } })],
     ["https://api.openalex.org/works", () => ({ results: [] })],
   ]);
-  const works = [work("10.1016/j.1"), work("10.1016/j.2"), work("10.1016/j.3"), work("10.1007/s1"), work("10.1007/s2")];
+  const works = [work("10.1016/j.1"), work("10.1016/j.2"), work("10.1016/j.3"), ...["s1", "s2", "s3", "s4"].map((s) => work(`10.1007/${s}`))];
   const result = await enrichMissingAbstracts(http, works, { elsevierKey: "bad", springerKey: "bad", cache: storage, now: NOW, retry: noSleep, concurrency: 1 });
+  // A 403 may concern one article only: the publisher is dropped after three in a row
   assert.deepEqual(result.errors, [
     { source: "Elsevier", message: "API Key 无效或无权限（HTTP 401），本次运行已停用" },
-    { source: "Springer Nature", message: "API Key 无效或无权限（HTTP 403），本次运行已停用" },
+    { source: "Springer Nature", message: "连续 3 次请求失败，本次运行已跳过（HTTP 403）" },
   ]);
   const called = urls(http);
   assert.equal(called.filter((u) => u.includes("elsevier")).length, 1);
-  assert.equal(called.filter((u) => u.includes("springernature")).length, 1);
+  assert.equal(called.filter((u) => u.includes("springernature")).length, 3);
   assert.equal(called.filter((u) => u.includes("openalex")).length, 1, "OpenAlex still runs");
   // A disabled publisher is not a definitive miss: nothing is negative-cached
   assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null);
+
+  // One article the key is not entitled to does not stop the others
+  const entitled = mockHttp([
+    ["https://api.elsevier.com/content/article/doi/10.1016/j.1?", () => ({ status: 403, data: { "service-error": { status: { statusCode: "AUTHORIZATION_ERROR" } } } })],
+    ["https://api.elsevier.com/", () => elsevierBody(text("Entitled"))],
+  ]);
+  const some = await enrichMissingAbstracts(entitled, [work("10.1016/j.1"), work("10.1016/j.2"), work("10.1016/j.3")], { elsevierKey: "ok", openalex: false, now: NOW, retry: noSleep, concurrency: 1 });
+  assert.equal(some.elsevier, 2);
+  assert.deepEqual(some.errors, []);
 });
 
 test("a provider failing again and again is skipped for the rest of the run", async () => {

@@ -128,7 +128,7 @@ test("eartharxiv OAI-PMH paging, deleted records and empty results", async () =>
 test("openalex abstract reconstruction and batched lookups", () => {
   assert.equal(reconstructAbstract({ Zircon: [0], ages: [1, 3], "old,": [2] }), "Zircon ages old, ages");
   const url = decodeURIComponent(openAlexAbstractsUrl(["10.1234/a", "10.1234/c"], "me@example.org"));
-  assert.match(url, /filter=doi:https:\/\/doi.org\/10.1234\/a\|https:\/\/doi.org\/10.1234\/c&select=doi,abstract_inverted_index&per-page=50&mailto=me@example.org$/);
+  assert.match(url, /filter=doi:https:\/\/doi.org\/10.1234\/a\|https:\/\/doi.org\/10.1234\/c&select=doi,abstract_inverted_index&per-page=200&mailto=me@example.org$/, "50 DOIs, room for records sharing a DOI");
   const found = parseOpenAlexAbstracts({
     results: [{ doi: "https://doi.org/10.1234/A", abstract_inverted_index: { Hello: [0], world: [1] } }, null, { doi: 5 }, { doi: "10.1234/c" }],
   });

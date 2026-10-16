@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { CancelledError, ZotWatchEngine } from "../src/engine.js";
 import { createEmbedder } from "../src/embedding/providers.js";
-import { parseJsonReply, summarizePaper, translateTitles } from "../src/llm/llm.js";
+import { createLlmClient, labelClusters, parseJsonReply, summarizePaper, translateTitles } from "../src/llm/llm.js";
 import { loadSettings } from "../src/settings.js";
 import { createMemoryStorage } from "../src/store.js";
 import { embeddingHandler, mockHttp, noSleep } from "./helpers.js";
@@ -255,15 +255,16 @@ test("a cancel during best-effort steps is reported as a cancel", async () => {
   const llm = () => {
     throw new CancelledRequestError();
   };
+  // (topic labels off: their request would come first and take the cancel)
   const { engine: llmEngine } = setup({
-    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.translateTitles": false },
+    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.translateTitles": false, "llm.topicLabels": false },
     llm,
   });
   await assert.rejects(llmEngine.run(), (e) => e.cancelled === true);
 
   // Title translation cancelled
   const { engine: trEngine } = setup({
-    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.summaryTopN": "0" },
+    prefs: { "llm.enabled": true, "llm.apiKey": "k", "llm.baseURL": "https://llm.example/v1", "llm.model": "m", "llm.summaryTopN": "0", "llm.topicLabels": false },
     llm,
   });
   await assert.rejects(trEngine.run(), (e) => e.cancelled === true);
@@ -277,6 +278,23 @@ test("LLM helpers", async () => {
   const failing = { chat: async () => "not json" };
   assert.deepEqual(await translateTitles(failing, ["a", "b"]), [null, null]);
   await assert.rejects(summarizePaper(failing, { title: "t", authors: [] }));
+});
+
+test("reasoning models get room for their reasoning tokens", async () => {
+  const http = mockHttp([["https://llm.example/v1/chat/completions", () => ({ choices: [{ message: { content: '["方向"]' } }] })]]);
+  const bodyFor = async (model) => {
+    const llm = createLlmClient({ apiKey: "k", baseURL: "https://llm.example/v1", model, temperature: 0.3 }, http);
+    await labelClusters(llm, [{ memberCount: 1 }]); // asks for 1024 tokens
+    return JSON.parse(http.calls.at(-1).body);
+  };
+  const plain = await bodyFor("deepseek-chat");
+  assert.equal(plain.max_tokens, 1024);
+  assert.equal(plain.temperature, 0.3);
+  const reasoner = await bodyFor("deepseek-reasoner");
+  assert.equal(reasoner.max_tokens, 8192);
+  assert.equal(reasoner.temperature, undefined);
+  assert.equal((await bodyFor("deepseek/deepseek-r1")).max_tokens, 8192);
+  assert.equal((await bodyFor("kimi-k2-thinking-turbo")).max_tokens, 16000);
 });
 
 test("embedding providers send the right requests", async () => {

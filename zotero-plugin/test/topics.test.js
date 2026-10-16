@@ -454,7 +454,7 @@ test("a bad label reply or a failed request stores nothing, is reported and is r
     assert.ok(run.stats.recommended > 0, "the run itself succeeds");
     assert.deepEqual(run.stats.topics, { clusters: 3, labeled: 0, generated: 0 });
     assert.equal(await storage.readJSON("cluster-labels.json"), null);
-    assert.deepEqual(Object.values(await topicsById(engine())), [undefined, undefined]);
+    assert.deepEqual(Object.values(await topicsById(engine())), [null, null]);
   }
   assert.equal(labelCalls().length, 4, "retried on every run");
 
@@ -474,6 +474,52 @@ test("a bad label reply or a failed request stores nothing, is reported and is r
   assert.deepEqual(run.errors, []);
   assert.deepEqual(run.stats.topics, { clusters: 3, labeled: 3, generated: 3 });
   assert.deepEqual(await topicsById(engine()), { "doi:10.7777/cand.1": "铜同位素", "doi:10.7777/cand.2": "地幔动力学" });
+});
+
+test("the store follows labeled directions while another one stays unlabeled", async () => {
+  const { engine, storage, state } = setup({ items: libraryItems({ copper: 6 }) });
+  const first = await engine().run();
+  assert.deepEqual(first.stats.topics, { clusters: 3, labeled: 3, generated: 3 });
+
+  // The LLM is switched off and a fourth direction appears: it stays unlabeled
+  // while the copper direction keeps growing (6 stored keys / 14 members < 0.5)
+  for (const copper of [8, 10, 12, 14]) {
+    state.items = libraryItems({ copper, sulfur: 4 });
+    const run = await engine({ "llm.enabled": false }).run();
+    assert.deepEqual(run.errors, []);
+    assert.deepEqual(run.stats.topics, { clusters: 4, labeled: 3, generated: 0 }, `copper ${copper}`);
+  }
+  const store = await storage.readJSON("cluster-labels.json");
+  assert.equal(store.clusters.find((c) => c.label === "铜同位素").keys.length, 14, "the labeled clusters' memberships are followed");
+  assert.equal((await topicsById(engine()))["doi:10.7777/cand.1"], "铜同位素");
+
+  // A stored direction no cluster takes is kept while a cluster is unlabeled
+  await storage.writeJSON("cluster-labels.json", { version: 1, clusters: [...store.clusters, { keys: ["GONE0", "GONE1"], label: "旧方向" }] });
+  await engine({ "llm.enabled": false }).run();
+  assert.ok((await storage.readJSON("cluster-labels.json")).clusters.some((c) => c.label === "旧方向"));
+  // Once every cluster is labeled, the store holds exactly the current clusters
+  const labeled = await engine().run();
+  assert.deepEqual(labeled.stats.topics, { clusters: 4, labeled: 4, generated: 1 });
+  assert.deepEqual((await storage.readJSON("cluster-labels.json")).clusters.map((c) => c.label), ["铜同位素", "地幔动力学", "硫循环", "俯冲带流体"]);
+});
+
+test("a re-merged work whose nearest direction has no label yet loses its old topic", async () => {
+  const mixed = crossrefWork(5, "Sulfur and copper isotope in porphyry", "Sulfur sulfur copper isotope");
+  const { engine, state } = setup({ candidates: [...CANDIDATES, mixed] });
+  await engine().run();
+  assert.equal((await topicsById(engine()))["doi:10.7777/cand.5"], "铜同位素", "no sulfur direction yet");
+
+  // A sulfur direction appears and becomes the work's nearest, but its label fails
+  state.items = libraryItems({ sulfur: 6 });
+  state.llm = () => reply("not json");
+  const failed = await engine().run();
+  assert.match(failed.errors[0].message, /^研究方向标签生成失败/);
+  assert.equal((await topicsById(engine()))["doi:10.7777/cand.5"], null);
+  assert.equal((await topicsById(engine()))["doi:10.7777/cand.1"], "铜同位素");
+
+  state.llm = labelLlm;
+  await engine().run();
+  assert.equal((await topicsById(engine()))["doi:10.7777/cand.5"], "硫循环");
 });
 
 test("cancelling the label request cancels the run after its results are stored", async () => {

@@ -7,11 +7,11 @@
 
 import { dedupeAgainstLibrary } from "./core/dedupe.js";
 import { excludeByKeywords, filterRecent, filterWithoutAbstract, includeByKeywords, limitPreprints } from "./core/filters.js";
-import { newestFirst, partitionByAnchors, splitFlagship } from "./core/flagship.js";
+import { lexicalGray, newestFirst, partitionByAnchors, splitFlagship } from "./core/flagship.js";
 import { libraryVenues, parseWhitelist, venueKey } from "./core/journals.js";
 import { ProfileRanker, buildClusters, computeTemporalWeights } from "./core/scoring.js";
 import { contentForEmbedding, hashString, normalizeDoi, normalizeIssn } from "./core/text.js";
-import { labelStoreOf, matchStoredLabels, sameLabelStore, storedLabelEntries, topKeywords, topicsOf } from "./core/topics.js";
+import { labelStoreOf, matchStoredEntries, sameLabelStore, storedLabelEntries, topKeywords, topicsOf } from "./core/topics.js";
 import { attachFollowed, countByTrack, selectSummaryTargets, trackOf, unionNames } from "./core/tracks.js";
 import { Matrix, toFloat32 } from "./core/vector.js";
 import { createEmbedder } from "./embedding/providers.js";
@@ -398,17 +398,22 @@ export class ZotWatchEngine {
         negatives,
         { minScore: cfg.minScore, grayLow: cfg.grayLow },
       );
+      const llmCheck = !!(cfg.llmFallback && this.settings.llm.enabled && this.settings.llm.apiKey);
+      // Local (lexical) vectors cannot tell on-topic articles from noise: the LLM judges all but clear negatives
+      const grayIdx = llmCheck && this.settings.embedding.provider === "local" ? lexicalGray(part) : part.gray;
       stats.accepted = part.accepted.length;
-      stats.gray = part.gray.length;
+      stats.gray = grayIdx.length;
 
-      const gray = part.gray.map((i) => works[i]);
+      const gray = grayIdx.map((i) => works[i]);
       let keptGray = gray; // inclusive by design when no LLM judges the gray zone
       let confirmed = new Set();
-      if (gray.length && cfg.llmFallback && this.settings.llm.enabled && this.settings.llm.apiKey) {
+      if (gray.length && llmCheck) {
         progress("flagship", `大模型复核 ${gray.length} 篇灰区文章…`);
         const llm = createLlmClient(this.settings.llm, this.http, { retry: this.retry });
         const verdict = await judgeRelevance(llm, gray, cfg.llmBoundary, { batchSize: cfg.llmBatchSize });
-        keptGray = verdict.kept;
+        // Articles the LLM could not judge keep the bands' decision (the widened local-mode ones are dropped)
+        const bandGray = new Set(part.gray.map((i) => works[i]));
+        keptGray = verdict.kept.filter((w) => verdict.confirmed.has(w) || bandGray.has(w));
         confirmed = verdict.confirmed;
         stats.judged = verdict.judged;
         if (verdict.error) {
@@ -500,18 +505,27 @@ export class ZotWatchEngine {
 
   /**
    * Research-direction labels of the current clusters, carried over from
-   * cluster-labels.json by member-key Jaccard (see core/topics.js). When every
-   * cluster keeps its label, the store follows the new memberships so that
-   * gradual library growth never drops a label. Null when topic labels are off
-   * or there are no clusters.
+   * cluster-labels.json by member-key Jaccard (see core/topics.js). The store
+   * follows the new memberships of every labeled cluster, so that gradual
+   * library growth never drops a label, also while other clusters are still
+   * unlabeled (LLM off, or its replies rejected); stored entries no cluster
+   * took are kept until every cluster has a label again, so they can still
+   * match after a later recluster. Null when topic labels are off or there
+   * are no clusters.
    * @returns {Promise<{clusters: object[], labels: (string|null)[], nearest: Map<string, number>, generated: number}|null>}
    */
   async loadTopics(clusters) {
     if (!this.settings.llm.topicLabels || !clusters.length || !clusters.every((c) => Array.isArray(c.memberKeys))) return null;
     const stored = await this.storage.readJSON(TOPIC_LABELS_FILE).catch(() => null);
-    const labels = matchStoredLabels(clusters, storedLabelEntries(stored));
-    if (labels.every(Boolean)) {
+    const entries = storedLabelEntries(stored);
+    const taken = matchStoredEntries(clusters, entries);
+    const labels = taken.map((j) => (j === null ? null : entries[j].label.trim()));
+    if (labels.some(Boolean)) {
       const next = labelStoreOf(clusters, labels);
+      if (!labels.every(Boolean)) {
+        const used = new Set(taken);
+        next.clusters.push(...entries.filter((_, j) => !used.has(j)).map(({ keys, label }) => ({ keys, label })));
+      }
       if (!sameLabelStore(stored, next)) await this.storage.writeJSON(TOPIC_LABELS_FILE, next);
     }
     return { clusters, labels, nearest: new Map(), generated: 0 };
@@ -613,10 +627,13 @@ export class ZotWatchEngine {
    * included) but keeps the status, the first-seen data and the union of
    * followed authors. A followed-only work that is already stored (by id or
    * DOI, any status) only adds its followed authors to that entry.
+   * @param {object[]} [options.annotations] - followed works fetched again (seen
+   *   before, or already handled): never inserted, they only add their followed
+   *   authors to a stored entry matching by id or DOI, in any status
    * @param {string[]} [options.followedOrder] - configured followed-author names (ordering of unions)
    * @returns {string[]} ids of the entries this run inserted
    */
-  mergeIntoInbox(inbox, works, { runId, runAt, libraryDois, followedOrder = [] }) {
+  mergeIntoInbox(inbox, works, { runId, runAt, libraryDois, followedOrder = [], annotations = [] }) {
     const inserted = [];
     let storedDois = null;
     const storedByDoi = (doi) => {
@@ -648,6 +665,13 @@ export class ZotWatchEngine {
           lastRunId: runId,
         });
       }
+      if (followedAuthors.length) existing.followedAuthors = followedAuthors;
+    }
+    // Label, score, status and lastSeen stay as they are
+    for (const f of annotations) {
+      const existing = inbox.works[f.id] || storedByDoi(normalizeDoi(f.doi));
+      if (!existing) continue;
+      const followedAuthors = unionNames(existing.followedAuthors, f.followedAuthors, followedOrder);
       if (followedAuthors.length) existing.followedAuthors = followedAuthors;
     }
 
@@ -811,12 +835,14 @@ export class ZotWatchEngine {
     // Personal and flagship results of this run; every fetched followed work
     // annotates a matching one, and only new unmatched ones become entries
     const tracked = [...ranked, ...flagshipWorks];
-    // Topic of each work: the label of its nearest cluster (followed-only works are not embedded)
+    // Topic of each work: the label of its nearest cluster (followed-only works
+    // are not embedded). An unlabeled nearest cluster stores null, so a re-merged
+    // work never keeps the direction of an earlier run (patched in once labeled)
     if (topics) {
       for (const w of tracked) {
         if (!Number.isInteger(w.nearest)) continue;
         topics.nearest.set(w.id, w.nearest);
-        if (topics.labels[w.nearest]) w.topic = topics.labels[w.nearest];
+        w.topic = topics.labels[w.nearest] || null;
       }
     }
     const followedOrder = followedCfg.authors.map((a) => a.name);
@@ -831,9 +857,19 @@ export class ZotWatchEngine {
     let inserted = [];
     // Persist before the (slow, optional) LLM step so results are never lost
     await this.withInbox((inbox) => {
-      inserted = this.mergeIntoInbox(inbox, [...tracked, ...followedOnly], { runId, runAt, libraryDois, followedOrder });
+      inserted = this.mergeIntoInbox(inbox, [...tracked, ...followedOnly], {
+        runId,
+        runAt,
+        libraryDois,
+        followedOrder,
+        // Followed works seen before: only annotate their stored entries
+        annotations: (followedFetched || []).filter((w) => !newFollowedIds.has(w.id)),
+      });
       stats.newRecommendations = inserted.length;
-      stats.newByLabel = countByTrack(inserted.map((id) => inbox.works[id]).filter(Boolean));
+      const insertedWorks = inserted.map((id) => inbox.works[id]).filter(Boolean);
+      stats.newByLabel = countByTrack(insertedWorks);
+      // stats.mustRead counts this run's top K, which may hold works stored (and announced) earlier
+      stats.newMustRead = insertedWorks.filter((w) => w.label === "must_read").length;
       inbox.lastRun = lastRun;
     });
     // Only after the merge: a run cancelled before it shows these works again next time

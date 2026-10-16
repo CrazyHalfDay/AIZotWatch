@@ -96,8 +96,8 @@
   <groupbox>
     <label><html:h2>顶刊地学速览</html:h2></label>
     <checkbox native="true" label="单独追踪顶刊中的地学文章（Nature、Science、PNAS 等）" preference="extensions.zotwatch.flagship.enabled"/>
-    <html:p class="zw-hint">这些期刊的文章不按文库相似度筛选，而是比较摘要与「地学领域描述」和各「排除领域」的语义相似度：离任一排除领域更近的不要，达到接受阈值的保留，介于灰区下限和接受阈值之间的交给大模型复核（未启用大模型时全部保留）。结果单独列为「顶刊地学速览」，按发表时间从新到旧排列。</html:p>
-    <html:p class="zw-hint">阈值留空时按向量化服务自动取值：API 模式 0.30 / 0.22（按 DashScope text-embedding-v4 调校）；本地模式只比较字面词汇，取 0.12 / 0.04，效果较粗糙，建议开启大模型复核或改用 DashScope。</html:p>
+    <html:p class="zw-hint">这些期刊的文章不按文库相似度筛选，而是比较摘要与「地学领域描述」和各「排除领域」的语义相似度：离任一排除领域更近的不要，达到接受阈值的保留，介于灰区下限和接受阈值之间的交给大模型复核（未启用大模型时全部保留）。结果单独列为「顶刊地学速览」（每次取最新发表的 N 篇，窗口中按所选排序方式排列）。</html:p>
+    <html:p class="zw-hint">阈值留空时按向量化服务自动取值：API 模式 0.30 / 0.22（按 DashScope text-embedding-v4 调校）；本地模式只比较字面词汇，取 0.12 / 0.04：开启大模型复核时，除明显属于排除领域的文章外都交给大模型判断（请求更多）；不复核时大多数与描述用词不同的地学文章会被漏掉，建议改用 DashScope。</html:p>
     <html:label for="zw-flagship-issns" class="zw-block-label">顶刊 ISSN（逗号或换行分隔，留空用默认）</html:label>
     <html:textarea id="zw-flagship-issns" class="zw-textarea" rows="3" spellcheck="false" preference="extensions.zotwatch.flagship.issns"></html:textarea>
     <html:div class="zw-grid">
@@ -160,7 +160,7 @@
       <html:input type="number" id="zw-llm-topn" min="0" preference="extensions.zotwatch.llm.summaryTopN"/>
     </html:div>
     <checkbox native="true" label="将英文标题翻译为中文" preference="extensions.zotwatch.llm.translateTitles"/>
-    <checkbox native="true" label="为文库研究方向生成主题标签（会把每个方向的代表性标题发送给大模型）" preference="extensions.zotwatch.llm.topicLabels"/>
+    <checkbox native="true" label="为文库研究方向生成主题标签（会把每个方向的代表性标题和常用 Zotero 标签发送给大模型）" preference="extensions.zotwatch.llm.topicLabels"/>
     <html:p class="zw-hint">研究方向来自文库的语义聚类，标签只生成一次并在之后的运行中沿用（文库变化较大时才为新的方向补充标签）；推荐卡片和子笔记会显示论文最接近的研究方向。</html:p>
   </groupbox>
 

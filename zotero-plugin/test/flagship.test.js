@@ -572,6 +572,9 @@ test("the gray zone is accepted when the LLM check is off or the LLM is not conf
   assert.equal(calls, 0);
   const noKey = await engine({ "llm.apiKey": "", "flagship.llmFallback": true }).run();
   assert.equal(noKey.stats.flagship.judged, 0);
+  assert.equal(noKey.stats.flagship.recommended, 4, "the gray zone is accepted");
+  // (the summary step reports the missing key at stage "llm"; the flagship track itself does not fail)
+  assert.ok(!noKey.errors.some((e) => e.stage === "flagship"));
   assert.equal(calls, 0);
 });
 
@@ -652,6 +655,57 @@ test("flagship works keep their status across runs and dismissed ones are not sh
   // Cached candidate vectors are reused: only the anchors are embedded again
   const embeddings = http.calls.filter((c) => c.url.includes("embeddings")).slice(embeddedBefore);
   assert.deepEqual(embeddings.map((c) => JSON.parse(c.body).input[0]), ["mantle subduction isotope"]);
+});
+
+test("in local mode the LLM check judges every article the lexical bands cannot place", async () => {
+  // Typical flagship solid-earth articles without the anchor's words, and a materials one
+  const ARTICLES = [
+    nature("10.1038/q", "Supershear rupture of a continental earthquake doublet", "Seismic waveforms show that the rupture front outran shear waves along the strike-slip fault for two hundred kilometres beneath Anatolia.", "2024-10-08T10:00:00Z"),
+    nature("10.1038/z", "Hadean zircons record early continental crust", "Oxygen and hafnium compositions of detrital zircon grains from the Jack Hills show that evolved crust and liquid water existed four billion years ago.", "2024-10-08T11:00:00Z"),
+    nature("10.1038/m", "Ferroelectric switching in twisted thin films", "Condensed matter and materials physics: ferroelectrics, semiconductors, nanomaterials and thin films with topological and magnetic materials for crystal device structures.", "2024-10-08T12:00:00Z"),
+  ];
+  const judged = [];
+  const llm = (req) => {
+    const papers = [...promptOf(req).matchAll(/^- P(\d+)\n {2}Title: (.*)$/gm)];
+    judged.push(...papers.map(([, , title]) => title));
+    return reply(JSON.stringify({ relevant_ids: papers.filter(([, , title]) => /rupture|zircons/.test(title)).map(([, n]) => `P${n}`) }));
+  };
+  const local = {
+    ...llmPrefs,
+    "embedding.provider": "local",
+    "embedding.apiKey": "",
+    "scoring.minSimilarity": "",
+    // The shipped defaults: anchors, boundary and the local bands
+    "flagship.positiveAnchor": "",
+    "flagship.negativeAnchors": "",
+    "flagship.llmBoundary": "",
+    "flagship.minScore": "",
+    "flagship.grayLow": "",
+  };
+  const { engine, state } = setup({ prefs: local, llm });
+  state.flagship = ARTICLES;
+  const run = await engine().run();
+  assert.deepEqual(run.errors, []);
+  assert.deepEqual(judged, [ARTICLES[0].title[0], ARTICLES[1].title[0]], "everything but the clear materials article goes to the LLM");
+  assert.deepEqual(run.stats.flagship, { candidates: 3, withAbstract: 3, recent: 3, accepted: 0, gray: 2, judged: 2, rejected: 1, recommended: 2 });
+  const works = (await engine().loadInbox()).works;
+  for (const id of ["doi:10.1038/q", "doi:10.1038/z"]) {
+    assert.equal(works[id].label, "flagship", id);
+    assert.equal(works[id].gate.judged, true, id);
+  }
+  assert.ok(!works["doi:10.1038/m"]);
+
+  // Without the LLM check the lexical bands decide alone (hence the advice to use an API embedder)
+  const bandsOnly = setup({ prefs: { ...local, "flagship.llmFallback": false } });
+  bandsOnly.state.flagship = ARTICLES;
+  assert.equal((await bandsOnly.engine().run()).stats.flagship.recommended, 0);
+
+  // An LLM that cannot judge never lets the widened articles in unjudged
+  const broken = setup({ prefs: local, llm: () => ({ status: 401, data: { error: { message: "invalid key" } } }) });
+  broken.state.flagship = ARTICLES;
+  const failed = await broken.engine().run();
+  assert.equal(failed.stats.flagship.recommended, 0);
+  assert.deepEqual(failed.errors.map((e) => e.stage), ["flagship"]);
 });
 
 test("the flagship track is off by default and works in local mode", async () => {
