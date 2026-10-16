@@ -1,8 +1,7 @@
-/* global Zotero, ChromeUtils, Services, document, window */
+/* global Zotero, document */
 
-// Preference pane logic. Most inputs bind to prefs through their `preference`
-// attributes; this script wires up the buttons and the journal whitelist, which
-// is stored in a data file rather than a pref.
+// Zotero settings → ZotWatch: a status summary with buttons that open the
+// ZotWatch main window, where all settings live since 0.3.0.
 //
 // Zotero 7 loads pane scripts into the preferences window, Zotero 8+ into a
 // per-pane sandbox, so markup cannot call into this script through inline
@@ -12,14 +11,7 @@
 var ZotWatchPrefs = {
   initialized: false,
   disposed: false,
-  saveTimer: null,
-
-  LLM_PRESETS: {
-    openrouter: { baseURL: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat" },
-    deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-    kimi: { baseURL: "https://api.moonshot.cn/v1", model: "kimi-k2-turbo-preview" },
-    dashscope: { baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
-  },
+  listener: null,
 
   get api() {
     return Zotero.ZotWatch;
@@ -33,54 +25,21 @@ var ZotWatchPrefs = {
       const el = document.getElementById(id);
       if (el) el.addEventListener("command", () => handler.call(this));
     };
-    on("zw-run", async () => {
-      await this.flushWhitelist();
-      this.api.openRecommendations();
-      this.api.runNow().catch(() => {});
-    });
-    on("zw-test", () => this.show("正在测试连接…", () => this.api.testConnections()));
-    on("zw-status-refresh", () => this.refreshStatus());
-    on("zw-journals-suggest", async () => {
-      await this.flushWhitelist();
-      await this.withWhitelistLocked("正在分析文库期刊（可能需要查询 Crossref）…", async () => {
-        await this.setWhitelist(await this.api.suggestJournals());
-        return "已根据文库生成期刊列表（已合并原有条目）。可手动补充影响因子。";
-      });
-    });
-    on("zw-journals-preset", () =>
-      this.withWhitelistLocked("正在载入…", async () => {
-        await this.setWhitelist(await this.api.loadPresetJournals());
-        return "已载入地学期刊示例列表（来自 AIZotWatch 项目）。";
-      }),
-    );
-    on("zw-journals-import", () => this.importWhitelist());
-    on("zw-reset", () => this.reset());
+    on("zw-open", () => this.api?.openWindow("overview"));
+    on("zw-open-settings", () => this.api?.openWindow("settings"));
+    // Same as Tools → 立即检查新文献: show the recommendations and start a run
+    on("zw-run", () => this.api?.runFromMenu());
 
-    const preset = document.getElementById("zw-llm-preset");
-    if (preset) {
-      preset.addEventListener("command", () => {
-        const p = this.LLM_PRESETS[preset.value];
-        if (!p) return;
-        this.setPref("llm.baseURL", p.baseURL);
-        this.setPref("llm.model", p.model);
-      });
-    }
-
-    const whitelist = document.getElementById("zw-whitelist");
-    if (whitelist) {
-      whitelist.value = this.api.getJournalWhitelist();
-      // Save shortly after typing stops, and immediately when the field loses focus
-      whitelist.addEventListener("input", () => {
-        clearTimeout(this.saveTimer);
-        this.saveTimer = setTimeout(() => this.saveWhitelist(), 800);
-      });
-      whitelist.addEventListener("change", () => this.saveWhitelist());
-    }
+    // Keep the status current while the pane is open
+    this.listener = (event) => {
+      if (["start", "done", "cancelled", "error", "inbox"].includes(event.type)) this.refreshStatus();
+    };
+    this.api?.addListener(this.listener);
   },
 
   /**
    * Zotero also dispatches 'showing' to every pane while the settings search
-   * runs; only scan the library when our pane is the one actually selected.
+   * runs; only read the status when our pane is the one actually selected.
    */
   onShowing() {
     if (document.getElementById("prefs-search")?.value?.trim()) return;
@@ -90,99 +49,42 @@ var ZotWatchPrefs = {
   },
 
   onUnload() {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveWhitelist();
-    }
+    if (this.listener) this.api?.removeListener(this.listener);
+    this.listener = null;
     this.disposed = true;
   },
 
-  setPref(key, value) {
-    Zotero.Prefs.set(`extensions.zotwatch.${key}`, value, true);
+  setText(id, text) {
+    const el = this.disposed ? null : document.getElementById(id);
+    if (el) el.textContent = text;
   },
 
-  saveWhitelist() {
-    this.saveTimer = null;
-    const whitelist = document.getElementById("zw-whitelist");
-    if (!whitelist) return;
-    this.api.setJournalWhitelist(whitelist.value).catch((e) => Zotero.logError(e));
+  /** "2 小时前（2024-10-08 09:30）" */
+  formatWhen(ms, now = Date.now()) {
+    const diff = Math.max(0, now - ms);
+    const relative =
+      diff < 60000 ? "刚刚" : diff < 3600000 ? `${Math.floor(diff / 60000)} 分钟前` : diff < 86400000 ? `${Math.floor(diff / 3600000)} 小时前` : `${Math.floor(diff / 86400000)} 天前`;
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${relative}（${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}）`;
   },
 
-  /** Save edits still waiting for the debounce, so actions see the current list. */
-  async flushWhitelist() {
-    clearTimeout(this.saveTimer);
-    this.saveTimer = null;
-    const whitelist = document.getElementById("zw-whitelist");
-    if (!whitelist) return;
+  async refreshStatus() {
+    if (this.disposed || !this.api) return;
     try {
-      await this.api.setJournalWhitelist(whitelist.value);
+      const view = await this.api.getView();
+      const pending = view.works.filter((w) => w.status === "new").length;
+      const finished = view.lastRun ? view.lastRun.finishedAt || view.lastRun.runAt : 0;
+      let last = finished ? this.formatWhen(finished) : "尚未运行";
+      if (view.running) last = "正在检查…";
+      else if (view.lastError && view.lastError.at > finished) last = `失败：${view.lastError.message}`;
+      this.setText("zw-pending", `${pending} 篇`);
+      this.setText("zw-last", last);
+      this.setText("zw-embedding", this.api.embeddingInfo().label);
     } catch (e) {
+      this.setText("zw-last", `出错：${e.message || e}`);
       Zotero.logError(e);
     }
-  },
-
-  /** Run a task that rewrites the whitelist with the field and its buttons disabled. */
-  async withWhitelistLocked(pending, task) {
-    const ids = ["zw-whitelist", "zw-journals-suggest", "zw-journals-import", "zw-journals-preset"];
-    const elements = ids.map((id) => document.getElementById(id)).filter(Boolean);
-    for (const el of elements) el.disabled = true;
-    try {
-      await this.show(pending, task);
-    } finally {
-      if (!this.disposed) for (const el of elements) el.disabled = false;
-    }
-  },
-
-  async setWhitelist(text) {
-    const whitelist = document.getElementById("zw-whitelist");
-    if (whitelist) whitelist.value = text;
-    await this.api.setJournalWhitelist(text);
-  },
-
-  refreshStatus() {
-    this.show("正在读取状态…", () => this.api.getStatus());
-  },
-
-  async show(pending, task) {
-    const output = () => (this.disposed ? null : document.getElementById("zw-output"));
-    let out = output();
-    if (out) out.textContent = pending;
-    try {
-      const text = await task();
-      out = output();
-      if (out && text) out.textContent = text;
-    } catch (e) {
-      out = output();
-      if (out) out.textContent = `出错：${e.message || e}`;
-      Zotero.logError(e);
-    }
-  },
-
-  async importWhitelist() {
-    const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs");
-    const fp = new FilePicker();
-    fp.init(window, "选择期刊白名单 CSV", fp.modeOpen);
-    fp.appendFilter("CSV", "*.csv");
-    fp.appendFilters(fp.filterAll);
-    if ((await fp.show()) !== fp.returnOK) return;
-    const path = typeof fp.file === "string" ? fp.file : fp.file.path;
-    await this.withWhitelistLocked("正在导入…", async () => {
-      await this.setWhitelist(await Zotero.File.getContentsAsync(path));
-      return `已导入：${path}`;
-    });
-  },
-
-  async reset() {
-    const ok = Services.prompt.confirm(
-      window,
-      "ZotWatch",
-      "将删除向量缓存、聚类结果和全部推荐记录（不会影响 Zotero 文库和期刊列表）。下次运行会重新向量化文库。确定继续吗？",
-    );
-    if (!ok) return;
-    await this.show("正在清除…", async () => {
-      await this.api.resetData();
-      return "已清除 ZotWatch 数据。";
-    });
   },
 };
 

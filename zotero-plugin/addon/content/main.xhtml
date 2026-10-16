@@ -44,6 +44,14 @@
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5v10a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-6.2L10.5 5h-5a2 2 0 0 0-2 2z"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 21.5v-4"/><path d="M9 8V3M15 8V3"/><path d="M17.5 8v4a5.5 5.5 0 0 1-11 0V8z"/></symbol>
     <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17"/><path d="M8 16v-4M12 16V8M16 16v-6"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4"/><path d="M6.6 6.6A16.6 16.6 0 0 0 2.5 12s3.5 6.5 9.5 6.5a9.4 9.4 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m3 3 18 18"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M4 14.5v3a2.5 2.5 0 0 0 2.5 2.5h11a2.5 2.5 0 0 0 2.5-2.5v-3"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9.5h11a5 5 0 0 1 0 10h-4"/><path d="M8 5.5 4 9.5l4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6.5h16"/><path d="M9.5 6.5V4.5h5v2"/><path d="M6 6.5l.9 12.1a2 2 0 0 0 2 1.9h6.2a2 2 0 0 0 2-1.9L18 6.5"/><path d="M10 10.5v6M14 10.5v6"/></symbol>
   </svg>
 
   <div class="shell">
@@ -90,7 +98,12 @@
         </div>
         <div class="page-actions-bar">
           <!-- Page-specific actions; only the active page's group is shown -->
-          <div class="page-actions" data-page="overview" hidden="hidden"></div>
+          <div class="page-actions" data-page="overview" hidden="hidden">
+            <button id="overview-test" type="button" class="btn" title="测试向量化、大模型、Crossref 和已填写的 API Key">
+              <svg xmlns="http://www.w3.org/2000/svg" class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
+              <span>测试连接</span>
+            </button>
+          </div>
           <div class="page-actions" data-page="inbox" hidden="hidden"></div>
           <div class="page-actions" data-page="settings" hidden="hidden"></div>
           <button id="run" type="button" class="btn primary" title="立即检查新文献">
@@ -121,14 +134,8 @@
         <!-- 概览: dashboard (overview.js) -->
         <section class="page" data-page="overview" id="page-overview" hidden="hidden">
           <div class="page-inner">
-            <div id="overview-root" class="overview">
-              <div class="empty">
-                <span class="empty-icon"><svg xmlns="http://www.w3.org/2000/svg" class="icon" aria-hidden="true"><use href="#i-chart"/></svg></span>
-                <p class="empty-title">概览即将上线</p>
-                <p class="empty-text">这里将汇总待查看的推荐、最近几次运行和各数据源的状态。</p>
-                <a class="btn" href="#inbox">查看推荐</a>
-              </div>
-            </div>
+            <!-- Built by overview.js from api.getDashboard() -->
+            <div id="overview-root" class="overview" aria-busy="true"></div>
           </div>
         </section>
 
@@ -177,6 +184,7 @@
         <!-- 设置: settings sections (settings.js) -->
         <section class="page" data-page="settings" id="page-settings" hidden="hidden">
           <div class="page-inner settings-inner">
+            <!-- Built by settings.js: the section index and one view per section -->
             <div id="settings-root" class="settings"></div>
           </div>
         </section>

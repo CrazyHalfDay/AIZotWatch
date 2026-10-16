@@ -51,3 +51,14 @@ export function embeddingHandler(counter) {
     return { data: body.input.map((t, index) => ({ index, embedding: topicVector(t) })).reverse() };
   };
 }
+
+/** Pref keys the 0.2.0 settings pane bound; all must stay editable in the main window. */
+export const PREFS_0_2_0 = `abstracts.crossref abstracts.elsevierKey abstracts.springerKey embedding.apiKey embedding.baseURL
+  embedding.model embedding.provider flagship.enabled flagship.grayLow flagship.issns flagship.llmBoundary
+  flagship.llmFallback flagship.maxResults flagship.minScore flagship.negativeAnchors flagship.positiveAnchor
+  followed.authors followed.daysBack followed.enabled journals.autoFromLibrary journals.autoTopN llm.apiKey
+  llm.baseURL llm.enabled llm.model llm.summaryTopN llm.topicLabels llm.translateTitles output.collection
+  output.summaryNote output.tag output.useTranslator schedule.autoRun schedule.intervalHours
+  scoring.excludeKeywords scoring.includeKeywords scoring.maxPreprintRatio scoring.minSimilarity scoring.recentDays
+  scoring.requireAbstract scoring.topK sources.arxiv.categories sources.arxiv.enabled sources.crossref.daysBack
+  sources.crossref.enabled sources.crossref.mailto sources.eartharxiv.enabled sources.openalexAbstracts`.split(/\s+/);

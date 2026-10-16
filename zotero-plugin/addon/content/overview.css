@@ -1,5 +1,789 @@
-/* 概览 page (dashboard). */
+/* 概览 page (overview.js): the dashboard grid, stat tiles, charts, tooltips
+   and status lists. Uses the tokens and components of main.css; Firefox 115
+   compatible (no nesting, :has() or light-dark()). */
 
+/* --------------------------------------------------------------- layout */
+
+/* 12 columns from 1000px, a two-up layout down to 760px, one column below */
 .overview {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  gap: 16px;
+  transition: opacity 150ms ease-out;
+}
+
+.overview > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+/* Reloading keeps the previous render, dimmed (no skeleton flash) */
+.overview.refreshing {
+  opacity: 0.6;
+}
+
+@media (min-width: 1000px) {
+  .overview > .ov-hero {
+    grid-column: span 4;
+  }
+
+  .overview > .ov-kpis,
+  .overview > .ov-runs {
+    grid-column: span 8;
+  }
+
+  .overview > .ov-status {
+    grid-column: span 4;
+  }
+
+  .overview > .ov-funnel,
+  .overview > .ov-topics {
+    grid-column: span 7;
+  }
+
+  .overview > .ov-sources,
+  .overview > .ov-followed {
+    grid-column: span 5;
+  }
+}
+
+@media (min-width: 760px) and (max-width: 999px) {
+  .overview > .ov-hero {
+    grid-column: span 5;
+  }
+
+  .overview > .ov-kpis {
+    grid-column: span 7;
+  }
+
+  .overview > .ov-status,
+  .overview > .ov-sources,
+  .overview > .ov-topics,
+  .overview > .ov-followed {
+    grid-column: span 6;
+  }
+}
+
+.ov-loading {
+  margin: 72px auto;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.ov-first .callout-actions {
+  align-self: center;
+}
+
+/* ----------------------------------------------------------------- cards */
+
+.ov-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ov-card-header {
+  align-items: flex-start;
+}
+
+.ov-heading {
+  min-width: 0;
+}
+
+.ov-heading .card-caption {
+  margin-top: 1px;
+}
+
+.ov-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin: -3px -8px 0 0;
+}
+
+.ov-card-body {
+  flex: 1;
+  min-width: 0;
+  padding-top: 12px;
+}
+
+.ov-card .empty.compact {
+  max-width: 340px;
+  margin: 14px auto 18px;
+}
+
+.ov-card .empty-title {
+  font-size: var(--fs);
+}
+
+/* ------------------------------------------------------------ stat tiles */
+
+.ov-hero {
+  gap: 6px;
+  padding: 16px 20px;
+}
+
+.hero-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+/* The page's one hero figure: proportional digits at display size */
+.hero-value {
+  font-size: var(--fs-hero);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.hero-share {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin: 6px 0 2px;
+}
+
+.hero-seg {
+  flex: 1 1 0;
+  min-width: 4px;
+  background: var(--ink-3);
+}
+
+.hero-seg:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.hero-seg:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.hero-seg:only-child {
+  border-radius: 3px;
+}
+
+.hero-seg.personal {
+  background: var(--t-personal);
+}
+
+.hero-seg.flagship {
+  background: var(--t-flagship);
+}
+
+.hero-seg.followed {
+  background: var(--t-followed);
+}
+
+.hero-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+
+.hero-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.hero-note {
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+
+.tile-link {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 6px;
+  border-radius: 4px;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.tile-link:hover {
+  text-decoration: underline;
+}
+
+.tile-link .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform var(--dur);
+}
+
+.tile-link:hover .icon {
+  transform: translateX(2px);
+}
+
+.ov-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.ov-kpi {
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px 18px;
+}
+
+.ov-kpi .tile-value {
+  margin: 2px 0 1px;
+}
+
+.ov-kpi .tile-label,
+.ov-kpi .tile-caption {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 519px) {
+  .ov-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------- charts */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--ink-3);
+}
+
+.legend-swatch.personal,
+.tip-key.personal {
+  background: var(--t-personal);
+}
+
+.legend-swatch.flagship,
+.tip-key.flagship {
+  background: var(--t-flagship);
+}
+
+.legend-swatch.followed,
+.tip-key.followed {
+  background: var(--t-followed);
+}
+
+/* The SVG text size follows the container (overview.js measures it) */
+.chart {
+  position: relative;
+  font-size: var(--fs-sm);
+}
+
+.chart[data-chart="runs"] {
+  font-size: var(--fs-xs);
+}
+
+.chart-plot {
+  position: relative;
+}
+
+.chart-svg {
   display: block;
+  overflow: visible;
+  font-family: var(--font);
+}
+
+.chart-svg text {
+  fill: var(--ink-2);
+}
+
+.chart-svg .tick,
+.chart-svg .xlabel {
+  fill: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-svg .grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.chart-svg .baseline {
+  stroke: color-mix(in srgb, var(--ink-3) 65%, transparent);
+  stroke-width: 1;
+}
+
+.chart-svg .seg.personal {
+  fill: var(--t-personal);
+}
+
+.chart-svg .seg.flagship {
+  fill: var(--t-flagship);
+}
+
+.chart-svg .seg.followed {
+  fill: var(--t-followed);
+}
+
+.chart-svg .bar {
+  fill: var(--accent);
+}
+
+.chart-svg .cap,
+.chart-svg .value {
+  fill: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-svg .note {
+  fill: var(--ink-3);
+  font-weight: 400;
+}
+
+/* Hover / focus band behind a mark; the transparent hit area is larger than the mark */
+.chart-svg .hl {
+  fill: transparent;
+  transition: fill var(--dur);
+}
+
+.chart-svg .active .hl {
+  fill: var(--wash);
+}
+
+.chart-svg .focused .hl {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.chart-svg .hit {
+  fill: transparent;
+  outline: none;
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 3;
+  width: max-content;
+  min-width: 120px;
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--overlay-shadow), 0 0 0 1px var(--hairline);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.tip-head {
+  margin-bottom: 4px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.tip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Line key (not a box) in the series colour */
+.tip-key {
+  flex: none;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.tip-value {
+  min-width: 2.2em;
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.tip-row.plain .tip-value {
+  min-width: 0;
+}
+
+.tip-name {
+  color: var(--ink-2);
+}
+
+.tip-foot {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-2);
+}
+
+.chart-toggle .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.chart-table .table {
+  font-size: var(--fs-sm);
+}
+
+.chart-table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Flagship mini funnel under the main funnel */
+.ov-mini {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+}
+
+.ov-mini-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ov-steps {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-step {
+  white-space: nowrap;
+}
+
+.ov-step strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-step-arrow {
+  margin: 0 8px 0 6px;
+  color: var(--ink-3);
+}
+
+.ov-step-note {
+  color: var(--ink-3);
+}
+
+/* ----------------------------------------------------------- run status */
+
+.ov-health {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ov-health-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--wash-strong);
+  color: var(--ink-3);
+}
+
+.ov-health-icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ov-health-icon.good {
+  background: color-mix(in srgb, var(--good) 13%, transparent);
+  color: var(--good);
+}
+
+.ov-health-icon.warning {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: color-mix(in srgb, var(--warning) 80%, var(--ink));
+}
+
+.ov-health-icon.critical {
+  background: color-mix(in srgb, var(--critical) 13%, transparent);
+  color: var(--critical);
+}
+
+.ov-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 14px;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.ov-facts dt {
+  color: var(--ink-3);
+}
+
+.ov-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ov-inline-link {
+  margin-left: 8px;
+  text-decoration: none;
+}
+
+.ov-inline-link:hover {
+  text-decoration: underline;
+}
+
+.ov-problems {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.ov-subhead {
+  margin-bottom: 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.ov-problem-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: var(--fs-sm);
+}
+
+.ov-problem > .dot {
+  margin-top: 0.5em;
+}
+
+.ov-problem-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ov-problem-origin {
+  margin-right: 6px;
+  font-weight: 500;
+}
+
+.ov-problem-message {
+  color: var(--ink-2);
+}
+
+.ov-more {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+}
+
+/* ------------------------------------------------- lists (sources, authors) */
+
+.ov-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.ov-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ov-row:last-child {
+  padding-bottom: 0;
+}
+
+.ov-row > .dot {
+  margin: 0.55em 4px 0;
+}
+
+.ov-row-icon {
+  display: grid;
+  place-items: center;
+  height: 1.5em;
+  color: var(--ink-3);
+}
+
+.ov-row-icon .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.ov-row-icon.good {
+  color: var(--good);
+}
+
+.ov-row-icon.warning {
+  color: color-mix(in srgb, var(--warning) 80%, var(--ink));
+}
+
+.ov-row-icon.critical {
+  color: var(--critical);
+}
+
+.ov-row-main {
+  min-width: 0;
+}
+
+.ov-row-title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.ov-row-detail {
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.ov-row-count {
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ov-row-count.zero {
+  color: var(--ink-3);
+}
+
+/* Data sources: name + detail, status (dot + label), last-run count */
+.ov-source {
+  display: grid;
+  /* Fixed status and count columns keep the dots and numbers aligned across rows */
+  grid-template-columns: minmax(0, 1fr) 4.8em 4.6em;
+  align-items: baseline;
+  column-gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.ov-source:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ov-source:last-child {
+  padding-bottom: 0;
+}
+
+.ov-source-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-source-name {
+  font-weight: 500;
+}
+
+.ov-source-detail {
+  margin-left: 8px;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+}
+
+.ov-source-status {
+  font-size: var(--fs-xs);
+}
+
+.ov-source-count {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.ov-source-error {
+  grid-column: 1 / -1;
+  color: var(--danger-ink);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.ov-source.off .ov-source-name {
+  color: var(--ink-2);
+}
+
+.ov-error,
+.ov-error-line {
+  color: var(--danger-ink);
+}
+
+.ov-id .mono {
+  font-size: var(--fs-xs);
+}
+
+.ov-target {
+  margin-left: 8px;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.ov-conn .ov-status-label {
+  color: var(--ink-2);
+}
+
+.ov-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
 }

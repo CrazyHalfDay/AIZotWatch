@@ -14,7 +14,7 @@ import vm from "node:vm";
 
 import { parseXml } from "../src/core/xml.js";
 import { connectionLine, nextRunAt, normalizePage } from "../src/zotero/addon.js";
-import { embeddingHandler, mockHttp } from "./helpers.js";
+import { PREFS_0_2_0, embeddingHandler, mockHttp } from "./helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Values created inside the VM have foreign prototypes; compare them structurally
@@ -578,6 +578,9 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.equal(dash.pending.total, view.works.filter((w) => w.status === "new").length);
   assert.equal(dash.pending.personal + dash.pending.flagship + dash.pending.followed, dash.pending.total);
   assert.equal(dash.added, 0);
+  // Added works stay at least 60 days (the 已加入 tile); the funnel labels follow the filters
+  assert.equal(dash.addedDays, 60);
+  assert.deepEqual(plain(dash.scoring), { recentDays: 7, requireAbstract: true });
   assert.equal(dash.lastRun.runId, result.runId);
   assert.equal(dash.history.length, 1);
   assert.deepEqual(plain(dash.topics), []);
@@ -590,6 +593,7 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.deepEqual(plain(crossrefSource), { key: "crossref", name: "Crossref", enabled: true, count: 4, detail: "1 个期刊", error: null });
   assert.equal(dash.sources.find((s) => s.key === "llm").detail, "未启用");
   assert.equal(dash.dataDir, join(dataDir, "zotwatch"));
+  assert.equal(addon.getDataDir(), dash.dataDir);
   assert.deepEqual(plain(dash.schedule), plain(view.schedule));
 
   // Helpers for the settings page
@@ -1078,58 +1082,75 @@ test("preference pane initialises from Zotero's events inside a sandbox", async 
   const code = readFileSync(join(addonDir, "content", "preferences.js"), "utf8");
   const docListeners = [];
   const elements = new Map();
-  const el = (id, props = {}) => {
-    const node = { id, listeners: {}, textContent: "", value: "", ...props, addEventListener(type, fn) {
+  const el = (id) => {
+    const node = { id, listeners: {}, textContent: "", addEventListener(type, fn) {
       (this.listeners[type] ||= []).push(fn);
     } };
     elements.set(id, node);
     return node;
   };
   const rootEl = el("zw-prefs-root");
-  el("zw-output");
-  const whitelist = el("zw-whitelist");
-  for (const id of ["zw-run", "zw-test", "zw-status-refresh", "zw-journals-suggest", "zw-journals-preset", "zw-journals-import", "zw-reset", "zw-llm-preset"]) el(id);
-  const saved = [];
+  for (const id of ["zw-pending", "zw-last", "zw-embedding", "zw-open", "zw-open-settings", "zw-run"]) el(id);
+  const calls = [];
+  const addonListeners = new Set();
+  const now = Date.now();
+  const view = {
+    works: [{ status: "new" }, { status: "new" }, { status: "added" }],
+    lastRun: { runAt: now - 3 * 3600000, finishedAt: now - 2 * 3600000 - 60000 },
+    running: false,
+    lastError: null,
+  };
   const api = {
-    getJournalWhitelist: () => "issn,title\n0016-7037,GCA",
-    setJournalWhitelist: async (text) => saved.push(text),
-    getStatus: async () => "状态：正常",
+    getView: async () => {
+      calls.push(["getView"]);
+      return view;
+    },
+    embeddingInfo: () => ({ label: "阿里云 DashScope · text-embedding-v4" }),
+    openWindow: (page) => calls.push(["openWindow", page]),
+    runFromMenu: () => calls.push(["runFromMenu"]),
+    addListener: (fn) => addonListeners.add(fn),
+    removeListener: (fn) => addonListeners.delete(fn),
   };
   const document = {
     addEventListener: (type, fn, capture) => docListeners.push({ type, fn, capture }),
     getElementById: (id) => elements.get(id) || null,
   };
   // Zotero 8+: scripts run in their own global, so nothing is visible to inline handlers
-  const sandbox = vm.createContext({ document, Zotero: { ZotWatch: api, Prefs: { set() {} }, logError() {} }, setTimeout, clearTimeout });
+  const sandbox = vm.createContext({ document, Zotero: { ZotWatch: api, logError() {} } });
   vm.runInContext(code, sandbox);
   const fire = (type, target) => docListeners.filter((l) => l.type === type).forEach((l) => l.fn({ type, target }));
+  const tick = () => new Promise((r) => setTimeout(r, 0));
   assert.ok(docListeners.every((l) => l.capture === true), "capture listeners see non-bubbling pane events");
 
   fire("load", { id: "something-else" });
-  assert.equal(whitelist.value, "");
+  assert.equal(addonListeners.size, 0);
   fire("load", rootEl);
-  assert.equal(whitelist.value, "issn,title\n0016-7037,GCA");
-  assert.equal(elements.get("zw-output").textContent, "", "no library scan until the pane is shown");
+  assert.equal(addonListeners.size, 1, "the pane follows runs while it is open");
+  assert.deepEqual(calls, [], "nothing is read until the pane is shown");
   fire("showing", rootEl);
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(elements.get("zw-output").textContent, "状态：正常");
+  await tick();
+  assert.equal(elements.get("zw-pending").textContent, "2 篇");
+  assert.match(elements.get("zw-last").textContent, /^2 小时前（\d{4}-\d{2}-\d{2} \d{2}:\d{2}）$/);
+  assert.equal(elements.get("zw-embedding").textContent, "阿里云 DashScope · text-embedding-v4");
 
-  whitelist.value = "edited";
-  whitelist.listeners.input[0]();
+  // The buttons open the main window (overview / settings) or start a run like the Tools menu
+  for (const id of ["zw-open", "zw-open-settings", "zw-run"]) elements.get(id).listeners.command[0]();
+  assert.deepEqual(calls.slice(1), [["openWindow", "overview"], ["openWindow", "settings"], ["runFromMenu"]]);
+
+  // Run events refresh the status
+  view.running = true;
+  [...addonListeners][0]({ type: "start" });
+  await tick();
+  assert.equal(elements.get("zw-last").textContent, "正在检查…");
+  view.running = false;
+  view.lastError = { message: "网络连接失败", at: now };
+  [...addonListeners][0]({ type: "error", message: "网络连接失败" });
+  await tick();
+  assert.equal(elements.get("zw-last").textContent, "失败：网络连接失败");
+
   fire("unload", rootEl);
-  assert.deepEqual(saved, ["edited"], "pending edits are saved on unload");
+  assert.equal(addonListeners.size, 0, "the listener is removed when the pane closes");
 });
-
-// Pref keys the 0.2.0 settings pane bound; all must stay editable in the main window
-const PREFS_0_2_0 = `abstracts.crossref abstracts.elsevierKey abstracts.springerKey embedding.apiKey embedding.baseURL
-  embedding.model embedding.provider flagship.enabled flagship.grayLow flagship.issns flagship.llmBoundary
-  flagship.llmFallback flagship.maxResults flagship.minScore flagship.negativeAnchors flagship.positiveAnchor
-  followed.authors followed.daysBack followed.enabled journals.autoFromLibrary journals.autoTopN llm.apiKey
-  llm.baseURL llm.enabled llm.model llm.summaryTopN llm.topicLabels llm.translateTitles output.collection
-  output.summaryNote output.tag output.useTranslator schedule.autoRun schedule.intervalHours
-  scoring.excludeKeywords scoring.includeKeywords scoring.maxPreprintRatio scoring.minSimilarity scoring.recentDays
-  scoring.requireAbstract scoring.topK sources.arxiv.categories sources.arxiv.enabled sources.crossref.daysBack
-  sources.crossref.enabled sources.crossref.mailto sources.eartharxiv.enabled sources.openalexAbstracts`.split(/\s+/);
 
 const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "settings.js"];
 
@@ -1141,12 +1162,17 @@ const collectIds = (node, out) => {
   return out;
 };
 
-/** data-pref keys bound by the main window: in its markup or set from its scripts. */
+/**
+ * data-pref keys bound by the main window: in its markup, set from its
+ * scripts, or listed in the settings page's FIELDS table (`pref: "<key>"`,
+ * from which settings.js builds the controls; test/settings.test.js checks
+ * the rendered data-pref attributes).
+ */
 function mainWindowPrefKeys() {
   const sources = ["addon/content/main.xhtml", ...MAIN_SCRIPTS.map((f) => `addon/content/${f}`)].map((f) => readFileSync(join(root, f), "utf8"));
   const keys = new Set();
   for (const text of sources) {
-    for (const [, key] of text.matchAll(/data-pref(?:=|"?\s*:\s*)"([\w.]+)"/g)) keys.add(key);
+    for (const [, key] of text.matchAll(/(?:data-pref(?:=|"?\s*:\s*)|\bpref:\s*)"([\w.]+)"/g)) keys.add(key);
   }
   return keys;
 }
@@ -1202,12 +1228,11 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   );
   const prefIds = collectIds(prefDoc, new Set());
   const prefJs = readFileSync(join(root, "addon/content/preferences.js"), "utf8");
-  for (const [, id] of prefJs.matchAll(/(?:on|getElementById)\("(zw-[\w-]+)"/g)) assert.ok(prefIds.has(id), `preferences.xhtml lacks #${id}`);
-
-  // Every preference bound in the pane has a default in prefs.js
-  for (const [, key] of prefXhtml.matchAll(/preference="([\w.]+)"/g)) {
-    assert.ok(prefsJs.includes(`pref("${key}",`), `no default for ${key}`);
-  }
+  const paneIds = [...prefJs.matchAll(/(?:on|getElementById|setText)\("(zw-[\w-]+)"/g)].map(([, id]) => id);
+  assert.ok(paneIds.length >= 6);
+  for (const id of paneIds) assert.ok(prefIds.has(id), `preferences.xhtml lacks #${id}`);
+  // Since 0.3.0 the pane only shows a status summary: every setting lives in the main window
+  assert.doesNotMatch(prefXhtml, /\spreference=/, "no preference bindings remain in the Zotero settings pane");
 
   // Both locales define every Fluent message used by the menus
   for (const locale of ["zh-CN", "en-US"]) {
@@ -1216,10 +1241,14 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   }
 });
 
-test("every setting of the 0.2.0 settings pane is editable in the main window", { todo: "settings page (built after the shell)" }, () => {
+test("every setting of the 0.2.0 settings pane is editable in the main window", () => {
   const bound = mainWindowPrefKeys();
   const missing = PREFS_0_2_0.filter((key) => !bound.has(key));
   assert.deepEqual(missing, []);
+  // The settings page also binds a few advanced prefs that had no control before
+  for (const key of ["inbox.retentionDays", "embedding.dimensions", "scoring.thresholdMode", "scoring.temporalHalflifeDays"]) {
+    assert.ok(bound.has(key), `${key} is editable`);
+  }
 });
 
 test("window routes and the run schedule", () => {

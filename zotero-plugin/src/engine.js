@@ -38,6 +38,8 @@ const FOLLOWED_SEEN_GRACE_DAYS = 60;
 const TOPIC_LABELS_FILE = "cluster-labels.json";
 // Finished runs kept in inbox.history for the dashboard (newest last)
 export const HISTORY_LIMIT = 30;
+// Added / dismissed works are remembered at least this long (so they are not recommended again)
+export const HANDLED_MIN_DAYS = 60;
 // One write queue per storage backend, shared by all engine instances
 const inboxLocks = new WeakMap();
 
@@ -721,7 +723,7 @@ export class ZotWatchEngine {
         w.statusAt = runAt;
       }
       if (w.status === "new" && runAt - w.lastSeen > retention) delete inbox.works[id];
-      else if (w.status !== "new" && runAt - (w.statusAt || w.lastSeen) > Math.max(retention, 60 * DAY)) delete inbox.works[id];
+      else if (w.status !== "new" && runAt - (w.statusAt || w.lastSeen) > Math.max(retention, HANDLED_MIN_DAYS * DAY)) delete inbox.works[id];
     }
     return inserted;
   }

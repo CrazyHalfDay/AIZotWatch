@@ -20,7 +20,8 @@
   --field: #ffffff;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  --ink-3: #898781;
+  /* Muted text: a step darker than the #898781 axis grey so captions keep 4.5:1 on cards */
+  --ink-3: #74726d;
   --hairline: rgba(11, 11, 11, 0.1);
   --hairline-strong: rgba(11, 11, 11, 0.17);
   --wash: rgba(11, 11, 11, 0.05);
@@ -30,7 +31,9 @@
   --accent-ink: #ffffff;
   --accent-text: #1f63b8;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
-  --accent-hover: color-mix(in srgb, var(--accent) 88%, #000000);
+  /* Fills that carry white text (primary button, 必读, counts): a deeper accent for >= 4.5:1 */
+  --accent-fill: #2670cc;
+  --accent-hover: color-mix(in srgb, var(--accent-fill) 88%, #000000);
 
   /* Track colours (categorical slots 1-3); colour follows the entity everywhere */
   --t-personal: #2a78d6;
@@ -75,7 +78,8 @@
     --grid: #2c2c2a;
     --accent: #3987e5;
     --accent-text: #8ab8f2;
-    --accent-hover: color-mix(in srgb, var(--accent) 86%, #ffffff);
+    --accent-fill: #2f74d0;
+    --accent-hover: color-mix(in srgb, var(--accent-fill) 90%, #ffffff);
     --t-personal: #3987e5;
     --t-flagship: #d95926;
     --t-followed: #199e70;
@@ -282,7 +286,7 @@ p {
   min-width: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-ink);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -303,7 +307,7 @@ p {
 .subnav-item {
   display: block;
   padding: 4px 9px;
-  border-radius: 5px;
+  border-radius: var(--r-ctl);
   color: var(--ink-2);
   font-size: var(--fs-sm);
   text-decoration: none;
@@ -376,11 +380,11 @@ p {
   min-width: 0;
 }
 
+/* Page titles are CJK: never letter-spaced */
 .page-title {
   font-size: var(--fs-xl);
   font-weight: 600;
   line-height: 1.25;
-  letter-spacing: -0.01em;
 }
 
 .page-subtitle {
@@ -530,14 +534,20 @@ p {
     padding: 0;
   }
 
+  /* Notification badge on the icon's top-right corner, cut out from it by a ring */
   .nav-count {
     position: absolute;
-    top: 1px;
-    right: -3px;
+    top: 3px;
+    left: 21px;
     min-width: 16px;
     padding: 0 4px;
     line-height: 15px;
     font-size: calc(var(--fs) * 0.75);
+    box-shadow: 0 0 0 2px var(--sidebar);
+  }
+
+  .nav-item[aria-current="page"] .nav-count {
+    box-shadow: 0 0 0 2px var(--surface);
   }
 
   .sidebar-footer {
@@ -600,8 +610,8 @@ p {
 }
 
 .btn.primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--accent-ink);
 }
 
@@ -977,7 +987,7 @@ p {
 
 /* Priority badges: 必读 is the only filled badge */
 .badge.must {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-ink);
   font-weight: 600;
 }

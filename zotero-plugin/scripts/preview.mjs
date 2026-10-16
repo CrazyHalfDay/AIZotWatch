@@ -13,6 +13,8 @@
 //   --schemes light,dark        --sizes 1120x820,820x700
 //   --states default,running,error,empty                 extra states (light, first size only)
 //   --styleguide                also capture the shared components (main.css)
+//   --script <file.mjs>         run its default export `async (page, {route, scheme, size})`
+//                               before each screenshot (e.g. to type into fields)
 //
 // Exits with status 1 on any page error, console error or XML parse error.
 
@@ -42,7 +44,7 @@ const TYPES = {
 // ------------------------------------------------------------------ args
 
 function parseArgs(argv) {
-  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], styleguide: false };
+  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], styleguide: false, script: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const list = () => argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
@@ -51,6 +53,7 @@ function parseArgs(argv) {
     else if (arg === "--sizes") opts.sizes = list();
     else if (arg === "--states") opts.states = list();
     else if (arg === "--styleguide") opts.styleguide = true;
+    else if (arg === "--script") opts.script = resolve(argv[++i]);
     else if (!arg.startsWith("--")) opts.out = resolve(arg);
     else throw new Error(`Unknown option ${arg}`);
   }
@@ -118,7 +121,8 @@ async function coreBundle() {
     write: false,
     logLevel: "warning",
   });
-  return result.outputFiles[0].text;
+  // Init scripts may run inside a function: publish the bundle on window explicitly
+  return `${result.outputFiles[0].text}\nwindow.ZotWatchPreviewCore = ZotWatchPreviewCore;\n`;
 }
 
 // ------------------------------------------------------------------ mock
@@ -236,6 +240,7 @@ function installMock({ fixtures, defaults, state }) {
     async revealDataDir() {
       return true;
     },
+    getDataDir: () => data.dashboard.dataDir,
     parseFollowedAuthors: (text) => core.parseFollowedAuthors(text),
     summarizeWhitelist: (text) => core.summarizeWhitelist(text),
     getAutoValues: () => core.autoValues(prefs.get(`${PREFIX}embedding.provider`)),
@@ -334,6 +339,7 @@ async function main() {
   const core = await coreBundle();
   const executablePath = process.env.CHROMIUM || "/opt/pw-browsers/chromium";
   const browser = await chromium.launch(existsSync(executablePath) ? { executablePath } : {});
+  const prepare = opts.script ? (await import(pathToFileURL(opts.script).href)).default : null;
   const problems = [];
   const shots = [];
 
@@ -354,7 +360,12 @@ async function main() {
     const parseError = await page.evaluate(() => !!document.getElementsByTagNameNS("*", "parsererror").length || document.documentElement.localName === "parsererror");
     if (parseError) problems.push(`${label}: XML parse error in main.xhtml`);
     await page.waitForSelector("html[data-ready]", { timeout: 10000 }).catch(() => problems.push(`${label}: the window never became ready`));
+    if (route.startsWith("overview")) {
+      // The dashboard loads after the shell (api.getDashboard()); the styleguide replaces it once loaded
+      await page.waitForSelector('#overview-root[aria-busy="false"]', { timeout: 10000 }).catch(() => problems.push(`${label}: the overview never loaded`));
+    }
     if (styleguide) await page.evaluate(renderStyleguide);
+    if (prepare) await prepare(page, { route, scheme, size, state });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(250);
     const file = join(opts.out, `${label}.png`);
@@ -370,7 +381,7 @@ async function main() {
       }
     }
     for (const state of opts.states.filter((s) => s !== "default")) {
-      for (const route of state === "empty" ? ["overview", "inbox"] : ["inbox"]) {
+      for (const route of ["overview", "inbox"]) {
         await capture({ route, scheme: opts.schemes[0], size: opts.sizes[0], state });
       }
     }

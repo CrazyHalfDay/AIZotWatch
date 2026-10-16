@@ -31,6 +31,8 @@ var ZotWatchInbox = (() => {
     ["relevance_note", "相关性"],
   ];
   const TABS = ["new", "added", "dismissed"];
+  // Embedding services as the header names them (as on the overview)
+  const EMBEDDING_NAMES = { local: "本地模式", dashscope: "阿里云 DashScope", voyage: "Voyage AI", openai: "OpenAI 兼容接口" };
 
   const state = {
     view: null,
@@ -99,7 +101,7 @@ var ZotWatchInbox = (() => {
     } else {
       parts.push("尚未运行");
     }
-    parts.push(view.provider === "local" ? "向量化：本地模式" : `向量化：${view.provider}`);
+    parts.push(`向量化：${EMBEDDING_NAMES[view.provider] || view.provider || "本地模式"}`);
     return parts.join(" · ");
   }
 

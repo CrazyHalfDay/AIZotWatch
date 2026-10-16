@@ -169,7 +169,7 @@ test("the all view groups works into track sections with counts", () => {
   // Sorted by score within each section; followed works (score 0) newest first
   assert.deepEqual(cardTitles(nodes), ["Personal top", "Personal second", "Flagship article", "Followed newer", "Followed older"]);
 
-  assert.match(run("ZotWatchInbox.subtitle(__view)"), /抓取 40 篇，推荐 2 篇（新增 3） · 顶刊 1 篇 · 关注作者 2 篇 · 向量化：dashscope/);
+  assert.match(run("ZotWatchInbox.subtitle(__view)"), /抓取 40 篇，推荐 2 篇（新增 3） · 顶刊 1 篇 · 关注作者 2 篇 · 向量化：阿里云 DashScope/);
   assert.equal($("count-new").textContent, "5");
   assert.equal($("count-dismissed").textContent, "1");
   assert.equal($("inbox-filters").hidden, false);

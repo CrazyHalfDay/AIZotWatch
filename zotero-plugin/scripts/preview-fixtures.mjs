@@ -151,6 +151,8 @@ export function createFixtures(now = Date.now()) {
       mustRead: pendingWorks.filter((w) => w.label === "must_read").length,
     },
     added: works.filter((w) => w.status === "added").length,
+    addedDays: 60,
+    scoring: { recentDays: 7, requireAbstract: true },
     lastRun,
     lastError: null,
     history,
@@ -172,7 +174,7 @@ export function createFixtures(now = Date.now()) {
       enabled: true,
       daysBack: 60,
       authors: followedAuthors.map((a) => ({ ...a, pending: pendingWorks.filter((w) => (w.followedAuthors || []).includes(a.name)).length })),
-      invalid: ["Cin-Ty Lee（没有 ORCID）"],
+      invalid: ["张伟（没有 ORCID）"],
     },
     flagship: { enabled: true, issnCount: 12, stats: lastRun.stats.flagship },
     journals: { count: 52, withImpactFactor: 47, autoFromLibrary: true, error: null },
@@ -209,7 +211,7 @@ export function createFixtures(now = Date.now()) {
     "0278-7407,Tectonics,GEOSCIENCES,4.2",
   ].join("\n");
 
-  return { view, dashboard, connections, whitelist, prefs: { "embedding.provider": "dashscope", "embedding.apiKey": "sk-preview", "llm.enabled": true, "llm.apiKey": "sk-preview", "followed.enabled": true, "followed.authors": "汪在聪, 0000-0002-3584-1673\nJay J. Ague, https://orcid.org/0000-0001-8408-0279\nCin-Ty Lee（没有 ORCID）", "flagship.enabled": true, "sources.arxiv.enabled": true } };
+  return { view, dashboard, connections, whitelist, prefs: { "embedding.provider": "dashscope", "embedding.apiKey": "sk-preview", "llm.enabled": true, "llm.apiKey": "sk-preview", "followed.enabled": true, "followed.authors": "汪在聪, 0000-0002-3584-1673\nJay J. Ague, https://orcid.org/0000-0001-8408-0279\nCin-Ty Lee, https://openalex.org/A5023888391\n张伟（没有 ORCID）", "flagship.enabled": true, "sources.arxiv.enabled": true } };
 }
 
 /** A fresh install: nothing has run yet. */
@@ -233,7 +235,18 @@ export function createEmptyFixtures(now = Date.now()) {
       clusters: null,
       followed: { enabled: false, daysBack: 60, authors: [], invalid: [] },
       flagship: { enabled: false, issnCount: 12, stats: null },
-      sources: full.dashboard.sources.map((s) => ({ ...s, count: null, error: null })),
+      // Default settings of a fresh install, before the first run
+      sources: [
+        { key: "crossref", name: "Crossref", enabled: true, count: null, detail: null, error: null },
+        { key: "flagship", name: "顶刊", enabled: false, count: null, detail: "12 个 ISSN", error: null },
+        { key: "arxiv", name: "arXiv", enabled: false, count: null, detail: "physics.geo-ph, astro-ph.EP", error: null },
+        { key: "eartharxiv", name: "EarthArXiv", enabled: false, count: null, detail: null, error: null },
+        { key: "followed", name: "关注作者", enabled: false, count: null, detail: "OpenAlex，0 位", error: null },
+        { key: "abstracts", name: "摘要补全", enabled: true, count: null, detail: null, error: null },
+        { key: "embedding", name: "向量化", enabled: true, count: null, detail: "本地模式", error: null },
+        { key: "llm", name: "大模型", enabled: false, count: null, detail: "未启用", error: null },
+      ],
+      journals: { count: 0, withImpactFactor: 0, autoFromLibrary: true, error: null },
       abstracts: null,
     },
     prefs: {},

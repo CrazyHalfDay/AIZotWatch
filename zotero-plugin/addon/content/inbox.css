@@ -287,8 +287,14 @@
   margin-top: 12px;
 }
 
+/* Trailing ghost buttons align their label (not their hover wash) with the content edge */
 .card-actions .btn.ghost:last-child {
   margin-left: auto;
+  margin-right: -10px;
+}
+
+#inbox-dismiss {
+  margin-right: -10px;
 }
 
 @media (max-width: 859px) {
@@ -299,4 +305,9 @@
   .search-box {
     width: 220px;
   }
+}
+
+/* Keyboard focus and in-page jumps keep the cards clear of the sticky toolbar */
+.inbox-list :is(.card, .section-header, button, a) {
+  scroll-margin-top: 120px;
 }

@@ -532,6 +532,8 @@ function initShell() {
   buildSettingsNav();
   for (const item of document.querySelectorAll(".nav-item")) {
     item.addEventListener("click", () => navigate(item.dataset.page));
+    // Shortcut hints in the platform's notation (⌘1 on macOS)
+    if (Zotero.isMac) item.setAttribute("title", (item.getAttribute("title") || "").replace("Ctrl+", "⌘"));
   }
   // In-page links (#inbox, #settings/ai, ...) switch pages; web links open in the browser
   document.addEventListener("click", (event) => {

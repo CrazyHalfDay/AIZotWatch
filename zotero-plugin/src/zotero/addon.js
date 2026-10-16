@@ -7,7 +7,7 @@ import { createCancelSignal } from "../core/http.js";
 import { parseFollowedAuthors } from "../core/authors.js";
 import { libraryVenues, parseWhitelist, serializeWhitelist, summarizeWhitelist } from "../core/journals.js";
 import { countByTrack } from "../core/tracks.js";
-import { CancelledError, ZotWatchEngine } from "../engine.js";
+import { CancelledError, HANDLED_MIN_DAYS, ZotWatchEngine } from "../engine.js";
 import { EMBEDDING_PRESETS, createEmbedder } from "../embedding/providers.js";
 import { createLlmClient } from "../llm/llm.js";
 import { autoValues } from "../settings.js";
@@ -514,6 +514,11 @@ export class ZotWatchAddon {
     Zotero.Utilities.Internal.openPreferences(PANE_ID);
   }
 
+  /** Path of the data directory (<Zotero data dir>/zotwatch), null before startup. */
+  getDataDir() {
+    return this.storage?.dir || null;
+  }
+
   /** Show the data directory (<Zotero data dir>/zotwatch) in the file manager. */
   async revealDataDir() {
     const dir = this.storage?.dir;
@@ -587,6 +592,9 @@ export class ZotWatchAddon {
       running: !!this.running,
       pending: { total: pendingWorks.length, ...countByTrack(pendingWorks), mustRead: pendingWorks.filter((w) => w.label === "must_read").length },
       added: works.filter((w) => w.status === "added").length,
+      // Added works stay in the inbox this long (the 已加入 tile's window)
+      addedDays: Math.max(settings.inbox.retentionDays, HANDLED_MIN_DAYS),
+      scoring: { recentDays: settings.scoring.recentDays, requireAbstract: settings.scoring.requireAbstract },
       lastRun: last,
       lastError: this.lastError,
       history: inbox.history || [],
@@ -803,7 +811,7 @@ export class ZotWatchAddon {
     return rows;
   }
 
-  /** The connection checks as text, one line per service (Zotero settings pane). */
+  /** The connection checks as text, one line per service. */
   async testConnections() {
     return (await this.checkConnections()).map(connectionLine).join("\n");
   }
@@ -823,7 +831,7 @@ export class ZotWatchAddon {
     return autoValues(this.getSettings().embedding.provider);
   }
 
-  // ------------------------------------------------- preference pane helpers
+  // ------------------------------------------ status text and journal / data actions
 
   async getStatus() {
     const settings = this.getSettings();

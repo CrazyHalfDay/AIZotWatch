@@ -318,7 +318,8 @@ npm run build   # build/zotwatch-<version>.xpi
 - `src/engine.js`: pipeline (profile -> journals -> fetch -> dedupe -> filters -> embed -> rank -> inbox), Zotero-independent; HTTP, storage and library are injected
 - `src/core/`: pure algorithms mirroring the Python modules (`scoring.js` = profile_ranker + cluster_scorer + journal_scorer, `kmeans.js` = profile_clusterer, `dedupe.js`, `filters.js`)
 - `src/zotero/`: the only code touching Zotero globals (HTTP transport, IOUtils storage, library adapter, item creation, menus, scheduler); exposed as `Zotero.ZotWatch`
-- `addon/`: manifest, bootstrap, default prefs (`extensions.zotwatch.*`), preference pane and recommendations window
+- `addon/`: manifest, bootstrap, default prefs (`extensions.zotwatch.*`), the ZotWatch main window (`content/main.xhtml`: 概览 dashboard, 推荐 inbox and 设置 pages) and a small Zotero settings pane that links to it
+- `scripts/preview.mjs`: dev-only visual check that screenshots the main window with fixture data (`npm run build` first; needs Playwright)
 - Keep scoring changes in sync with the Python pipeline; the workflow `.github/workflows/zotero_plugin.yml` tests/builds on changes and releases on `zotero-plugin-v*` tags
 
 ## Environment Variables
