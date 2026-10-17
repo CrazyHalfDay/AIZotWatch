@@ -117,6 +117,15 @@ export function loadSettings(get) {
       },
       openalexAbstracts: bool(get("sources.openalexAbstracts"), true),
     },
+    // Scholarly data APIs (学术数据接口): one key per service. OpenAlex needs a
+    // free key since February 2026 (sent as api_key on every request);
+    // Semantic Scholar's key goes into the x-api-key header. `mailto` is the
+    // Crossref polite-pool contact (sources.crossref.mailto), also sent to OpenAlex
+    apis: {
+      openalexKey: str(get("apis.openalexKey")),
+      semanticScholarKey: str(get("apis.semanticScholarKey")),
+      mailto: str(get("sources.crossref.mailto")),
+    },
     // Abstract fallback tiers (sources/abstracts.js); mailto is sources.crossref.mailto
     abstracts: {
       crossref: bool(get("abstracts.crossref"), true),

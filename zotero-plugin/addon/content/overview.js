@@ -318,6 +318,8 @@ var ZotWatchOverview = (() => {
    * `source.ran === false`: enabled, but not part of the last run (turned on since).
    */
   function sourceStatus(source, hasRun) {
+    // API services (OpenAlex, Semantic Scholar) report key states instead of run states
+    if (source.status && !source.error) return source.status;
     if (!source.enabled) return { tone: "off", label: "未启用" };
     if (source.error) return { tone: "critical", label: "出错" };
     if (!hasRun || source.ran === false) return { tone: "idle", label: "未运行" };
@@ -414,6 +416,9 @@ var ZotWatchOverview = (() => {
   function connectionStatus(row) {
     if (row.ok === true) return { tone: "good", icon: "check-circle", label: "正常" };
     if (row.ok === false) return { tone: "critical", icon: "alert", label: "失败" };
+    // Not a failure, but not set up: OpenAlex answers without a key (tiny budget), Semantic Scholar is optional
+    if (row.key === "openalex") return { tone: "warning", icon: "alert", label: "未配置 Key" };
+    if (row.key === "semanticscholar") return { tone: "off", icon: "info", label: "未配置" };
     return { tone: "off", icon: "info", label: "未启用" };
   }
 
@@ -1034,7 +1039,7 @@ var ZotWatchOverview = (() => {
     let body;
     let caption = null;
     if (c.running) {
-      body = el("p", { class: "ov-waiting" }, el("span", { class: "dot running" }), "正在测试向量化、大模型、Crossref 和已填写的 API Key…");
+      body = el("p", { class: "ov-waiting" }, el("span", { class: "dot running" }), "正在测试向量化、大模型、Crossref、OpenAlex 和已填写的 API Key…");
     } else if (c.error) {
       body = el("p", { class: "ov-error-line", text: `测试失败：${c.error}` });
     } else {

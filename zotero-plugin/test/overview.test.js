@@ -490,7 +490,14 @@ test("run health, schedule lines and source statuses", () => {
   // Enabled after the last run: it has not run yet
   assert.deepEqual(plain(O.sourceStatus({ enabled: true, ran: false }, true)), { tone: "idle", label: "未运行" });
   assert.deepEqual(plain(O.sourceStatus({ enabled: true, ran: true }, true)), { tone: "good", label: "正常" });
+  // API services carry their own key states; an error still wins
+  assert.deepEqual(plain(O.sourceStatus({ enabled: true, status: { tone: "warning", label: "未配置 Key" } }, false)), { tone: "warning", label: "未配置 Key" });
+  assert.deepEqual(plain(O.sourceStatus({ enabled: false, status: { tone: "off", label: "未配置" } }, true)), { tone: "off", label: "未配置" });
+  assert.deepEqual(plain(O.sourceStatus({ enabled: true, error: "HTTP 403", status: { tone: "good", label: "已配置" } }, true)), { tone: "critical", label: "出错" });
   assert.equal(O.connectionStatus({ ok: null }).label, "未启用");
+  assert.deepEqual(plain(O.connectionStatus({ key: "openalex", ok: null })), { tone: "warning", icon: "alert", label: "未配置 Key" });
+  assert.deepEqual(plain(O.connectionStatus({ key: "semanticscholar", ok: null })), { tone: "off", icon: "info", label: "未配置" });
+  assert.equal(O.connectionStatus({ key: "openalex", ok: false }).label, "失败");
 });
 
 test("KPI tiles, the pending breakdown and the header line", () => {

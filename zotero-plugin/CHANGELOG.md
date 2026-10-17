@@ -2,6 +2,29 @@
 
 发布新版本时，在这里新增一节 `## <版本号>`（与 `package.json` 的 `version` 一致）；发布流程会把这一节作为 GitHub Release 的说明。
 
+## 0.4.0
+
+新增「学术数据接口」：OpenAlex 与 Semantic Scholar 的 API Key、按服务自动限速，以及用 Semantic Scholar 补全摘要和 TLDR；关注期刊、关注作者和顶刊地学可以直接在 OpenAlex 中搜索添加，「从文库生成」改为先给出带学科和近似影响因子的期刊建议供挑选。已安装 0.3.0 的用户会通过 Zotero 的插件更新自动收到此版本，原有设置全部保留。
+
+### 功能
+
+- 设置新增「学术数据接口」分区（紧跟「向量化」）：填写 OpenAlex API Key 和 Semantic Scholar API Key（默认隐藏，可点眼睛图标查看），Crossref 联系邮箱从「文献来源 → Crossref」移到这里（改名为「联系邮箱（Crossref 礼貌池）」，原有设置保留）。「测试接口」逐项检查 OpenAlex、Semantic Scholar 和 Crossref；OpenAlex 的「今日额度」显示最近一次请求时得知的当日剩余额度
+- 自 2026 年 2 月起 OpenAlex 需要免费的 API Key：填写后，关注作者、摘要补全等所有 OpenAlex 请求都会带上它（不会出现在日志和错误信息中）。未填写时每天只有很少的免费额度，关注作者每次只获取第一页结果，结果被截断时运行问题中会提示「未配置 OpenAlex API Key：只获取了第一页结果…」
+- 摘要补全新增 Semantic Scholar（填写 Key 后启用）：排在 OpenAlex 之后，每 500 个 DOI 一次批量查询；同时取回 Semantic Scholar 的 TLDR（一句话总结），没有摘要的推荐卡片会以一行灰色小字显示「TLDR：…」，有摘要时作为摘要的悬停提示。Key 无效时本次运行停用这一来源并提示
+- 概览的「数据源」新增 OpenAlex（正常 / 未配置 Key / 出错，有额度信息时显示今日剩余额度）和 Semantic Scholar（已配置 / 未配置）两行；概览的「测试连接」也会检查这两个服务
+- 关注期刊新增搜索框：按刊名或 ISSN 在 OpenAlex 中查找期刊（显示出版商、国家、ISSN、近似影响因子和发文量），「添加」为期刊的每个 ISSN 各写一行，学科和近似影响因子自动填写；支持 ↑ / ↓ / 回车 / Esc 键盘操作
+- 「从文库生成」不再把 `library:14` 这样的占位内容直接写进列表，而是在分区内打开「期刊建议」：文库常见期刊经 OpenAlex 补全规范刊名、全部 ISSN、学科（OpenAlex 主题分类的子领域，如 `GEOCHEMISTRY_AND_PETROLOGY`）和近似影响因子（OpenAlex 两年均被引）；启用大模型时，还会用 Python 版 `zotwatch journals` 的提示词推荐文库中尚未出现的相关期刊，每个推荐都须在 OpenAlex 中找到同名期刊（找不到的丢弃），影响因子统一取 OpenAlex 的值。勾选后「加入所选」合并进列表（已有的行和注释保留，只补空缺），生成过程中可以取消
+- 关注期刊新增「补全学科与影响因子」：为学科为空或为旧版 `library:N`、缺影响因子的行从 OpenAlex 补全，不覆盖已有的值；在中国出版的中文刊（含 *Acta … Sinica* 等拼音 / 拉丁刊名）学科加注 ` (CN)`，按中文核心期刊计分
+- 关注作者新增搜索框：按姓名、ORCID 或 OpenAlex 作者 ID 在 OpenAlex 中查找作者（显示机构、论文数、被引次数、ORCID 和主要研究主题，便于区分同名作者），「关注」自动写入「姓名, ORCID」（没有 ORCID 时用 OpenAlex 作者 ID）；识别到的作者和无法识别的行逐行列出，可直接移除，原文本框收在「编辑文本」中
+- 顶刊地学新增搜索框：在 OpenAlex 中搜索期刊并「添加」其全部 ISSN；顶刊列表按期刊名分组显示 ISSN（内置期刊和期刊列表中已有的刊名无需查询），可整体移除；ISSN 文本收在「编辑文本」中，仍可恢复默认
+- 三个搜索框都使用 OpenAlex：未填写 API Key 时仍可搜索，但会在搜索框下方提示免费额度很小并链接到「学术数据接口」
+
+### 改进
+
+- 按服务自动限速：所有网络请求在发出前（包括重试）按目标服务排队，Crossref 每秒 3 次、OpenAlex 每秒 8 次、Semantic Scholar 每秒 1 次、arXiv 每 3 秒 1 次、Elsevier / Springer Nature 每秒 2 次，同时进行的请求数也有上限；后台运行和界面操作共用同一个限速器。服务返回 429（Semantic Scholar 还包括 5xx）并带有 Retry-After 时，同一服务的所有请求一起等待后再重试，Semantic Scholar 的重试间隔从 3 秒起。高级用户可在配置编辑器中用 `extensions.zotwatch.http.rateLimits`（JSON）调整
+- 一个 DOI 被记为「各来源都没有摘要」后，新填 API Key 时只用新来源重新查询，不再重复查询已经确认没有的来源
+- 期刊列表中学科以 `_CN` 结尾的期刊（如示例列表和 Python 版数据中的 `GEOSCIENCES_CN`）现在也按中文核心期刊计分，与 `(CN)` 相同
+
 ## 0.3.0
 
 推荐窗口升级为 ZotWatch 主窗口：左侧栏在「概览 / 推荐 / 设置」之间切换，所有设置从 Zotero 的设置窗口移到这里。已安装 0.2.0 的用户会通过 Zotero 的插件更新自动收到此版本，原有设置全部保留。

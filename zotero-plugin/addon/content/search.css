@@ -1,0 +1,533 @@
+/* Search-and-add component (search.js) and the lists it feeds in 设置:
+   the journal review panel, followed-author rows and flagship journal chips.
+   Firefox 115: no nesting, :has() or light-dark(). */
+
+/* ------------------------------------------------------------ search box */
+
+.sb {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sb-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sb-icon {
+  position: absolute;
+  left: 9px;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.sb-input {
+  padding-left: 31px;
+  padding-right: 32px;
+}
+
+.sb-spinner {
+  position: absolute;
+  right: 9px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: sb-spin 0.8s linear infinite;
+}
+
+.sb-spinner[hidden] {
+  display: none;
+}
+
+@keyframes sb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sb-status {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.sb-status.error {
+  color: var(--danger-ink);
+}
+
+.sb-status.good {
+  color: var(--ink-2);
+}
+
+.sb-results {
+  max-height: 300px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  list-style: none;
+}
+
+.sb-results[hidden] {
+  display: none;
+}
+
+.sb-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px;
+  border-radius: var(--r-ctl);
+  cursor: default;
+}
+
+.sb-result + .sb-result {
+  margin-top: 1px;
+}
+
+.sb-result.active {
+  background: var(--wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sb-result-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.sb-action {
+  flex: none;
+  min-width: 56px;
+}
+
+.sb-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sb-title-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sb-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.sb-title-line .chip,
+.sb-title-line .pill {
+  flex: none;
+  height: 18px;
+}
+
+.sb-meta {
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A missing-key notice under a search box */
+.sb-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.sb-hint .icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.sb-hint[hidden] {
+  display: none;
+}
+
+/* Label above a search box inside a card block (the stack's gap spaces it) */
+.sb-label {
+  display: block;
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------- journal review panel */
+
+/* Text for assistive technology only */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.jr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-card);
+  background: var(--surface-2);
+}
+
+.jr-panel[hidden] {
+  display: none;
+}
+
+.jr-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.jr-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.jr-title {
+  font-weight: 600;
+}
+
+.jr-counts {
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+}
+
+.jr-head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.jr-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.jr-warning .icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.jr-table-wrap {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.jr-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-sm);
+}
+
+.jr-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-align: start;
+  white-space: nowrap;
+}
+
+.jr-table td {
+  padding: 7px 8px;
+  border-top: 1px solid var(--hairline);
+  vertical-align: top;
+}
+
+.jr-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.jr-col-check {
+  width: 34px;
+}
+
+.jr-col-issn {
+  width: 88px;
+}
+
+.jr-col-subject {
+  width: 26%;
+}
+
+.jr-col-if {
+  width: 64px;
+}
+
+.jr-col-count {
+  width: 76px;
+}
+
+.jr-table .num {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.jr-table th.num {
+  text-align: end;
+}
+
+.jr-row.is-listed td {
+  color: var(--ink-3);
+}
+
+.jr-row:hover td {
+  background: var(--wash);
+}
+
+.jr-check {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.jr-name {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.jr-row.is-listed .jr-name {
+  font-weight: 400;
+}
+
+.jr-sub {
+  display: block;
+  margin-top: 1px;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.jr-issns {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+.jr-subject {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.jr-subject-empty {
+  color: var(--ink-3);
+}
+
+.jr-table .pill {
+  height: 18px;
+  padding: 0 7px;
+}
+
+.jr-listed {
+  margin-top: 3px;
+}
+
+.jr-ai {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.jr-cn {
+  margin-left: 4px;
+  vertical-align: 1px;
+}
+
+.jr-group td {
+  padding: 6px 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.jr-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+.jr-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------------------------------------------- followed authors and 顶刊 */
+
+.sf-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.sf-list-title {
+  font-weight: 500;
+}
+
+.sf-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface);
+  list-style: none;
+}
+
+.sf-rows:empty,
+.sf-rows[hidden] {
+  display: none;
+}
+
+.sf-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 5px 6px 5px 10px;
+}
+
+.sf-rows > li + li {
+  border-top: 1px solid var(--hairline);
+}
+
+.sf-remove {
+  flex: none;
+  margin-left: 4px;
+}
+
+.sf-rows .sf-author-id {
+  margin-left: auto;
+}
+
+.sf-invalid-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sf-edit-text {
+  border-top: 1px solid var(--hairline);
+}
+
+.sf-edit-text > .sf-advanced-summary {
+  padding-bottom: 9px;
+}
+
+.sf-edit-text .field {
+  padding-top: 4px;
+}
+
+/* 顶刊: one row per journal with its ISSN chips */
+.fj-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fj-name.unknown {
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.fj-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+/* ISSN chips: ink text on a faint tint of the flagship hue */
+.fj-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--t-flagship) 12%, transparent);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-spinner {
+    animation: none;
+  }
+}
+
+@media (max-width: 719px) {
+  .fj-chips {
+    justify-content: flex-start;
+  }
+
+  .sf-rows > li.fj-row {
+    flex-wrap: wrap;
+  }
+}

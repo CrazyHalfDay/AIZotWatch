@@ -4,18 +4,34 @@
 /* global Zotero, IOUtils, PathUtils */
 
 import { CancelledRequestError } from "../core/http.js";
+import { sharedRateLimiter } from "../core/ratelimit.js";
 import { extraFieldDoi, normalizeDoi } from "../core/text.js";
 import { PREF_PREFIX, loadSettings } from "../settings.js";
+
+/** Response headers of an XHR as {get(name)} (null for an absent or unreadable header). */
+function xhrHeaders(xhr) {
+  return {
+    get(name) {
+      try {
+        return xhr.getResponseHeader?.(name) ?? null;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
 
 /**
  * HTTP transport over Zotero.HTTP.request (honours Zotero's proxy settings).
  * With a `signal` (see createCancelSignal), cancelling aborts in-flight
  * requests and makes later ones fail at once; core/http.js also ends retry
- * waits early through `transport.signal`.
+ * waits early through `transport.signal`. Every transport shares the addon's
+ * rate limiter (core/ratelimit.js), which core/http.js applies per host.
  */
-export function createZoteroTransport({ signal = null } = {}) {
+export function createZoteroTransport({ signal = null, limiter = sharedRateLimiter() } = {}) {
   return {
     signal,
+    limiter,
     async request({ method = "GET", url, headers = {}, body, responseType = "json", timeout = 60000 }) {
       signal?.throwIfCancelled();
       const unregisters = [];
@@ -51,7 +67,8 @@ export function createZoteroTransport({ signal = null } = {}) {
         const host = url.replace(/^https?:\/\/([^/?#]+).*$/, "$1");
         throw new Error(`网络连接失败：${host}${code ? `（0x${(code >>> 0).toString(16)}）` : ""}`);
       }
-      return { status: xhr.status, data: xhr.response, retryAfter: xhr.getResponseHeader("Retry-After") };
+      const responseHeaders = xhrHeaders(xhr);
+      return { status: xhr.status, data: xhr.response, retryAfter: responseHeaders.get("Retry-After"), headers: responseHeaders };
     },
   };
 }

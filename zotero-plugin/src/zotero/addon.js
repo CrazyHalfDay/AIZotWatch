@@ -3,15 +3,22 @@
 
 /* global Zotero, Services */
 
-import { createCancelSignal } from "../core/http.js";
+import { apiUsage, createCancelSignal, limitedRequest } from "../core/http.js";
 import { parseFollowedAuthors } from "../core/authors.js";
-import { libraryVenues, parseWhitelist, serializeWhitelist, summarizeWhitelist } from "../core/journals.js";
+import { DEFAULT_RATE_LIMITS, mergeRateLimits, sharedRateLimiter } from "../core/ratelimit.js";
+import { journalRows, mergeWhitelistRows, parseWhitelist, summarizeWhitelist } from "../core/journals.js";
+import { FLAGSHIP_JOURNALS } from "../core/flagship.js";
+import { normalizeIssn } from "../core/text.js";
 import { countByTrack } from "../core/tracks.js";
-import { CancelledError, HANDLED_MIN_DAYS, ZotWatchEngine } from "../engine.js";
+import { CancelledError, HANDLED_MIN_DAYS, OPENALEX_KEYLESS, ZotWatchEngine } from "../engine.js";
 import { EMBEDDING_PRESETS, createEmbedder } from "../embedding/providers.js";
+import { fillJournalMetadata, proposeJournals } from "../journal-proposals.js";
 import { createLlmClient } from "../llm/llm.js";
 import { autoValues } from "../settings.js";
 import { checkPublisherKeyRows } from "../sources/abstracts.js";
+import { checkOpenAlexRow, openAlexUsageText } from "../sources/openalex.js";
+import { lookupSourcesByIssn, openAlexErrorText, searchAuthors, searchSources } from "../sources/openalex-entities.js";
+import { checkSemanticScholarRow } from "../sources/semanticscholar.js";
 import { addWorkToZotero } from "./items.js";
 import {
   createZoteroLibrary,
@@ -37,6 +44,8 @@ const WHITELIST_FILE = "journals.csv";
 const FIRST_CHECK_DELAY = 3 * 60 * 1000;
 const CHECK_INTERVAL = 30 * 60 * 1000;
 const RETRY_AFTER_FAILURE = 2 * 3600 * 1000;
+// Search-box results kept for the session (per box and query)
+const SEARCH_CACHE_SIZE = 60;
 const SHUTDOWN_GRACE = 5000;
 const QUIT_GRACE = 1500;
 // Zotero 9 registers plugin Fluent files with a per-file fallback. On 7/8 a
@@ -101,6 +110,7 @@ export function abstractsStatusLine(counts) {
     ["Elsevier", counts.elsevier],
     ["Springer Nature", counts.springer],
     ["OpenAlex", counts.openalex],
+    ["Semantic Scholar", counts.s2],
   ].filter(([, n]) => n > 0);
   const detail = sources.length ? `（${sources.map(([name, n]) => `${name} ${n}`).join("，")}）` : "";
   return `摘要补全：上次运行补全 ${counts.filled || 0} / ${counts.missing || 0} 篇${detail}`;
@@ -131,6 +141,40 @@ export function normalizePage(page) {
 export function nextRunAt({ autoRun, intervalHours, lastRun, lastAttempt }, retryMs = RETRY_AFTER_FAILURE) {
   if (!autoRun) return null;
   return Math.max((lastRun || 0) + intervalHours * 3600000, (lastAttempt || 0) + retryMs);
+}
+
+/**
+ * Rate limits from the hidden pref extensions.zotwatch.http.rateLimits (JSON
+ * {host: {rps, concurrency} | null}) merged into the defaults; malformed text
+ * is ignored.
+ */
+export function rateLimitsFromPref(text) {
+  let overrides = null;
+  if (typeof text === "string" && text.trim()) {
+    try {
+      overrides = JSON.parse(text);
+    } catch {
+      overrides = null;
+    }
+  }
+  return mergeRateLimits(DEFAULT_RATE_LIMITS, overrides);
+}
+
+/**
+ * The 学术数据接口 summary: whether each key is set and OpenAlex's latest known
+ * daily budget ({...usage, text} or null), for the dashboard and the settings page.
+ */
+export function apiStatus(settings, usage = apiUsage.openalex) {
+  const apis = settings.apis || {};
+  const openalex = usage ? { ...usage, text: openAlexUsageText(usage), short: openAlexUsageText(usage, { compact: true }) } : null;
+  return { openalexKey: !!apis.openalexKey, semanticScholarKey: !!apis.semanticScholarKey, mailto: !!apis.mailto, openalexUsage: openalex };
+}
+
+/** Status line for the 学术数据接口 keys (and OpenAlex's budget when known). */
+export function apiStatusLine(status) {
+  const openalex = status.openalexKey ? "OpenAlex 已配置 Key" : "OpenAlex 未配置 Key（免费额度很小）";
+  const budget = status.openalexUsage?.text ? `（${status.openalexUsage.text}）` : "";
+  return `学术数据接口：${openalex}${budget}，Semantic Scholar ${status.semanticScholarKey ? "已配置 Key" : "未配置"}`;
 }
 
 /** Connection check result as a text line ("✅ Crossref：可访问"). */
@@ -178,6 +222,11 @@ export class ZotWatchAddon {
     this.lastError = null;
     // Last page shown in the main window during this session
     this.lastPage = null;
+    // 关注期刊 actions and the settings search boxes (own cancel signals, session caches)
+    this.journalSignal = null;
+    this.searchSignals = null;
+    this.searchCache = null;
+    this.journalNames = null;
   }
 
   // ------------------------------------------------------------- lifecycle
@@ -188,6 +237,7 @@ export class ZotWatchAddon {
     this.rootURI = rootURI;
     await Zotero.initializationPromise;
     this.storage = createZoteroStorage();
+    this.applyRateLimits();
     this.uiSignal = createCancelSignal();
     this.transport = createZoteroTransport({ signal: this.uiSignal });
     await this.loadWhitelist();
@@ -221,6 +271,8 @@ export class ZotWatchAddon {
     this.stopScheduler();
     this.cancelRun();
     this.uiSignal?.cancel();
+    this.journalSignal?.cancel();
+    for (const signal of this.searchSignals?.values() || []) signal.cancel();
     if (this.running) await settleWithin(this.running, appShutdown ? QUIT_GRACE : this.shutdownGraceMs);
     if (appShutdown) return;
 
@@ -323,6 +375,20 @@ export class ZotWatchAddon {
     }
   }
 
+  /** The per-host rate limiter shared by every transport of this addon instance. */
+  get limiter() {
+    return sharedRateLimiter();
+  }
+
+  /** Apply the hidden rate-limit pref to the shared limiter (at startup and before each run). */
+  applyRateLimits() {
+    try {
+      sharedRateLimiter().setLimits(rateLimitsFromPref(getPref("http.rateLimits")));
+    } catch (e) {
+      Zotero.logError(e);
+    }
+  }
+
   // ------------------------------------------------------------- scheduler
 
   startScheduler() {
@@ -406,6 +472,7 @@ export class ZotWatchAddon {
   runNow({ background = false } = {}) {
     if (this.running) return this.running;
     setPref("schedule.lastAttempt", String(Date.now()));
+    this.applyRateLimits();
     // Each run gets its own signal: cancelling it aborts only this run's requests
     const signal = createCancelSignal();
     this.runSignal = signal;
@@ -600,9 +667,11 @@ export class ZotWatchAddon {
       error,
       ran: Object.hasOwn(perSource, perSourceName) || !!error,
     });
-    const followedError = errorMessage(errors, (e) => e.stage === "followed" && e.source === "OpenAlex");
+    // A keyless fetch cut to its first page still worked: the OpenAlex row tells about the key
+    const followedError = errorMessage(errors, (e) => e.stage === "followed" && e.source === "OpenAlex" && e.code !== OPENALEX_KEYLESS);
+    const apis = apiStatus(settings);
     const pendingBy = (name) => pendingWorks.filter((w) => (w.followedAuthors || []).includes(name)).length;
-    const abstractTiers = abstracts.crossref || abstracts.openalex || !!abstracts.elsevierKey || !!abstracts.springerKey;
+    const abstractTiers = abstracts.crossref || abstracts.openalex || !!abstracts.elsevierKey || !!abstracts.springerKey || !!settings.apis?.semanticScholarKey;
 
     return {
       version: this.version,
@@ -673,6 +742,25 @@ export class ZotWatchAddon {
           detail: stats.abstracts ? `上次补全 ${stats.abstracts.filled ?? 0} / ${stats.abstracts.missing ?? 0}` : null,
           error: errorMessage(errors, (e) => e.stage === "enrich"),
         },
+        {
+          key: "openalex",
+          name: "OpenAlex",
+          enabled: true,
+          count: null,
+          detail: apis.openalexUsage?.short || (apis.openalexKey ? "已配置 API Key" : "免费额度很小"),
+          error: errorMessage(errors, (e) => e.source === "OpenAlex" && e.code !== OPENALEX_KEYLESS),
+          // Rows of API services carry their own states (keys, not fetch counts)
+          status: apis.openalexKey ? { tone: "good", label: "正常" } : { tone: "warning", label: "未配置 Key" },
+        },
+        {
+          key: "semanticscholar",
+          name: "Semantic Scholar",
+          enabled: apis.semanticScholarKey,
+          count: null,
+          detail: apis.semanticScholarKey ? "摘要与 TLDR" : "可选",
+          error: errorMessage(errors, (e) => e.source === "Semantic Scholar"),
+          status: apis.semanticScholarKey ? { tone: "good", label: "已配置" } : { tone: "off", label: "未配置" },
+        },
         { key: "embedding", name: "向量化", enabled: true, count: null, detail: embedding.label, error: failedSource === "embedding" ? failure.message : null },
         {
           key: "llm",
@@ -684,6 +772,7 @@ export class ZotWatchAddon {
         },
       ],
       abstracts: stats.abstracts || null,
+      apis,
       dataDir: this.storage.dir,
     };
   }
@@ -786,9 +875,10 @@ export class ZotWatchAddon {
 
   /**
    * Check the configured services: [{key, name, target, ok, detail}], where ok
-   * is true, false, or null for a service that is not enabled. `only` limits
-   * the checks to some keys ("embedding", "llm", "crossref", "elsevier", "springer");
-   * publisher keys are only checked when filled in.
+   * is true, false, or null for a service that is not enabled (or, for
+   * OpenAlex, reachable without a key). `only` limits the checks to some keys
+   * ("embedding", "llm", "crossref", "openalex", "semanticscholar", "elsevier",
+   * "springer"); publisher keys are only checked when filled in.
    */
   async checkConnections(only = null) {
     const settings = this.getSettings();
@@ -823,12 +913,18 @@ export class ZotWatchAddon {
     if (want("crossref")) {
       const row = { key: "crossref", name: "Crossref", target: null, ok: false, detail: "" };
       try {
-        const res = await this.transport.request({ url: "https://api.crossref.org/works?rows=0", timeout: 20000 });
+        const res = await limitedRequest(this.transport, { url: "https://api.crossref.org/works?rows=0", timeout: 20000 });
         Object.assign(row, res.status === 200 ? { ok: true, detail: "可访问" } : { detail: `HTTP ${res.status}` });
       } catch (e) {
         row.detail = String(e?.message || e);
       }
       rows.push(row);
+    }
+    if (want("openalex")) {
+      rows.push({ ...(await checkOpenAlexRow(this.transport, { apiKey: settings.apis.openalexKey, mailto: settings.apis.mailto })), target: null });
+    }
+    if (want("semanticscholar")) {
+      rows.push({ ...(await checkSemanticScholarRow(this.transport, { key: settings.apis.semanticScholarKey })), target: null });
     }
     if (want("elsevier") || want("springer")) {
       const keys = await checkPublisherKeyRows(this.transport, settings.abstracts);
@@ -850,6 +946,11 @@ export class ZotWatchAddon {
   /** Whitelist CSV summary ({count, withImpactFactor, invalidLines}) for the settings preview. */
   summarizeWhitelist(text) {
     return summarizeWhitelist(text);
+  }
+
+  /** Which API keys are set and OpenAlex's latest known daily budget (see apiStatus). */
+  getApiStatus() {
+    return apiStatus(this.getSettings());
   }
 
   /** Values used for blank fields with the current embedding provider (placeholders, restore default). */
@@ -879,24 +980,159 @@ export class ZotWatchAddon {
       ...(followed.enabled ? [followedStatusLine(followed)] : []),
       ...(settings.flagship.enabled ? [flagshipStatusLine(settings.flagship, last?.stats?.flagship)] : []),
       ...(last?.stats?.abstracts ? [abstractsStatusLine(last.stats.abstracts)] : []),
+      apiStatusLine(apiStatus(settings)),
       `数据目录：${this.storage.dir}`,
     ].join("\n");
   }
 
-  /** Whitelist CSV with the top journals of the library merged into the current list. */
+  // ------------------------------------------- journal proposals and lookups
+
+  /**
+   * Run a journal action (「从文库生成」, 「补全学科与影响因子」) with its own
+   * cancel signal: cancelJournalAction() stops it without touching runs or
+   * other UI requests. A new action cancels the previous one.
+   */
+  async withJournalSignal(task) {
+    this.journalSignal?.cancel();
+    const signal = createCancelSignal();
+    this.journalSignal = signal;
+    try {
+      return await task(createZoteroTransport({ signal }));
+    } finally {
+      if (this.journalSignal === signal) this.journalSignal = null;
+    }
+  }
+
+  /** Stop 「从文库生成」 or 「补全学科与影响因子」 (their open requests are aborted). */
+  cancelJournalAction() {
+    this.journalSignal?.cancel();
+  }
+
+  /**
+   * Journal proposals for the review panel of 「从文库生成」 (nothing is
+   * written): {proposals, warnings, missing, stats}, see journal-proposals.js.
+   * With the LLM enabled, the model also suggests related journals (named
+   * after the library's research directions when they are labelled).
+   */
   async suggestJournals() {
     const settings = this.getSettings();
-    const engine = this.createEngine({ ...settings, journals: { ...settings.journals, autoFromLibrary: true } });
-    const items = await createZoteroLibrary().getItems();
-    const { venues } = await engine.resolveJournals(items);
-    // Merge into the list as it is now, not as it was before the (slow) lookups
-    const merged = parseWhitelist(this.whitelist);
-    for (const v of venues.length ? venues : libraryVenues(items).slice(0, settings.journals.autoTopN)) {
-      for (const issn of v.issns) {
-        if (!merged.has(issn)) merged.set(issn, { issn, title: v.title, category: `library:${v.count}`, impactFactor: null });
+    return this.withJournalSignal(async (http) => {
+      const items = await createZoteroLibrary().getItems();
+      const llmOn = settings.llm.enabled && !!settings.llm.apiKey;
+      let researchFocus = "";
+      if (llmOn && settings.llm.topicLabels) {
+        const topics = await this.createEngine(settings).getTopics().catch(() => []);
+        researchFocus = topics.slice(0, 10).map((t) => t.label).join("、");
+      }
+      return proposeJournals({
+        http,
+        storage: this.storage,
+        items,
+        // Proposals already listed are marked against the list as it is now
+        whitelist: this.whitelist,
+        settings,
+        llm: llmOn ? createLlmClient(settings.llm, http) : null,
+        researchFocus,
+        log,
+      });
+    });
+  }
+
+  /**
+   * Merge journals (proposals or search results: {title, issns, category,
+   * impactFactor}) into whitelist CSV text, one row per ISSN; listed rows
+   * only get their blanks filled. Returns {text, added, filled}; nothing is saved.
+   */
+  mergeJournals(text, journals) {
+    return mergeWhitelistRows(text, journalRows(journals));
+  }
+
+  /**
+   * 「补全学科与影响因子」 for whitelist CSV text: {text, filled, incomplete,
+   * notFound}; nothing is saved. Throws a readable message when OpenAlex fails.
+   */
+  async fillJournalMetadata(text) {
+    const settings = this.getSettings();
+    return this.withJournalSignal(async (http) => {
+      try {
+        return await fillJournalMetadata({ http, text, settings });
+      } catch (e) {
+        if (e?.cancelled) throw e;
+        throw new Error(openAlexErrorText(e, { keyed: !!settings.apis.openalexKey }));
+      }
+    });
+  }
+
+  /**
+   * One search of a search box: `kind` names the box ("journals" or
+   * "authors"); a newer search of the same box cancels the older one. Results
+   * are cached for the session. Throws a readable message when OpenAlex fails.
+   */
+  async searchOpenAlex(kind, query, search) {
+    const q = String(query ?? "").trim();
+    const settings = this.getSettings();
+    const cacheKey = `${kind}\n${q.toLowerCase()}\n${settings.apis.openalexKey ? "k" : ""}`;
+    this.searchCache ||= new Map();
+    if (this.searchCache.has(cacheKey)) return this.searchCache.get(cacheKey);
+    this.searchSignals ||= new Map();
+    this.searchSignals.get(kind)?.cancel();
+    const signal = createCancelSignal();
+    this.searchSignals.set(kind, signal);
+    const http = createZoteroTransport({ signal });
+    try {
+      const results = await search(http, q, { apiKey: settings.apis.openalexKey, mailto: settings.apis.mailto, retry: { retries: 1 } });
+      if (this.searchCache.size >= SEARCH_CACHE_SIZE) this.searchCache.delete(this.searchCache.keys().next().value);
+      this.searchCache.set(cacheKey, results);
+      return results;
+    } catch (e) {
+      if (e?.cancelled) throw e;
+      throw new Error(openAlexErrorText(e, { keyed: !!settings.apis.openalexKey }));
+    } finally {
+      if (this.searchSignals.get(kind) === signal) this.searchSignals.delete(kind);
+    }
+  }
+
+  /** Journals matching a name or an ISSN (OpenAlex sources; see openalex-entities.js mapOpenAlexSource). */
+  searchJournals(query) {
+    return this.searchOpenAlex("journals", query, (http, q, opts) => searchSources(http, q, { limit: 10, ...opts }));
+  }
+
+  /** Authors matching a name, an ORCID iD or an OpenAlex author id (see mapOpenAlexAuthor). */
+  searchAuthors(query) {
+    return this.searchOpenAlex("authors", query, (http, q, opts) => searchAuthors(http, q, { limit: 10, ...opts }));
+  }
+
+  /**
+   * Journal names of ISSNs (the 顶刊 chips): {issn: {title, issns, openalexId}
+   * | null} for every requested ISSN. Known names (the built-in flagship
+   * journals, the journal list) need no request; the others are looked up on
+   * OpenAlex once per session (null: OpenAlex does not know the ISSN). When
+   * OpenAlex fails, the unknown ISSNs are left out and `error` says why.
+   */
+  async lookupJournalNames(issns) {
+    const wanted = [...new Set((issns || []).map(normalizeIssn).filter(Boolean))];
+    this.journalNames ||= new Map(FLAGSHIP_JOURNALS.flatMap((j) => j.issns.map((issn) => [issn, { title: j.title, issns: [...j.issns], openalexId: null }])));
+    for (const j of parseWhitelist(this.whitelist).values()) {
+      if (j.title && !this.journalNames.has(j.issn)) this.journalNames.set(j.issn, { title: j.title, issns: [j.issn], openalexId: null, fromList: true });
+    }
+    const unknown = wanted.filter((issn) => !this.journalNames.has(issn));
+    let error = null;
+    if (unknown.length) {
+      const settings = this.getSettings();
+      try {
+        const found = await lookupSourcesByIssn(this.transport, unknown, { apiKey: settings.apis.openalexKey, mailto: settings.apis.mailto, retry: { retries: 1 } });
+        for (const issn of unknown) {
+          const j = found.get(issn);
+          this.journalNames.set(issn, j ? { title: j.title, issns: j.issns, openalexId: j.openalexId } : null);
+        }
+      } catch (e) {
+        if (e?.cancelled) throw e;
+        error = openAlexErrorText(e, { keyed: !!settings.apis.openalexKey });
       }
     }
-    return serializeWhitelist([...merged.values()]);
+    const names = {};
+    for (const issn of wanted) if (this.journalNames.has(issn)) names[issn] = this.journalNames.get(issn);
+    return { names, error };
   }
 
   async loadPresetJournals() {
@@ -906,6 +1142,9 @@ export class ZotWatchAddon {
   async resetData() {
     if (this.running) throw new Error("正在运行，请稍后再试");
     await this.storage.clear();
+    // In-memory OpenAlex answers of the settings page are caches too
+    this.searchCache?.clear();
+    this.journalNames = null;
     // The whitelist is user data, not cache: keep it
     if (this.whitelist) await this.storage.writeText(WHITELIST_FILE, this.whitelist);
     setPref("schedule.lastRun", "");

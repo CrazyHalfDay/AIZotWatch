@@ -31,6 +31,10 @@ pref("extensions.zotwatch.abstracts.crossref", true);
 pref("extensions.zotwatch.abstracts.elsevierKey", "");
 pref("extensions.zotwatch.abstracts.springerKey", "");
 
+// Scholarly data APIs (学术数据接口); the Crossref contact address stays sources.crossref.mailto
+pref("extensions.zotwatch.apis.openalexKey", "");
+pref("extensions.zotwatch.apis.semanticScholarKey", "");
+
 pref("extensions.zotwatch.followed.enabled", false);
 pref("extensions.zotwatch.followed.authors", "");
 pref("extensions.zotwatch.followed.daysBack", "60");

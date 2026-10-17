@@ -7,7 +7,7 @@ import test from "node:test";
 import { normalizeOpenAlexAuthorId, normalizeOrcid, parseFollowedAuthors } from "../src/core/authors.js";
 import { CancelledRequestError } from "../src/core/http.js";
 import { attachFollowed, countByTrack, selectSummaryTargets, trackOf, unionNames } from "../src/core/tracks.js";
-import { CancelledError, ZotWatchEngine } from "../src/engine.js";
+import { CancelledError, FOLLOWED_KEYLESS_MESSAGE, ZotWatchEngine } from "../src/engine.js";
 import { loadSettings } from "../src/settings.js";
 import { fetchFollowedWorks, parseOpenAlexWork } from "../src/sources/followed.js";
 import { createMemoryStorage } from "../src/store.js";
@@ -217,7 +217,7 @@ test("works with a truncated author list are attributed from their full author l
   await assert.rejects(fetchFollowedWorks(cancelled, { authors: [ANN, WANG], now: NOW, retry: noSleep }), (e) => e.cancelled === true);
 });
 
-test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors and merges duplicates", async () => {
+test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors (with a key) and merges duplicates", async () => {
   const pages = {
     orcid: [
       { meta: { next_cursor: "page2" }, results: [oaWork(1, { authors: [ANN] }), oaWork(2, { authors: [WANG, ANN], date: "2024-09-20" })] },
@@ -232,9 +232,21 @@ test("followed fetch queries OpenAlex by ORCID and author id, pages with cursors
     [(r) => decodeURIComponent(r.url).includes("authorships.author.id:"), () => pages.id[0]],
   ]);
   const logs = [];
-  const works = await fetchFollowedWorks(http, { authors: [ANN, WANG, CHEN], daysBack: 60, mailto: "me@x.org", now: NOW, retry: noSleep, log: (m) => logs.push(m) });
+  let truncated = 0;
+  const works = await fetchFollowedWorks(http, {
+    authors: [ANN, WANG, CHEN],
+    daysBack: 60,
+    mailto: "me@x.org",
+    apiKey: " oa-key ",
+    now: NOW,
+    retry: noSleep,
+    log: (m) => logs.push(m),
+    onTruncated: () => truncated++,
+  });
 
   assert.equal(http.calls.length, 3);
+  assert.equal(truncated, 0);
+  assert.ok(http.calls.every((c) => c.url.endsWith("&api_key=oa-key")), "every OpenAlex request carries the key");
   const [first, second, third] = http.calls.map((c) => decodeURIComponent(c.url));
   assert.match(first, /^https:\/\/api\.openalex\.org\/works\?/);
   assert.match(first, /filter=author\.orcid:https:\/\/orcid\.org\/0000-0002-1825-0097\|https:\/\/orcid\.org\/0000-0002-3584-1673,from_publication_date:2024-08-11&/);
@@ -278,6 +290,46 @@ test("followed fetch splits large author lists and caps records per query", asyn
 
   const failing = mockHttp([["https://api.openalex.org/works", () => ({ status: 400, data: { error: "Invalid query" } })]]);
   await assert.rejects(fetchFollowedWorks(failing, { authors: [ANN], now: NOW, retry: noSleep }), /HTTP 400.*Invalid query/);
+});
+
+test("without an OpenAlex key only the first page is read and the cut is reported", async () => {
+  const page = (n, count) => ({ meta: { count, next_cursor: null }, results: Array.from({ length: n }, (_, i) => oaWork(i + 1, { authors: [ANN] })) });
+  let answer = page(200, 950);
+  const http = mockHttp([["https://api.openalex.org/works", () => answer]]);
+  const logs = [];
+  let truncated = 0;
+  const works = await fetchFollowedWorks(http, { authors: [ANN], mailto: "me@x.org", now: NOW, retry: noSleep, log: (m) => logs.push(m), onTruncated: () => truncated++ });
+  assert.equal(http.calls.length, 1, "no second page without a key");
+  const url = decodeURIComponent(http.calls[0].url);
+  assert.doesNotMatch(url, /cursor=/, "keyless requests do not page with cursors");
+  assert.doesNotMatch(url, /api_key=/);
+  assert.equal(works.length, 200);
+  assert.equal(truncated, 1);
+  assert.ok(logs.some((m) => /no API key, only the first page/.test(m)));
+
+  // Everything fit on the first page: nothing to report
+  answer = page(12, 12);
+  truncated = 0;
+  await fetchFollowedWorks(http, { authors: [ANN], now: NOW, retry: noSleep, onTruncated: () => truncated++ });
+  assert.equal(truncated, 0);
+});
+
+// The engine turns the cut into a non-fatal error that names the setting
+test("a keyless followed fetch that was cut short becomes a non-fatal run error", async () => {
+  const { engine, state } = setup();
+  state.followedHandler = () => ({ meta: { count: 450, next_cursor: null }, results: [oaWork(77, { authors: [WANG], date: "2024-10-05" })] });
+  const run = await engine().run();
+  const followedErrors = run.errors.filter((e) => e.stage === "followed");
+  assert.deepEqual(followedErrors.map((e) => [e.source, e.message]), [["OpenAlex", FOLLOWED_KEYLESS_MESSAGE]]);
+  assert.match(FOLLOWED_KEYLESS_MESSAGE, /学术数据接口/);
+  assert.equal(run.stats.followed.fetched, 1, "the first page is still used");
+
+  // With a key the same answer is complete (paging would continue) and nothing is reported
+  const keyed = setup({ prefs: { "apis.openalexKey": "oa-key" } });
+  keyed.state.followedHandler = state.followedHandler;
+  const run2 = await keyed.engine().run();
+  assert.deepEqual(run2.errors.filter((e) => e.stage === "followed"), []);
+  assert.ok(keyed.http.calls.filter((c) => c.url.startsWith("https://api.openalex.org/")).every((c) => c.url.includes("api_key=oa-key")));
 });
 
 // -------------------------------------------------------------- track model

@@ -1,7 +1,10 @@
 // Abstract fallback (摘要补全): fills in missing abstracts by DOI through
-// Crossref -> Elsevier -> Springer Nature -> OpenAlex, the first abstract of at
-// least 80 characters winning (port of Python infrastructure/enrichment/
-// api_fallback.py and the API path of pipeline/enrich.py).
+// Crossref -> Elsevier -> Springer Nature -> OpenAlex -> Semantic Scholar, the
+// first abstract of at least 80 characters winning (port of Python
+// infrastructure/enrichment/api_fallback.py and the API path of
+// pipeline/enrich.py; the Semantic Scholar tier is new and only runs with a
+// key). Semantic Scholar also returns a TLDR (one-sentence summary), stored on
+// the works as `tldr`.
 //
 // Differences from Python, all deliberate:
 // - transient failures (429, 5xx, network, timeouts, a 2xx body that is not a
@@ -12,19 +15,27 @@
 // - a rejected publisher key (401) disables that publisher for the run with one
 //   reported error; a 403 may concern one article only, so it counts like other
 //   failures: a provider failing repeatedly is skipped for the run
-// - OpenAlex is queried in batches of 50 DOIs instead of once per DOI
+// - OpenAlex is queried in batches of 50 DOIs instead of once per DOI, and
+//   Semantic Scholar in batches of 500
+// - a DOI cached as a miss is only looked up again by tiers that were not
+//   part of that miss (e.g. after a new key was added)
 // - lookups that would re-read the record a work was just fetched from (Crossref
 //   for Crossref works, OpenAlex for OpenAlex works) are skipped
 // - a leading "Abstract" label is removed before the length check
 
-import { buildUrl, getJson } from "../core/http.js";
+import { buildUrl, getJson, limitedRequest } from "../core/http.js";
 import { cleanHtml, normalizeDoi } from "../core/text.js";
 import { OPENALEX_BATCH_SIZE, batchableDoi, openAlexAbstractsUrl, parseOpenAlexAbstracts } from "./openalex.js";
+import { S2_BATCH_SIZE, s2Batch } from "./semanticscholar.js";
 
 const DAY = 86400000;
 /** Shorter texts are treated as missing (placeholders, truncated snippets). */
 export const MIN_ABSTRACT_CHARS = 80;
-/** Cache file in the plugin storage: {version: 1, entries: {<doi>: {a: string|null, s, exp}}}. */
+/**
+ * Cache file in the plugin storage: {version: 1, entries: {<doi>: {a: string|null, s, exp, t?}}},
+ * `s` being the tier that found the abstract or the tiers that all missed it,
+ * `t` a Semantic Scholar TLDR.
+ */
 export const ABSTRACT_CACHE_FILE = "abstracts-cache.json";
 const POSITIVE_TTL = 30 * DAY;
 const NEGATIVE_TTL = 7 * DAY;
@@ -33,6 +44,9 @@ const FRESH_WINDOW = 14 * DAY;
 const FRESH_NEGATIVE_TTL = 20 * 3600000;
 const CACHE_MAX_ENTRIES = 5000;
 const REQUEST_TIMEOUT = 20000;
+// A batch of 500 papers with abstracts takes longer
+const S2_TIMEOUT = 30000;
+const S2_FIELDS = "paperId,abstract,tldr";
 // Per-DOI chains running at once; Elsevier and Springer share a smaller limit
 const CONCURRENCY = 6;
 const PUBLISHER_CONCURRENCY = 2;
@@ -47,10 +61,12 @@ const SPRINGER_META = "https://api.springernature.com/meta/v2/json";
 const TEST_DOIS = { elsevier: "10.1016/j.gca.2019.01.001", springer: "10.1038/s41561-019-0300-9" };
 
 /** Tiers in the order they are tried. */
-export const TIERS = ["crossref", "elsevier", "springer", "openalex"];
-const PROVIDER_NAMES = { crossref: "Crossref", elsevier: "Elsevier", springer: "Springer Nature", openalex: "OpenAlex" };
+export const TIERS = ["crossref", "elsevier", "springer", "openalex", "s2"];
+const PROVIDER_NAMES = { crossref: "Crossref", elsevier: "Elsevier", springer: "Springer Nature", openalex: "OpenAlex", s2: "Semantic Scholar" };
+// Tiers queried in batches after the per-DOI chain, in this order
+const BATCH_TIERS = ["openalex", "s2"];
 // Source of works whose record at this service was just fetched with its abstract
-const SAME_RECORD_SOURCE = { crossref: "crossref", openalex: "openalex" };
+const SAME_RECORD_SOURCE = { crossref: "crossref", openalex: "openalex", s2: "semanticscholar" };
 
 /** DOI as a URL path: percent-encoded except for "/" (DOIs may contain "#", "?", "%" …). */
 export function doiPath(doi) {
@@ -181,6 +197,7 @@ async function runPool(items, limit, fn) {
 
 function validEntry(entry, now) {
   if (!entry || typeof entry !== "object" || !(Number(entry.exp) > now)) return false;
+  if (entry.t !== undefined && typeof entry.t !== "string") return false;
   return typeof entry.a === "string" ? entry.a.length > 0 : entry.a === null && Array.isArray(entry.s);
 }
 
@@ -227,13 +244,15 @@ function shortReason(error) {
  * @param {string} [options.mailto] - polite-pool address for Crossref and OpenAlex
  * @param {boolean} [options.crossref] - per-DOI Crossref tier
  * @param {boolean} [options.openalex] - batched OpenAlex tier
+ * @param {string} [options.openalexKey] - OpenAlex API key (sent with the OpenAlex batches)
  * @param {string} [options.elsevierKey] - enables Elsevier for 10.1016/ DOIs
  * @param {string} [options.springerKey] - enables Springer Nature for 10.1007/ and 10.1038/ DOIs
+ * @param {string} [options.s2Key] - enables the batched Semantic Scholar tier (abstracts and TLDRs)
  * @param {object|null} [options.cache] - storage ({readJSON, writeJSON}) keeping the cache file; null disables caching
  * @param {() => void} [options.checkpoint] - throws to stop (called before each lookup)
  * @param {(done: number, total: number) => void} [options.onProgress] - DOIs looked up so far
  * @returns {Promise<object>} counts of works {missing, noDoi, cacheHits, negativeSkips, crossref, elsevier,
- *   springer, openalex, filled, failed} plus `errors` [{source, message}] for disabled providers
+ *   springer, openalex, s2, filled, failed, tldr} plus `errors` [{source, message}] for disabled providers
  */
 export async function enrichMissingAbstracts(
   http,
@@ -242,8 +261,10 @@ export async function enrichMissingAbstracts(
     mailto = "",
     crossref = true,
     openalex = true,
+    openalexKey = "",
     elsevierKey = "",
     springerKey = "",
+    s2Key = "",
     cache = null,
     now = Date.now(),
     retry = {},
@@ -254,10 +275,10 @@ export async function enrichMissingAbstracts(
     publisherConcurrency = PUBLISHER_CONCURRENCY,
   } = {},
 ) {
-  const counts = { missing: 0, noDoi: 0, cacheHits: 0, negativeSkips: 0, crossref: 0, elsevier: 0, springer: 0, openalex: 0, filled: 0, failed: 0 };
+  const counts = { missing: 0, noDoi: 0, cacheHits: 0, negativeSkips: 0, crossref: 0, elsevier: 0, springer: 0, openalex: 0, s2: 0, filled: 0, failed: 0, tldr: 0 };
   const errors = [];
   const finish = () => {
-    counts.filled = counts.cacheHits + counts.crossref + counts.elsevier + counts.springer + counts.openalex;
+    counts.filled = counts.cacheHits + counts.crossref + counts.elsevier + counts.springer + counts.openalex + counts.s2;
     counts.failed = counts.missing - counts.filled;
     return { ...counts, errors };
   };
@@ -277,13 +298,24 @@ export async function enrichMissingAbstracts(
   }
   if (!groups.size) return finish();
 
-  const keys = { elsevier: String(elsevierKey || "").trim(), springer: String(springerKey || "").trim() };
-  const enabled = { crossref: !!crossref, elsevier: !!keys.elsevier, springer: !!keys.springer, openalex: !!openalex };
+  const keys = { elsevier: String(elsevierKey || "").trim(), springer: String(springerKey || "").trim(), s2: String(s2Key || "").trim() };
+  const enabled = { crossref: !!crossref, elsevier: !!keys.elsevier, springer: !!keys.springer, openalex: !!openalex, s2: !!keys.s2 };
   const store = cache ? await loadCache(cache, now) : null;
   const remember = (doi, entry) => {
     if (!store) return;
     store.entries.set(doi, entry);
     store.dirty = true;
+  };
+
+  /** Give the group's works a TLDR they do not have yet. */
+  const applyTldr = (group, tldr) => {
+    if (typeof tldr !== "string" || !tldr) return;
+    group.tldr = tldr;
+    for (const w of group.works) {
+      if (w.tldr) continue;
+      w.tldr = tldr;
+      counts.tldr++;
+    }
   };
 
   const pending = [];
@@ -294,14 +326,17 @@ export async function enrichMissingAbstracts(
       return !source || !group.works.every((w) => w.source === source);
     });
     const entry = store?.entries.get(group.doi);
+    if (entry) applyTldr(group, entry.t);
     if (typeof entry?.a === "string") {
       for (const w of group.works) w.abstract = entry.a;
       counts.cacheHits += group.works.length;
     } else if (entry && group.applicable.every((tier) => entry.s.includes(tier))) {
       // Every tier that could serve this DOI missed it recently
       counts.negativeSkips += group.works.length;
-    } else if (group.toQuery.length) {
-      pending.push(group);
+    } else {
+      // A recent miss is only checked by the tiers that were not part of it (a key added since)
+      if (entry) group.toQuery = group.toQuery.filter((tier) => !entry.s.includes(tier));
+      if (group.toQuery.length) pending.push(group);
     }
   }
 
@@ -313,6 +348,7 @@ export async function enrichMissingAbstracts(
     log(`${provider.name} abstract lookups disabled for this run: ${message}`);
   };
   const requestOptions = { ...retry, retries: Math.min(retry.retries ?? 2, 1), timeout: REQUEST_TIMEOUT };
+  const { timeout: _timeout, ...retryOnly } = requestOptions;
 
   // One provider request: {data} on success, {miss: true} for a definitive miss, {} when unavailable
   const call = async (tier, request) => {
@@ -331,7 +367,7 @@ export async function enrichMissingAbstracts(
         provider.failures = 0;
         return { miss: true };
       }
-      if (status === 401 && (tier === "elsevier" || tier === "springer")) {
+      if ((status === 401 && (tier === "elsevier" || tier === "springer")) || ((status === 401 || status === 403) && tier === "s2")) {
         disable(provider, `API Key 无效或无权限（HTTP ${status}），本次运行已停用`);
         return {};
       }
@@ -361,21 +397,24 @@ export async function enrichMissingAbstracts(
     group.abstract = abstract;
     for (const w of group.works) w.abstract = abstract;
     counts[tier] += group.works.length;
-    remember(group.doi, { a: abstract, s: tier, exp: now + POSITIVE_TTL });
+    remember(group.doi, { a: abstract, s: tier, exp: now + POSITIVE_TTL, ...(group.tldr ? { t: group.tldr } : {}) });
   };
 
   let done = 0;
   const step = (n) => {
+    if (!n) return;
     done += n;
     onProgress(done, pending.length);
   };
+  /** Whether a group has no lookup left after `tier` (progress counts every DOI once). */
+  const finishedAfter = (group, tier) => !!group.abstract || !BATCH_TIERS.slice(BATCH_TIERS.indexOf(tier) + 1).some((t) => group.toQuery.includes(t));
 
   try {
     // Per-DOI chain (Crossref, then the publisher APIs); OpenAlex follows in batches
     await runPool(pending, concurrency, async (group) => {
       checkpoint();
       for (const tier of group.toQuery) {
-        if (tier === "openalex") continue;
+        if (BATCH_TIERS.includes(tier)) continue;
         const spec = perDoi[tier];
         const attempt = () => call(tier, () => spec.request(group.doi));
         const res = spec.publisher ? await publisherSlot(attempt) : await attempt();
@@ -386,7 +425,7 @@ export async function enrichMissingAbstracts(
           break;
         }
       }
-      if (group.abstract || !group.toQuery.includes("openalex")) step(1);
+      if (group.abstract || !BATCH_TIERS.some((t) => group.toQuery.includes(t))) step(1);
     });
 
     const rest = pending.filter((group) => !group.abstract && group.toQuery.includes("openalex"));
@@ -394,7 +433,7 @@ export async function enrichMissingAbstracts(
     for (let i = 0; i < rest.length; i += OPENALEX_BATCH_SIZE) batches.push(rest.slice(i, i + OPENALEX_BATCH_SIZE));
     await runPool(batches, OPENALEX_CONCURRENCY, async (batch) => {
       checkpoint();
-      const res = await call("openalex", () => getJson(http, openAlexAbstractsUrl(batch.map((g) => g.doi), mailto), requestOptions));
+      const res = await call("openalex", () => getJson(http, openAlexAbstractsUrl(batch.map((g) => g.doi), mailto, openalexKey), requestOptions));
       const byDoi = "data" in res ? parseOpenAlexAbstracts(res.data) : null;
       // A DOI missing from a cut-off page may well be on the next one
       const results = Array.isArray(res.data?.results) ? res.data.results.length : 0;
@@ -404,20 +443,46 @@ export async function enrichMissingAbstracts(
         group.outcomes.openalex = abstract ? "hit" : (byDoi && complete) || res.miss ? "miss" : "unavailable";
         if (abstract) found(group, "openalex", abstract);
       }
+      step(batch.filter((group) => finishedAfter(group, "openalex")).length);
+    });
+
+    // Semantic Scholar: abstracts (also where publishers withhold them elsewhere) and TLDRs
+    const s2Rest = pending.filter((group) => !group.abstract && group.toQuery.includes("s2"));
+    const s2Batches = [];
+    for (let i = 0; i < s2Rest.length; i += S2_BATCH_SIZE) s2Batches.push(s2Rest.slice(i, i + S2_BATCH_SIZE));
+    await runPool(s2Batches, 1, async (batch) => {
+      checkpoint();
+      const res = await call("s2", async () => ({
+        papers: await s2Batch(http, batch.map((g) => `DOI:${g.doi}`), { key: keys.s2, fields: S2_FIELDS, retry: retryOnly, timeout: S2_TIMEOUT }),
+      }));
+      const papers = Array.isArray(res.data?.papers) ? res.data.papers : null;
+      batch.forEach((group, i) => {
+        const paper = papers ? papers[i] : null;
+        if (paper) applyTldr(group, paper.tldr?.text);
+        const abstract = paper ? acceptAbstract(paper.abstract) : null;
+        group.outcomes.s2 = abstract ? "hit" : papers || res.miss ? "miss" : "unavailable";
+        if (abstract) found(group, "s2", abstract);
+      });
       step(batch.length);
     });
 
     // Negative entries only for DOIs that every queried tier definitively missed
+    // (the other applicable tiers missed it before, or hold the record it came from)
     let negatives = 0;
     for (const group of pending) {
       if (group.abstract || !group.toQuery.every((tier) => group.outcomes[tier] === "miss")) continue;
-      remember(group.doi, { a: null, s: group.applicable, exp: now + (isFresh(group.works, now) ? FRESH_NEGATIVE_TTL : NEGATIVE_TTL) });
+      remember(group.doi, {
+        a: null,
+        s: group.applicable,
+        exp: now + (isFresh(group.works, now) ? FRESH_NEGATIVE_TTL : NEGATIVE_TTL),
+        ...(group.tldr ? { t: group.tldr } : {}),
+      });
       negatives++;
     }
     const result = finish();
     log(
       `Abstracts: filled ${result.filled}/${result.missing} (cache ${result.cacheHits}, crossref ${result.crossref}, ` +
-        `elsevier ${result.elsevier}, springer ${result.springer}, openalex ${result.openalex}; ` +
+        `elsevier ${result.elsevier}, springer ${result.springer}, openalex ${result.openalex}, s2 ${result.s2}; ` +
         `${result.negativeSkips} known misses skipped, ${negatives} new misses cached)`,
     );
     return result;
@@ -440,7 +505,7 @@ export async function checkPublisherKeyRows(http, { elsevierKey = "", springerKe
   for (const [key, req] of checks) {
     const row = { key, name: PROVIDER_NAMES[key], ok: false, detail: "" };
     try {
-      const res = await http.request({ ...req, timeout: REQUEST_TIMEOUT });
+      const res = await limitedRequest(http, { ...req, timeout: REQUEST_TIMEOUT });
       if ((res.status >= 200 && res.status < 300) || res.status === 404) Object.assign(row, { ok: true, detail: "Key 有效" });
       else if (res.status === 401 || res.status === 403) row.detail = `Key 无效（HTTP ${res.status}）`;
       else row.detail = `HTTP ${res.status}`;

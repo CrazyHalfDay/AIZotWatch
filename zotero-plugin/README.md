@@ -8,11 +8,12 @@
 
 - **本地文库画像**：直接读取 Zotero 本地数据库中的条目（无需 Zotero API Key），增量向量化——只有新增或修改过的条目才会重新计算
 - **多源抓取**：Crossref（按关注期刊 ISSN）、arXiv（按分类）、EarthArXiv（OAI-PMH）
-- **摘要补全**：论文缺少摘要时（很多出版商不向 Crossref 提交摘要），按 DOI 依次从 Crossref、Elsevier、Springer Nature（后两者需填写免费的 API Key）和 OpenAlex 查找，结果缓存在本地；关注作者的论文同样会补全
-- **关注期刊自动推断**：默认取文库中最常出现的期刊作为关注列表，也可导入 `journal_whitelist.csv`（含影响因子）
+- **摘要补全**：论文缺少摘要时（很多出版商不向 Crossref 提交摘要），按 DOI 依次从 Crossref、Elsevier、Springer Nature（后两者需填写免费的 API Key）、OpenAlex 和 Semantic Scholar（需填写 Key，同时提供 TLDR 一句话总结）查找，结果缓存在本地；关注作者的论文同样会补全
+- **学术数据接口**：填写 OpenAlex（2026 年起需要免费 Key）和 Semantic Scholar 的 API Key；所有请求按服务自动限速（如 Semantic Scholar 每秒 1 次），遇到限流时等待后重试
+- **关注期刊**：默认取文库中最常出现的期刊作为关注列表；可以在 OpenAlex 中按刊名或 ISSN 搜索添加，或「从文库生成」一份建议（文库常见期刊 + 启用大模型时推荐的相关期刊，均经 OpenAlex 核实）勾选后加入，学科和近似影响因子（OpenAlex 两年均被引）自动填写；也可导入 `journal_whitelist.csv`（含影响因子）
 - **与 Python 版一致的打分算法**：k-NN 微观相似度 + 语义聚类宏观相似度融合（Silhouette 自适应选 k），叠加期刊影响因子，动态阈值分出「必读 / 推荐 / 一般」
 - **顶刊地学速览**：Nature、Science、PNAS、Nature Communications、Science Advances 等综合性顶刊单独抓取，不按文库相似度筛选，而是用语义「领域锚点」挑出其中的固体地球科学与古生物文章（介于两可之间的可交给大模型复核），单独列出（每次取最新发表的 N 篇）
-- **关注作者**：按 ORCID（或 OpenAlex 作者 ID）追踪指定研究者的新论文。这些论文不参与打分、只与文库去重，每篇只出现一次；与个性推荐重合时不重复显示，而是在那条推荐上标注「关注：作者名」
+- **关注作者**：按 ORCID（或 OpenAlex 作者 ID）追踪指定研究者的新论文，可在 OpenAlex 中按姓名搜索后一键关注。这些论文不参与打分、只与文库去重，每篇只出现一次；与个性推荐重合时不重复显示，而是在那条推荐上标注「关注：作者名」
 - **概览仪表盘**：待查看篇数、本次新增与必读、最近 14 次运行的新增推荐、筛选漏斗、各数据源状态、研究方向和关注作者一目了然
 - **推荐收件箱**：「待查看 / 已加入 / 已忽略」三栏，已处理的论文不会重复推荐；按来源分区显示（个性推荐、顶刊地学、关注作者），支持按来源筛选、筛选必读、本次新增、按分数/日期排序、搜索
 - **一键加入 Zotero**：通过 DOI / arXiv 号调用 Zotero 自带的「通过标识符添加」抓取完整元数据，自动放入指定分类并打标签
@@ -36,7 +37,8 @@
 1. 安装后打开 **工具 → ZotWatch 文献推荐…**（或 Zotero 设置 → ZotWatch → 「打开设置」），在 ZotWatch 窗口左侧点 **设置**：
    - **向量化**：推荐选择「阿里云 DashScope」并填入 API Key（与 AIZotWatch 的 `DASHSCOPE_API_KEY` 相同），点「测试向量化」确认可用；不填也能用本地模式
    - **文献来源**：建议填写 Crossref 联系邮箱，进入 Crossref 的礼貌池，请求更稳定
-   - **关注期刊**：默认自动关注文库中最常见的 40 种期刊；也可以点「导入 CSV…」导入 AIZotWatch 的 `data/journal_whitelist.csv`，或点「载入地学期刊示例」
+   - **学术数据接口**：在 [openalex.org](https://openalex.org) 免费注册并填写 OpenAlex API Key（期刊、作者搜索和关注作者都要用到）
+   - **关注期刊**：默认自动关注文库中最常见的 40 种期刊；也可以在搜索框中按刊名或 ISSN 添加，点「从文库生成」挑选建议的期刊，点「导入 CSV…」导入 AIZotWatch 的 `data/journal_whitelist.csv`，或点「载入地学期刊示例」
 2. 点窗口右上角的 **「立即检查」**，或使用菜单 **工具 → ZotWatch：立即检查新文献**
 3. 首次运行需要向量化整个文库（几千篇文献约几分钟，取决于 API 速度），之后每天只处理新增内容
 4. 在 ZotWatch 窗口的 **推荐** 页浏览推荐，点「加入 Zotero」或「忽略」
@@ -73,7 +75,7 @@
 
 - 修改**自动保存**：开关和选项立即生效，文本框在停止输入约 0.6 秒后或离开输入框时保存，切换页面或关闭窗口前也会保存；改动在下次检查时生效
 - 数值框旁标出单位和允许的范围，超出范围或不是数字时下方会提示实际使用的值（如「超出范围，将按 365 使用」）；留空的阈值显示按当前向量化服务自动取的值（如「自动（0.20）」）
-- API Key 默认隐藏，点输入框右侧的眼睛图标可以查看；「向量化」「文献来源 → 摘要补全」「AI 助手」中的测试按钮会先保存刚输入的内容，再把检测结果显示在按钮旁
+- API Key 默认隐藏，点输入框右侧的眼睛图标可以查看；「向量化」「学术数据接口」「文献来源 → 摘要补全」「AI 助手」中的测试按钮会先保存刚输入的内容，再把检测结果显示在按钮旁
 
 ![ZotWatch 设置：向量化](docs/settings.png)
 
@@ -83,11 +85,19 @@
 | 常规 | 推荐保留天数 | 待查看的推荐超过 N 天（默认 30，1–365）没有再次出现就会移除；已加入或已忽略的记录至少保留 60 天，以免重复推荐 |
 | 向量化 | 服务商 | `本地模式`（免费、离线、效果一般）/ `阿里云 DashScope`（推荐，text-embedding-v4，1024 维）/ `Voyage AI`（voyage-3.5）/ `OpenAI 兼容接口`（可接 OpenAI、硅基流动、本地 Ollama 等）；本地模式不需要 API Key、模型和接口地址，这几项只在选择在线服务时显示 |
 | 向量化 | API Key / 模型 / 接口地址 / 向量维度 | 留空使用所选服务的默认值（输入框中显示默认模型和官方接口地址）。接口地址对所有在线服务都生效（如 DashScope 国际站或代理），换服务商时不会自动清空，请一并检查。向量维度在「高级选项」中，只用于 DashScope，text-embedding-v4 只支持 64 / 128 / 256 / 512 / 768 / 1024 / 1536 / 2048（填其他值时输入框下方会提示）；更换服务商、模型或维度后会自动重新向量化文库。「测试向量化」用当前设置向量化一段测试文本 |
+| 学术数据接口 | OpenAlex API Key | 在 [openalex.org](https://openalex.org) 免费注册后获取。**自 2026 年 2 月起 OpenAlex 需要 API Key**：不填时每天只有很少的免费额度（用完后请求会失败），也不能翻页获取完整结果，所以关注作者每次只取第一页（结果被截断时运行问题中会提示「未配置 OpenAlex API Key：只获取了第一页结果…」）；免费 Key 的额度足够每日使用。Key 作为 `api_key` 参数随每个 OpenAlex 请求发送（关注作者、摘要补全以及之后的期刊和文献查询），日志和错误信息中会被隐去。「今日额度」显示最近一次请求时 OpenAlex 告知的当日剩余额度（只保存在内存中，重启 Zotero 后在下次请求或「测试接口」时更新） |
+| 学术数据接口 | Semantic Scholar API Key | 可选，在 Semantic Scholar 的 API 页面申请（审核通过后通过邮件获得），以请求头 `x-api-key` 发送。填写后摘要补全多一个来源，并取回 TLDR（一句话总结）：没有摘要的推荐卡片以一行灰色小字显示「TLDR：…」，有摘要时作为摘要的悬停提示。入门级 Key 限每秒 1 次请求（所有接口合计），插件会自动控制速率；限流时 Semantic Scholar 可能返回 429 或 5xx，都会等待后重试 |
+| 学术数据接口 | 联系邮箱（Crossref 礼貌池） | 原「文献来源 → Crossref」中的联系邮箱（设置保留）。填写后 Crossref 请求进入更稳定的礼貌池，也作为 `mailto` 随 OpenAlex 请求发送。「测试接口」依次检查 Crossref、OpenAlex（有 Key 时同时读取当日额度）和 Semantic Scholar |
 | 文献来源 | Crossref / arXiv / EarthArXiv | 每个来源一张卡片，右上角开关启用。回溯天数默认 7 / 7 / 14 天（Crossref 可改，1–60）；arXiv 按分类抓取（留空时使用默认的 `physics.geo-ph, astro-ph.EP`），只保留主分类匹配的论文 |
-| 文献来源 | 摘要补全 | 缺摘要的论文按 DOI 依次查询 Crossref（只用于预印本等不是从 Crossref 抓到的论文）→ Elsevier（`10.1016/`，需 API Key）→ Springer Nature（`10.1007/`、`10.1038/`，需 API Key）→ OpenAlex，取第一个不少于 80 个字符的摘要。找到的摘要缓存 30 天；各来源都明确没有的 DOI 7 天内不再查询，发表不到两周的新论文则只隔约一天（OpenAlex 等收录新论文需要几天）；网络错误、限流和无法解析的响应不算，新填 API Key 后也会重新查询。API Key 无效（HTTP 401）或某个来源连续出错时本次运行停用该来源，并在推荐页提示；「测试 API Key」会检查已填写的 Key。Key 申请：[dev.elsevier.com](https://dev.elsevier.com) / [dev.springernature.com](https://dev.springernature.com) |
-| 关注期刊 | 期刊列表 | 与 AIZotWatch 相同的 CSV 格式：`issn,title,category,impact_factor`；影响因子参与打分（权重 20%），未列出的期刊按默认分计算。输入时上方实时显示识别到的期刊数和有影响因子的期刊数，第一列不是 ISSN 的行会单独提示。「从文库生成」把文库常见期刊合并进列表，「导入 CSV…」和「载入地学期刊示例」替换整个列表（列表非空时会先确认）。列表保存为数据目录下的 `zotwatch/journals.csv`（体积可能超过偏好设置建议的 4 KB 上限，所以不放在偏好设置里），清除缓存时会保留 |
+| 文献来源 | 摘要补全 | 缺摘要的论文按 DOI 依次查询 Crossref（只用于预印本等不是从 Crossref 抓到的论文）→ Elsevier（`10.1016/`，需 API Key）→ Springer Nature（`10.1007/`、`10.1038/`，需 API Key）→ OpenAlex（每 50 个 DOI 一批）→ Semantic Scholar（需在「学术数据接口」中填写 Key，每 500 个 DOI 一批），取第一个不少于 80 个字符的摘要。找到的摘要缓存 30 天；各来源都明确没有的 DOI 7 天内不再查询，发表不到两周的新论文则只隔约一天（OpenAlex 等收录新论文需要几天）；网络错误、限流和无法解析的响应不算，新填 API Key 后只用新来源重新查询。API Key 无效（HTTP 401，Semantic Scholar 为 401 / 403）或某个来源连续出错时本次运行停用该来源，并在推荐页提示；「测试 API Key」会检查已填写的 Key。Key 申请：[dev.elsevier.com](https://dev.elsevier.com) / [dev.springernature.com](https://dev.springernature.com) |
+| 关注期刊 | 期刊列表 | 与 AIZotWatch 相同的 CSV 格式：`issn,title,category,impact_factor`；影响因子参与打分（权重 20%），未列出的期刊按默认分计算。输入时上方实时显示识别到的期刊数和有影响因子的期刊数，第一列不是 ISSN 的行会单独提示。「导入 CSV…」和「载入地学期刊示例」替换整个列表（列表非空时会先确认）。列表保存为数据目录下的 `zotwatch/journals.csv`（体积可能超过偏好设置建议的 4 KB 上限，所以不放在偏好设置里），清除缓存时会保留 |
+| 关注期刊 | 添加期刊（搜索） | 输入刊名或 ISSN（至少 2 个字符，停顿 0.4 秒后搜索，回车立即搜索），在 OpenAlex 中查找期刊；结果列出出版商、国家、ISSN、近似影响因子和发文量，「添加」为期刊的每个 ISSN 各写一行（印刷版和电子版都能匹配 Crossref），学科和近似影响因子自动填写，已在列表中的显示「已在列表」。↑ / ↓ 选择结果，回车添加，Esc 收起结果。未填写 OpenAlex API Key 时仍可搜索，但会提示免费额度很小 |
+| 关注期刊 | 从文库生成 | 不再直接改写列表，而是在分区内打开「期刊建议」：文库中最常见的期刊（数量同「自动关注的期刊数量」；条目缺少 ISSN 时先按刊名查 Crossref，再在 OpenAlex 中按刊名精确匹配），用 OpenAlex 补全规范刊名、全部 ISSN、学科和近似影响因子；启用大模型时还会用 Python 版的期刊提示词（`JOURNAL_GENERATION_PROMPT`）请大模型规范刊名并推荐文库中尚未出现的相关期刊，每个推荐都要在 OpenAlex 中找到同名期刊才会列出（找不到的丢弃），影响因子一律取 OpenAlex 的值而不用大模型给的。文库中至少出现「自动关注」最少篇数（默认 2 篇）的期刊和近似影响因子 ≥ 2 的 AI 推荐默认勾选，已在列表中的显示「已在列表」；勾选后点「加入所选」合并进列表（每个 ISSN 一行，已有的行只补空缺的学科和影响因子，不覆盖已有的值）。OpenAlex 或大模型出错时仍列出能确定的期刊并提示原因，生成过程中可以取消 |
+| 关注期刊 | 补全学科与影响因子 | 为列表中学科为空（或旧版「从文库生成」写入的 `library:N`）、缺影响因子或缺刊名的行从 OpenAlex 按 ISSN 补全，从不覆盖已有的值；OpenAlex 中找不到的 ISSN 会列出。**近似影响因子**是 OpenAlex 的「两年均被引」（`2yr_mean_citedness`，算法与 JCR 影响因子相近但数值不完全相同，所有期刊使用同一口径）；**学科**取 OpenAlex 主题分类中该刊最主要的子领域，如 `GEOCHEMISTRY_AND_PETROLOGY`。在中国出版且刊名为中文或中文刊名的拼音 / 拉丁写法（如 *Acta Petrologica Sinica*、*Dizhi Xuebao*、*Chinese Journal of …*）的期刊加注 ` (CN)`，按中文核心期刊计分（OpenAlex 没有期刊语种字段，这是启发式判断；在中国出版的英文期刊如 *Science China Earth Sciences* 不加注，按影响因子计分，可手动改为 `…_CN`） |
 | 关注期刊 | 自动关注文库中最常见的期刊 | 取出现次数 ≥ 2 的前 N 种期刊（默认 40，1–300），与期刊列表合并；文库条目缺少 ISSN 时通过 Crossref 按刊名查询（结果缓存 90 天） |
-| 关注作者 | 作者列表 / 检查最近 N 天 | 每行一位：姓名 + ORCID（如 `汪在聪, 0000-0002-3584-1673`，也可粘贴 `https://orcid.org/…` 链接）或 OpenAlex 作者 ID（如 `A5023888391`），以 `#` 开头的行会被忽略；输入时下方实时列出识别到的作者及其 ORCID / OpenAlex ID，无法识别的行标为「无法识别」。每次运行在 OpenAlex 中查询这些作者最近 N 天（默认 60 天，7–365）发表的论文，已出现过的不会再推荐。这些论文不参与评分，不受关键词、摘要和「最近 N 天」过滤影响，只与文库去重；首次开启时会把最近 N 天的论文一次性列出。OpenAlex 的列表只给出论文的前 100 位作者，作者更多的论文会再查一次完整作者名单，以确定是哪位关注作者（查不到时不标注作者名） |
+| 关注作者 | 添加作者（搜索） | 输入姓名、ORCID 或 OpenAlex 作者 ID，在 OpenAlex 中查找作者；结果列出机构、论文数、被引次数、ORCID（没有时显示「无 ORCID」）和主要研究主题，便于区分同名作者。「关注」在作者列表末尾加一行「姓名, ORCID」（没有 ORCID 时用 OpenAlex 作者 ID），已关注的显示「已关注」。下方列出识别到的作者，每行可「移除」；无法识别的行也列出并可移除。原来的文本框收在「编辑文本」中 |
+| 关注作者 | 作者列表 / 检查最近 N 天 | 每行一位：姓名 + ORCID（如 `汪在聪, 0000-0002-3584-1673`，也可粘贴 `https://orcid.org/…` 链接）或 OpenAlex 作者 ID（如 `A5023888391`），以 `#` 开头的行会被忽略；输入时下方实时列出识别到的作者及其 ORCID / OpenAlex ID，无法识别的行标为「无法识别」。每次运行在 OpenAlex 中查询这些作者最近 N 天（默认 60 天，7–365）发表的论文，已出现过的不会再推荐。这些论文不参与评分，不受关键词、摘要和「最近 N 天」过滤影响，只与文库去重；首次开启时会把最近 N 天的论文一次性列出。OpenAlex 的列表只给出论文的前 100 位作者，作者更多的论文会再查一次完整作者名单，以确定是哪位关注作者（查不到时不标注作者名）。未填写 OpenAlex API Key 时每次只取第一页（最多 200 篇） |
+| 顶刊地学 | 添加顶刊（搜索）/ 顶刊列表 | 在 OpenAlex 中搜索期刊，「添加」把它的全部 ISSN 加入顶刊 ISSN；顶刊列表按期刊名分组显示 ISSN（内置的 8 种期刊和期刊列表中已有的刊名直接显示，其他 ISSN 在 OpenAlex 中查一次刊名），每种期刊可整体移除（至少保留一种；不需要时关闭开关即可）。ISSN 文本收在「编辑文本」中，仍可「恢复默认」 |
 | 顶刊地学 | 开启 / 顶刊 ISSN | 默认关闭。开启后这些期刊（默认 12 个 ISSN：Nature、Science、Nature Communications、Science Advances、Communications Earth & Environment、PNAS、Nature Geoscience、Nature Reviews Earth & Environment 的印刷版与电子版）用单独的 Crossref 查询抓取（回溯天数与 Crossref 相同），并有自己的抓取上限（与关注期刊各自最多 3000 篇，即配置编辑器中的 `sources.crossref.maxResults`），发文量很大的综合期刊不会挤占关注期刊的名额；即使关闭了 Crossref 来源也会抓取。期刊的任一 ISSN 命中即算顶刊文章，它们不再进入个性推荐，也不受关键词、相似度门槛、预印本占比和推荐数量限制，但必须有摘要（会先经过摘要补全）且在「最近 N 天」内发表 |
 | 顶刊地学 | 门控与阈值 | 每篇文章的摘要向量与「地学领域描述」（正向锚点）和每条「排除领域」（大气、材料、化学、生物、天文、工程）比较：离任一排除领域不比正向锚点远的直接排除；与正向锚点的相似度 ≥ 接受阈值的保留，< 灰区下限的排除，两者之间为灰区（灰区下限高于接受阈值时按接受阈值使用，输入框下方会提示）。阈值留空时自动取值，输入框中显示当前的自动值：API 模式 0.30 / 0.22（Python 版针对 DashScope text-embedding-v4 调校的值），本地模式 0.12 / 0.04（本地模式只比较字面词汇，与描述用词不同的地学文章几乎都会落在灰区以下：开启大模型复核时，除明显更接近某个排除领域的文章外，所有未直接保留的文章都交给大模型判断，请求会多一些；不复核时这类文章会被漏掉，建议改用 DashScope；本地模式下分区中会显示这段提示）。Voyage 的锚点按查询（query）向量化，与 Python 版一致 |
 | 顶刊地学 | 大模型复核 / 每次最多显示 | 灰区文章按「大模型复核标准」（与 Python 版 `llm_boundary` 相同）每 20 篇一批交给大模型判断；未启用大模型或关闭复核时灰区全部保留。大模型请求失败或回复无法解析时保留该批的灰区文章（本地模式下额外交给大模型的文章不保留）并在推荐页提示，不影响本次运行。每次最多保留最新发表的 N 篇（默认 30，0 为不限），与其他分区一样按所选方式排序；卡片上显示与文库的相似度（仅供参考，与子笔记中的数值一致），悬停徽章可看到地学相关度和是否经大模型复核。ISSN、锚点和复核标准默认显示内置的默认值，可直接修改；清空或点「恢复默认」时恢复默认值（与默认值相同的内容不会被单独保存，以后版本更新默认值时会跟着更新） |
@@ -123,7 +133,9 @@ Crossref（顶刊 ISSN，单独查询）──► 去重 ──► 补摘要 ─
 OpenAlex（关注作者的 ORCID）──► 去掉已出现过的 ──► 与文库去重 ──► 补摘要 ──► 关注作者 ──┘
 ```
 
-「补摘要」对本次所有缺摘要的论文（候选论文和关注作者的新论文一起）按 DOI 依次查询 Crossref → Elsevier → Springer Nature → OpenAlex，取第一个足够长的摘要；它在关键词过滤之前进行（与 Python 版相同），所以关键词也能匹配补全的摘要。
+「补摘要」对本次所有缺摘要的论文（候选论文和关注作者的新论文一起）按 DOI 依次查询 Crossref → Elsevier → Springer Nature → OpenAlex → Semantic Scholar，取第一个足够长的摘要；它在关键词过滤之前进行（与 Python 版相同），所以关键词也能匹配补全的摘要。
+
+所有网络请求都经过一个按服务排队的限速器（后台运行和界面操作共用）：每次请求（包括重试）发出前先等到该服务有空位，Crossref 每秒 3 次 / 同时 3 个、OpenAlex 每秒 8 次 / 同时 4 个、Semantic Scholar 每秒 1 次 / 同时 1 个、arXiv 每 3 秒 1 次、Elsevier 和 Springer Nature 每秒 2 次 / 同时 2 个，大模型和向量化服务不限。服务返回 429（Semantic Scholar 还包括 5xx）并带 Retry-After 时，同一服务的其他请求也一起等待；重试按指数退避（Semantic Scholar 从 3 秒起，其他服务从 2 秒起，等待最长 1 分钟）。取消运行时，排队中的请求立即结束。每个服务只使用一个 Key / 一个联系邮箱（不轮换多个邮箱或 Key：这既没有必要，也违反这些服务的使用条款）。高级用户可以在配置编辑器中新建字符串偏好 `extensions.zotwatch.http.rateLimits`，用 JSON 覆盖某个服务的限速，例如 `{"api.crossref.org": {"rps": 5, "concurrency": 3}}`（填 `null` 表示不限速），下次运行时生效。
 
 顶刊地学速览与 Python 版的 `scoring.flagship` 相同：顶刊文章在去重后立即离开个性推荐流程，先补摘要、去掉无摘要和不在「最近 N 天」内的文章（Python 版在门控之后才按时间过滤，结果相同，但这里省下向量化和大模型调用），再与领域锚点比较。锚点每次运行重新向量化（一次很小的请求，不写入候选缓存）；文章向量与个性推荐共用候选缓存。入选文章照常计算与文库的相似度和期刊分，但只用于显示，不设门槛、不分「必读 / 推荐」。大模型复核用 Python 版的相关性提示词，只是把论文编号改为 P1、P2…（比让模型照抄 DOI 更可靠）；与 Python 版不同，复核失败不会中断运行，而是保留该批文章。
 
@@ -143,11 +155,11 @@ OpenAlex（关注作者的 ORCID）──► 去掉已出现过的 ──► 与
 - API Key 保存在 Zotero 的偏好设置（profile 目录下的 `prefs.js`，明文），请勿与他人共享该目录
 - 发送到外部服务的内容：
   - 向量化服务：文库条目和候选论文的**标题 + 摘要**，开启顶刊地学速览时还有领域锚点文本（本地模式不发送）
-  - 大模型（仅启用时）：推荐论文（包括顶刊地学和关注作者的论文）的标题、摘要、作者和期刊名；顶刊灰区复核时发送这些文章的标题和摘要以及复核标准；生成研究方向标签时发送**文库中**每个方向最多 3 个代表性标题和 5 个 Zotero 标签以及方向的篇数（可在设置中关闭）
-  - Crossref / arXiv / EarthArXiv / OpenAlex：只有查询条件（ISSN、文库常见期刊缺 ISSN 时的刊名（发给 Crossref，用于查 ISSN）、分类、日期、DOI、关注作者的 ORCID / OpenAlex 作者 ID），不含文库条目的标题、摘要等内容
-  - Elsevier / Springer Nature（仅在填写 API Key 时）：缺摘要论文的 DOI 和你的 API Key，不含文库内容
+  - 大模型（仅启用时）：推荐论文（包括顶刊地学和关注作者的论文）的标题、摘要、作者和期刊名；顶刊灰区复核时发送这些文章的标题和摘要以及复核标准；生成研究方向标签时发送**文库中**每个方向最多 3 个代表性标题和 5 个 Zotero 标签以及方向的篇数（可在设置中关闭）；「从文库生成」时发送文库中最常见的期刊名及其篇数，以及研究方向标签（已生成时）
+  - Crossref / arXiv / EarthArXiv / OpenAlex：只有查询条件（ISSN、文库常见期刊缺 ISSN 时的刊名（发给 Crossref 和 OpenAlex，用于查 ISSN）、分类、日期、DOI、关注作者的 ORCID / OpenAlex 作者 ID、设置页搜索框中输入的刊名 / 作者名、「从文库生成」时大模型推荐的刊名）以及你填写的 OpenAlex API Key，不含文库条目的标题、摘要等内容
+  - Elsevier / Springer Nature / Semantic Scholar（仅在填写 API Key 时）：缺摘要论文的 DOI 和你的 API Key，不含文库内容
 - 所有网络请求都通过 `Zotero.HTTP` 发出，遵循 Zotero 的代理设置；在 Zotero 9 及以上版本中请求不携带 Zotero 的 Cookie（匿名请求）
-- 填写的 Crossref 联系邮箱会作为 `mailto` 参数出现在请求网址中，Springer Nature 的 API Key 也作为网址参数发送（Elsevier 的 Key 放在请求头中），因此可能出现在 Zotero 的调试日志里；公开提交调试日志前请留意
+- 填写的 Crossref 联系邮箱会作为 `mailto` 参数出现在请求网址中，OpenAlex 和 Springer Nature 的 API Key 也作为网址参数发送（Elsevier 和 Semantic Scholar 的 Key 放在请求头中），因此可能出现在 Zotero 的调试日志里（插件自己的日志和错误信息会隐去 Key）；公开提交调试日志前请留意
 
 ## 与 Python 版 AIZotWatch 的对应关系
 
@@ -160,6 +172,7 @@ OpenAlex（关注作者的 ORCID）──► 去掉已出现过的 ──► 与
 | `sources/openalex.py`（`followed_authors`，关注作者） | `src/sources/followed.js`；按 ORCID / OpenAlex 作者 ID 合并查询，每次查最近 N 天并用 `followed.json` 记录已出现的论文（不再首次拉取全部历史论文，也不会因某次运行失败而漏掉论文），跳过数据集、勘误等非论文类型 |
 | `pipeline/flagship_filter.py` + `watch.py` 中的 `_select_flagship`（顶刊地学速览） | `src/core/flagship.js`（ISSN 匹配与锚点门控）+ `src/engine.js` 的 `selectFlagship` + `src/llm/llm.js` 的 `judgeRelevance`；相同的锚点、阈值和复核提示词（论文编号改为 P1、P2…），顶刊用单独的 Crossref 查询和抓取上限，ISSN 统一格式后匹配，按向量化服务自动校准阈值，大模型失败时保留灰区文章而不中断运行，AI 摘要每次取最新的 N 篇 |
 | `infrastructure/enrichment/api_fallback.py` + `pipeline/enrich.py`（API 摘要补全） | `src/sources/abstracts.js`；相同的 Crossref → Elsevier → Springer Nature → OpenAlex 顺序和 80 字符下限，OpenAlex 每 50 个 DOI 合并查询；缓存为 `abstracts-cache.json`，网络错误和限流不会被记为「没有摘要」，API Key 无效时本次运行停用该来源并提示；在去重之后进行，不为文库中已有的论文浪费请求 |
+| `llm/journal_recommender.py` + `pipeline/journal_builder.py`（`zotwatch journals`，生成期刊白名单） | `src/llm/journals.js`（相同的 `JOURNAL_GENERATION_PROMPT` 和截断回复的补救解析）+ `src/journal-proposals.js` + `src/sources/openalex-entities.js`；刊名改为在 OpenAlex（而不是 Crossref `/journals`）中核实并取得全部 ISSN，学科和影响因子来自 OpenAlex 而不是大模型，结果先在设置页中审阅再合并（保留手写的行和注释） |
 | `pipeline/dedupe.py`（rapidfuzz） | `src/core/dedupe.js`（等价的 token_set_ratio） |
 | `pipeline/filters.py` | `src/core/filters.js` |
 | `llm/summarizer.py` / `translator.py` | `src/llm/llm.js`（相同的摘要提示词） |
@@ -186,13 +199,14 @@ zotero-plugin/
 │   ├── manifest.json       # 插件 ID、版本、兼容的 Zotero 版本
 │   ├── bootstrap.js        # 生命周期入口，注册 chrome://zotwatch/ 并加载打包后的代码
 │   ├── prefs.js            # 偏好设置默认值
-│   └── content/            # ZotWatch 主窗口（main.xhtml：概览 / 推荐 / 设置）、Zotero 设置中的状态面板、图标、示例期刊表
+│   └── content/            # ZotWatch 主窗口（main.xhtml：概览 / 推荐 / 设置；search.js 为共用的搜索添加组件）、Zotero 设置中的状态面板、图标、示例期刊表
 ├── src/                    # 业务代码（esbuild 打包为 content/zotwatch.js）
 │   ├── core/               # 纯算法：文本、XML、向量、k-means、打分、过滤、去重、期刊表、作者解析、推荐分区、顶刊门控、研究方向标签
-│   ├── sources/            # Crossref、arXiv、EarthArXiv、OpenAlex（关注作者）、摘要补全链
+│   ├── sources/            # Crossref、arXiv、EarthArXiv、OpenAlex（关注作者、期刊与作者查询）、Semantic Scholar、摘要补全链
 │   ├── embedding/          # DashScope / Voyage / OpenAI 兼容 / 本地 TF-IDF
-│   ├── llm/                # OpenAI 兼容对话接口、标题翻译、AI 摘要、顶刊灰区复核、研究方向标签
+│   ├── llm/                # OpenAI 兼容对话接口、标题翻译、AI 摘要、顶刊灰区复核、研究方向标签、期刊推荐
 │   ├── engine.js           # 完整流水线（不依赖 Zotero，可在 Node 中测试）
+│   ├── journal-proposals.js # 「从文库生成」的期刊建议与「补全学科与影响因子」（不依赖 Zotero）
 │   ├── settings.js         # 偏好设置 → 配置对象
 │   └── zotero/             # Zotero 适配层：HTTP、文件存储、文库读取、条目创建、菜单与调度
 ├── docs/                   # README 中的界面截图（由 scripts/preview.mjs 生成）

@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 import { parseXml } from "../src/core/xml.js";
-import { connectionLine, nextRunAt, normalizePage } from "../src/zotero/addon.js";
+import { DEFAULT_RATE_LIMITS } from "../src/core/ratelimit.js";
+import { apiStatus, apiStatusLine, connectionLine, nextRunAt, normalizePage, rateLimitsFromPref } from "../src/zotero/addon.js";
 import { PREFS_0_2_0, embeddingHandler, mockHttp } from "./helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -223,7 +224,10 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
           cancelled,
         ]);
         const data = options.responseType === "json" && typeof res.data === "string" ? null : res.data;
-        return { status: res.status, response: data, channel: null, getResponseHeader: () => null };
+        // Mock routes may answer with headers ({name: value}, any case)
+        const headers = res.headers || {};
+        const getResponseHeader = (name) => headers[Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase())] ?? null;
+        return { status: res.status, response: data, channel: null, getResponseHeader };
       },
     },
     Libraries: { userLibraryID: 1, get: (id) => libraries[id] || false },
@@ -460,6 +464,38 @@ function standardHttp(counter, { gate } = {}) {
     }],
     ["https://api.crossref.org/journals", () => ({ message: { items: [] } })],
     ["https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", embeddingHandler(counter)],
+    // OpenAlex reports today's budget in its headers and on /rate-limit
+    ["https://api.openalex.org/rate-limit", (req) =>
+      req.url.includes("api_key=oa-bad")
+        ? { status: 401, data: { error: "Invalid API key" } }
+        : { status: 200, data: { rate_limit: { daily_budget_usd: 1, daily_used_usd: 0.05, daily_remaining_usd: 0.95, resets_at: "2026-10-18T00:00:00Z" } } }],
+    ["https://api.openalex.org/works", () => ({ status: 200, data: { meta: { count: 0 }, results: [] }, headers: { "X-RateLimit-Limit": "1000", "X-RateLimit-Remaining": "990" } })],
+    ["https://api.semanticscholar.org/graph/v1/paper/", (req) => ({ status: req.headers?.["x-api-key"] === "s2-good" ? 200 : 403, data: { title: "Deep learning" } })],
+    // Journal lookups and searches of the settings page (sources/openalex-entities.js)
+    ["https://api.openalex.org/sources", (req) => {
+      const params = new URL(req.url).searchParams;
+      const gca = {
+        id: "https://openalex.org/S1",
+        display_name: "Geochimica et Cosmochimica Acta",
+        issn_l: "0016-7037",
+        issn: ["0016-7037", "1872-9533"],
+        host_organization_name: "Elsevier BV",
+        country_code: "NL",
+        works_count: 20000,
+        summary_stats: { "2yr_mean_citedness": 5.04 },
+        topics: [{ count: 9, subfield: { display_name: "Geochemistry and Petrology" } }],
+      };
+      const nature = { id: "https://openalex.org/S2", display_name: "Nature", issn: ["0028-0836", "1476-4687"], works_count: 400000 };
+      if (params.get("search") === "slow" || params.get("filter") === "issn:0000-0000") return new Promise(() => {});
+      if (params.get("filter")?.startsWith("issn:")) {
+        const asked = params.get("filter").slice(5).split("|");
+        return { results: [gca, nature].filter((s) => s.issn.some((issn) => asked.includes(issn))) };
+      }
+      return { results: params.get("search") ? [gca] : [] };
+    }],
+    ["https://api.openalex.org/authors", () => ({
+      results: [{ id: "https://openalex.org/A5000000001", display_name: "Zaicong Wang", orcid: "https://orcid.org/0000-0002-3584-1673", works_count: 120, cited_by_count: 3000, last_known_institutions: [{ display_name: "China University of Geosciences", country_code: "CN" }] }],
+    })],
   ]);
 }
 
@@ -592,7 +628,19 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.deepEqual(plain(dash.followed), { enabled: false, daysBack: 60, authors: [], invalid: [] });
   assert.deepEqual(plain(dash.flagship), { enabled: false, issnCount: 12, stats: null });
   assert.deepEqual(plain(dash.journals), { count: 1, withImpactFactor: 1, autoFromLibrary: true, error: null });
-  assert.deepEqual(plain(dash.sources.map((s) => s.key)), ["crossref", "flagship", "arxiv", "eartharxiv", "followed", "abstracts", "embedding", "llm"]);
+  assert.deepEqual(plain(dash.sources.map((s) => s.key)), ["crossref", "flagship", "arxiv", "eartharxiv", "followed", "abstracts", "openalex", "semanticscholar", "embedding", "llm"]);
+  // API services: key states instead of run states
+  assert.deepEqual(plain(dash.sources.find((s) => s.key === "openalex")), {
+    key: "openalex",
+    name: "OpenAlex",
+    enabled: true,
+    count: null,
+    detail: "免费额度很小",
+    error: null,
+    status: { tone: "warning", label: "未配置 Key" },
+  });
+  assert.deepEqual(plain(dash.sources.find((s) => s.key === "semanticscholar").status), { tone: "off", label: "未配置" });
+  assert.deepEqual(plain(dash.apis), { openalexKey: false, semanticScholarKey: false, mailto: false, openalexUsage: null });
   const crossrefSource = dash.sources.find((s) => s.key === "crossref");
   // ISSNs of the personal query (a journal often has two), not journals
   assert.deepEqual(plain(crossrefSource), { key: "crossref", name: "Crossref", enabled: true, count: 4, detail: "1 个 ISSN", error: null, ran: true });
@@ -616,6 +664,7 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.deepEqual(plain(addon.summarizeWhitelist("issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0\nbad line\n# note\n1234-5679,X")), {
     count: 2,
     withImpactFactor: 1,
+    incomplete: 1,
     invalidLines: ["bad line"],
   });
   assert.deepEqual(plain(addon.parseFollowedAuthors("Li Wang, 0000-0002-1825-0097\nnobody")), {
@@ -672,8 +721,53 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   Zotero.errors.length = 0;
   env.prefs.set("extensions.zotwatch.embedding.apiKey", "sk-test");
   assert.match(await addon.getStatus(), /我的文库，16 个条目/);
+  assert.match(await addon.getStatus(), /\n学术数据接口：OpenAlex 未配置 Key（免费额度很小），Semantic Scholar 未配置\n/);
   assert.match(await addon.loadPresetJournals(), /^issn,title,category,impact_factor/);
-  assert.match(await addon.suggestJournals(), /0016-7037,GCA,GEO,5/);
+  // 从文库生成 proposes (nothing is written); the library's journal is already listed
+  const suggested = await addon.suggestJournals();
+  assert.deepEqual(plain(suggested.proposals.map((p) => [p.title, p.issns, p.category, p.impactFactor, p.libraryCount, p.inList, p.checked])), [
+    ["Geochimica et Cosmochimica Acta", ["0016-7037", "1872-9533"], "GEOCHEMISTRY_AND_PETROLOGY", 5, 16, true, false],
+  ]);
+  assert.deepEqual(plain(suggested.warnings), []);
+  assert.match(addon.getJournalWhitelist(), /^issn,title,category,impact_factor\n0016-7037,GCA,GEO,5\.0$/);
+  const mergedList = addon.mergeJournals(addon.getJournalWhitelist(), suggested.proposals);
+  assert.equal(mergedList.text, "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0\n1872-9533,Geochimica et Cosmochimica Acta,GEOCHEMISTRY_AND_PETROLOGY,5");
+  assert.deepEqual([mergedList.added, mergedList.filled], [1, 0]);
+  // 补全学科与影响因子 fills library:N placeholders
+  const filledList = await addon.fillJournalMetadata("issn,title,category,impact_factor\n0016-7037,GCA,library:14,");
+  assert.equal(filledList.text, "issn,title,category,impact_factor\n0016-7037,GCA,GEOCHEMISTRY_AND_PETROLOGY,5");
+  assert.equal(filledList.filled, 1);
+  // Search boxes (OpenAlex sources / authors, the key on every request) and the 顶刊 names
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "oa-good");
+  const journalHits = await addon.searchJournals("geochimica");
+  assert.deepEqual(plain(journalHits.map((j) => [j.title, j.issns, j.impactFactor])), [["Geochimica et Cosmochimica Acta", ["0016-7037", "1872-9533"], 5]]);
+  const searches = () => Zotero.HTTP.requests.filter((c) => c.url.includes("api.openalex.org/sources?search")).length;
+  const before = searches();
+  await addon.searchJournals("Geochimica");
+  assert.equal(searches(), before, "repeated searches come from the session cache");
+  const authorHits = await addon.searchAuthors("Zaicong Wang");
+  assert.deepEqual(plain(authorHits.map((a) => [a.name, a.orcid, a.institution])), [["Zaicong Wang", "0000-0002-3584-1673", "China University of Geosciences"]]);
+  assert.ok(Zotero.HTTP.requests.filter((c) => /api\.openalex\.org\/(sources|authors)\?/.test(c.url)).at(-1).url.includes("api_key=oa-good"));
+  const names = await addon.lookupJournalNames(["1476-4687", "0016-7037", "1872-9533", "1234-5679", "junk"]);
+  assert.deepEqual(plain(names.names["1476-4687"]), { title: "Nature", issns: ["0028-0836", "1476-4687"], openalexId: null }, "built-in names need no request");
+  assert.equal(names.names["0016-7037"].title, "GCA", "names from the journal list");
+  assert.equal(names.names["1872-9533"].title, "Geochimica et Cosmochimica Acta");
+  assert.equal(names.names["1234-5679"], null, "unknown to OpenAlex");
+  assert.equal(names.error, null);
+  const lookups = Zotero.HTTP.requests.filter((c) => c.url.includes("filter=issn")).length;
+  await addon.lookupJournalNames(["1234-5679", "1872-9533"]);
+  assert.equal(Zotero.HTTP.requests.filter((c) => c.url.includes("filter=issn")).length, lookups, "looked up once per session");
+  // A newer search of the same box cancels the older one; cancelJournalAction stops 从文库生成
+  const slowSearch = assert.rejects(addon.searchJournals("slow"), (e) => e.cancelled === true);
+  await new Promise((r) => setImmediate(r));
+  await addon.searchJournals("geochimica et");
+  await slowSearch;
+  const slowFill = assert.rejects(addon.fillJournalMetadata("0000-0000,Slow,,"), (e) => e.cancelled === true);
+  await new Promise((r) => setImmediate(r));
+  addon.cancelJournalAction();
+  await slowFill;
+  assert.equal(addon.journalSignal, null);
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "");
   await addon.setJournalWhitelist("issn,title\n1234-5678,X");
   assert.equal(readFileSync(join(dataDir, "zotwatch", "journals.csv"), "utf8"), "issn,title\n1234-5678,X");
   addon.openPreferences();
@@ -724,11 +818,44 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   release();
   const status = await addon.testConnections();
   assert.match(status, /✅ Crossref/, "UI requests still work after a run was cancelled");
-  assert.equal(status, ["✅ 向量化（dashscope）：正常，维度 8", "ℹ️ 大模型：未启用", "✅ Crossref：可访问"].join("\n"));
+  assert.equal(
+    status,
+    [
+      "✅ 向量化（dashscope）：正常，维度 8",
+      "ℹ️ 大模型：未启用",
+      "✅ Crossref：可访问",
+      "ℹ️ OpenAlex：可访问，但未配置 API Key（每日免费额度很小）",
+      "ℹ️ Semantic Scholar：未配置 API Key",
+    ].join("\n"),
+  );
   assert.deepEqual(plain(await addon.checkConnections(["crossref", "llm"])), [
     { key: "llm", name: "大模型", target: null, ok: null, detail: "未启用" },
     { key: "crossref", name: "Crossref", target: null, ok: true, detail: "可访问" },
   ]);
+  // The keyless check read OpenAlex's budget from its headers
+  assert.equal(addon.getApiStatus().openalexUsage.text, "今日剩余 990 / 1,000 次额度");
+  assert.equal(addon.getApiStatus().openalexUsage.keyed, false);
+
+  // --- 学术数据接口: keys are checked, sent and never shown
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "oa-good");
+  env.prefs.set("extensions.zotwatch.apis.semanticScholarKey", "s2-good");
+  Zotero.HTTP.requests.length = 0;
+  assert.deepEqual(plain(await addon.checkConnections(["openalex", "semanticscholar"])), [
+    { key: "openalex", name: "OpenAlex", ok: true, detail: "Key 有效，今日剩余 $0.95 / $1.00", target: null },
+    { key: "semanticscholar", name: "Semantic Scholar", ok: true, detail: "Key 有效", target: null },
+  ]);
+  assert.match(Zotero.HTTP.requests[0].url, /^https:\/\/api\.openalex\.org\/rate-limit\?api_key=oa-good$/);
+  assert.equal(Zotero.HTTP.requests[1].options.headers["x-api-key"], "s2-good");
+  const keyedDash = await addon.getDashboard();
+  assert.deepEqual(plain(keyedDash.sources.find((s) => s.key === "openalex").status), { tone: "good", label: "正常" });
+  assert.equal(keyedDash.sources.find((s) => s.key === "openalex").detail, "今日剩余 $0.95", "compact in the narrow row");
+  assert.equal(keyedDash.apis.openalexUsage.text, "今日剩余 $0.95 / $1.00");
+  assert.deepEqual(plain(keyedDash.sources.find((s) => s.key === "semanticscholar").status), { tone: "good", label: "已配置" });
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "oa-bad");
+  env.prefs.set("extensions.zotwatch.apis.semanticScholarKey", "s2-bad");
+  assert.equal(await addon.testConnections().then((t) => t.split("\n").slice(3).join(" | ")), "❌ OpenAlex：Key 无效（HTTP 401） | ❌ Semantic Scholar：Key 无效（HTTP 403）");
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "");
+  env.prefs.set("extensions.zotwatch.apis.semanticScholarKey", "");
   // A cancelled run records no history entry
   assert.equal((await addon.getView()).history.length, 1);
 
@@ -876,8 +1003,16 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   env.prefs.set("extensions.zotwatch.followed.enabled", true);
   env.prefs.set("extensions.zotwatch.followed.authors", "Li Wang, https://orcid.org/0000-0002-1825-0097\nnot an author line");
   env.prefs.set("extensions.zotwatch.sources.arxiv.enabled", true);
+  env.prefs.set("extensions.zotwatch.apis.openalexKey", "oa-key");
+  // arXiv's one request per 3 s would slow this test down: the hidden pref lifts that limit for the next run
+  assert.deepEqual(plain(addon.limiter.limitOf("https://export.arxiv.org/api/query")), { rps: 1 / 3, concurrency: 1, burst: 1 });
+  env.prefs.set("extensions.zotwatch.http.rateLimits", '{"export.arxiv.org": null, "api.crossref.org": {"rps": 50, "concurrency": 3}}');
 
   const result = await addon.runNow({ background: true });
+  assert.equal(addon.limiter.limitOf("https://export.arxiv.org/api/query"), null);
+  assert.deepEqual(plain(addon.limiter.limitOf("https://api.crossref.org/works")), { rps: 50, concurrency: 3, burst: 1 });
+  assert.deepEqual(plain(addon.limiter.limitOf("https://api.semanticscholar.org/x")), { rps: 1, concurrency: 1, burst: 1 }, "defaults stay for the rest");
+  assert.ok(openalexQueries.length > 0 && openalexQueries.every((u) => u.includes("api_key=oa-key")), "every OpenAlex request carries the key");
   assert.equal(result.stats.newByLabel.followed, 1);
   assert.ok(result.stats.newByLabel.personal >= 1);
   assert.deepEqual(plain(result.errors), [{ stage: "followed", message: "无法识别的作者行：not an author line" }]);
@@ -1435,4 +1570,21 @@ test("window routes and the run schedule", () => {
   assert.equal(connectionLine({ name: "向量化", target: "local", ok: true, detail: "正常，维度 1024" }), "✅ 向量化（local）：正常，维度 1024");
   assert.equal(connectionLine({ name: "Elsevier", target: null, ok: false, detail: "Key 无效（HTTP 401）" }), "❌ Elsevier：Key 无效（HTTP 401）");
   assert.equal(connectionLine({ name: "大模型", ok: null, detail: "未启用" }), "ℹ️ 大模型：未启用");
+
+  // The hidden rate-limit pref (JSON) overrides single hosts; garbage keeps the defaults
+  assert.equal(rateLimitsFromPref('{"export.arxiv.org": null}')["export.arxiv.org"], undefined);
+  assert.deepEqual(rateLimitsFromPref('{"api.crossref.org": {"rps": 5, "concurrency": 2}}')["api.crossref.org"], { rps: 5, concurrency: 2 });
+  assert.deepEqual(rateLimitsFromPref("{not json"), { ...DEFAULT_RATE_LIMITS });
+  assert.deepEqual(rateLimitsFromPref(undefined), { ...DEFAULT_RATE_LIMITS });
+
+  // 学术数据接口 status: keys and OpenAlex's budget
+  const status = apiStatus({ apis: { openalexKey: "k", semanticScholarKey: "", mailto: "me@x.org" } }, { remainingUsd: 0.5, limitUsd: 1, at: 1 });
+  assert.deepEqual(plain(status), {
+    openalexKey: true,
+    semanticScholarKey: false,
+    mailto: true,
+    openalexUsage: { remainingUsd: 0.5, limitUsd: 1, at: 1, text: "今日剩余 $0.50 / $1.00", short: "今日剩余 $0.50" },
+  });
+  assert.equal(apiStatusLine(status), "学术数据接口：OpenAlex 已配置 Key（今日剩余 $0.50 / $1.00），Semantic Scholar 未配置");
+  assert.equal(apiStatus({}, null).openalexUsage, null);
 });

@@ -33,6 +33,16 @@ export function splitCsvLine(line) {
 }
 
 /**
+ * Whether a whitelist category marks a Chinese core journal: "(CN)" anywhere
+ * ("GEOCHEMISTRY (CN)") or a "_CN" suffix ("GEOSCIENCES_CN", the style of the
+ * bundled preset and the Python data).
+ */
+export function isChineseCoreCategory(category) {
+  const text = String(category ?? "").trim();
+  return /\(CN\)/i.test(text) || /_CN$/i.test(text);
+}
+
+/**
  * Parse whitelist CSV text: `issn,title,category,impact_factor`.
  * The header row is optional; lines starting with "#" are comments.
  * @returns {Map<string, {issn, title, category, impactFactor, isChineseCore}>}
@@ -52,7 +62,7 @@ export function parseWhitelist(text) {
       title,
       category,
       impactFactor: Number.isFinite(ifNum) ? ifNum : null,
-      isChineseCore: category.includes("(CN)"),
+      isChineseCore: isChineseCoreCategory(category),
     });
   }
   return journals;
@@ -80,7 +90,102 @@ export function summarizeWhitelist(text) {
     if (!isHeader && !normalizeIssn(splitCsvLine(line)[0])) invalidLines.push(line);
   }
   const values = [...journals.values()];
-  return { count: values.length, withImpactFactor: values.filter((j) => j.impactFactor !== null).length, invalidLines };
+  return {
+    count: values.length,
+    withImpactFactor: values.filter((j) => j.impactFactor !== null).length,
+    // Journals 「补全学科与影响因子」 can complete (empty or library:N category, no impact factor, no title)
+    incomplete: values.filter(isIncompleteJournal).length,
+    invalidLines,
+  };
+}
+
+/**
+ * Whether a whitelist category carries no subject: blank, or the
+ * `library:N` placeholder (item count) written by 「从文库生成」 before 0.4.0.
+ */
+export function isEmptyCategory(category) {
+  const value = String(category ?? "").trim();
+  return !value || /^library:\s*\d*$/i.test(value);
+}
+
+/** Whether a parsed whitelist journal lacks a title, a category or an impact factor. */
+export function isIncompleteJournal(journal) {
+  return !String(journal?.title ?? "").trim() || isEmptyCategory(journal?.category) || !Number.isFinite(journal?.impactFactor);
+}
+
+/** Normalised ISSNs of the data rows of whitelist CSV text, in order. */
+export function whitelistIssns(text) {
+  return [...parseWhitelist(text).keys()];
+}
+
+/**
+ * Whitelist rows of journals (one row per ISSN, so either ISSN of a journal
+ * matches Crossref records): [{issn, title, category, impactFactor}].
+ */
+export function journalRows(journals) {
+  const rows = [];
+  const seen = new Set();
+  for (const j of journals || []) {
+    for (const raw of j?.issns || []) {
+      const issn = normalizeIssn(raw);
+      if (!issn || seen.has(issn)) continue;
+      seen.add(issn);
+      rows.push({ issn, title: j.title || "", category: j.category || "", impactFactor: Number.isFinite(j.impactFactor) ? j.impactFactor : null });
+    }
+  }
+  return rows;
+}
+
+const HEADER = "issn,title,category,impact_factor";
+
+/**
+ * Merge journal rows into whitelist CSV text without disturbing it: comment
+ * lines, the order and hand-written rows stay as they are. Rows already listed
+ * only fill what is missing there (a blank title, a blank or `library:N`
+ * category, a missing impact factor) and never overwrite a value; with
+ * `append` new ISSNs are added at the end (with a header when the text was
+ * empty). Returns the new text, the number of added rows and of rows filled.
+ * @param {{issn, title?, category?, impactFactor?}[]} rows
+ */
+export function mergeWhitelistRows(text, rows, { append = true } = {}) {
+  const byIssn = new Map();
+  for (const row of rows || []) {
+    const issn = normalizeIssn(row?.issn);
+    if (issn && !byIssn.has(issn)) byIssn.set(issn, row);
+  }
+  const listed = new Set();
+  let filled = 0;
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((raw) => {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) return raw;
+      const fields = splitCsvLine(line);
+      const issn = normalizeIssn(fields[0]);
+      if (!issn) return raw;
+      listed.add(issn);
+      const row = byIssn.get(issn);
+      if (!row) return raw;
+      const [issnText, title = "", category = "", ifText = "", ...rest] = fields;
+      const next = [issnText, title, category, ifText];
+      if (!title && row.title) next[1] = row.title;
+      if (isEmptyCategory(category) && row.category) next[2] = row.category;
+      if (!Number.isFinite(parseFloat(ifText)) && Number.isFinite(row.impactFactor)) next[3] = String(row.impactFactor);
+      if (next.every((value, i) => value === [issnText, title, category, ifText][i])) return raw;
+      filled++;
+      return [...next, ...rest].map(csvField).join(",");
+    });
+  let added = 0;
+  const fresh = append ? [...byIssn.entries()].filter(([issn]) => !listed.has(issn)) : [];
+  if (fresh.length) {
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    if (!lines.length) lines.push(HEADER);
+    for (const [issn, row] of fresh) {
+      lines.push([issn, row.title || "", row.category || "", Number.isFinite(row.impactFactor) ? row.impactFactor : ""].map(csvField).join(","));
+      added++;
+    }
+  }
+  return { text: lines.join("\n"), added, filled };
 }
 
 export function serializeWhitelist(entries) {

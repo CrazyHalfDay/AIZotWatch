@@ -21,6 +21,7 @@ const PAGE_KEYS = ["overview", "inbox", "settings"];
 const SETTINGS_SECTIONS = [
   { id: "general", title: "常规", icon: "clock", description: "自动检查新文献的频率和推荐保留时长。" },
   { id: "embedding", title: "向量化", icon: "vector", description: "计算文献与文库语义相似度的向量化服务。" },
+  { id: "apis", title: "学术数据接口", icon: "key", description: "OpenAlex、Semantic Scholar 的 API Key 与 Crossref 联系邮箱。" },
   { id: "sources", title: "文献来源", icon: "rss", description: "从哪些来源抓取新文献，以及缺少摘要时如何补全。" },
   { id: "journals", title: "关注期刊", icon: "journal", description: "Crossref 按这些期刊的 ISSN 抓取新论文，影响因子参与打分。" },
   { id: "followed", title: "关注作者", icon: "user", description: "按 ORCID 追踪指定研究者的新论文。" },

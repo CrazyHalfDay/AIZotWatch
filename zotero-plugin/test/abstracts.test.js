@@ -150,8 +150,10 @@ test("each DOI tries Crossref, Elsevier, Springer Nature and OpenAlex in order u
     elsevier: 3,
     springer: 1,
     openalex: 1,
+    s2: 0,
     filled: 6,
     failed: 1,
+    tldr: 0,
     errors: [],
   });
   const called = urls(http);
@@ -170,7 +172,7 @@ test("each DOI tries Crossref, Elsevier, Springer Nature and OpenAlex in order u
   assert.deepEqual(elsevier.headers, { "X-ELS-APIKey": "els-key", Accept: "application/json" });
   assert.ok(http.calls.every((c) => c.timeout === 20000));
   assert.deepEqual(progress.at(-1), [6, 6]);
-  assert.match(logs.at(-1), /^Abstracts: filled 6\/7 \(cache 0, crossref 1, elsevier 3, springer 1, openalex 1; 0 known misses skipped, 1 new misses cached\)$/);
+  assert.match(logs.at(-1), /^Abstracts: filled 6\/7 \(cache 0, crossref 1, elsevier 3, springer 1, openalex 1, s2 0; 0 known misses skipped, 1 new misses cached\)$/);
 
   const cache = await storage.readJSON(ABSTRACT_CACHE_FILE);
   assert.equal(cache.version, 1);
@@ -405,6 +407,151 @@ test("publisher calls share a limit of two while the per-DOI chain runs six at a
   assert.ok(peak.crossref <= 6 && peak.crossref >= 4, `crossref peak ${peak.crossref}`);
 });
 
+// ------------------------------------------------------- Semantic Scholar
+
+/** Semantic Scholar batch answers from `byDoi` (lower-case DOI -> record or null). */
+function s2Route(byDoi, calls = []) {
+  return [
+    "https://api.semanticscholar.org/graph/v1/paper/batch",
+    (req) => {
+      const ids = JSON.parse(req.body).ids;
+      calls.push(ids);
+      return ids.map((id) => byDoi[id.replace(/^DOI:/, "")] ?? null);
+    },
+  ];
+}
+
+test("with a key, Semantic Scholar is tried last in batches and its TLDRs are kept", async () => {
+  const s2Calls = [];
+  const http = mockHttp([
+    ["https://api.openalex.org/works", () => ({ results: [{ doi: "https://doi.org/10.1029/oa", abstract_inverted_index: invert(text("OpenAlex")) }] })],
+    s2Route(
+      {
+        "10.1029/s2": { paperId: "p1", abstract: `Abstract: ${text("Scholar")}`, tldr: { model: "tldr@v2", text: "One-line summary." } },
+        "10.1029/tldr": { paperId: "p2", abstract: null, tldr: { text: "Only a TLDR here." } },
+        "10.1029/short": { paperId: "p3", abstract: "Too short.", tldr: null },
+      },
+      s2Calls,
+    ),
+  ]);
+  const works = [work("10.1029/oa"), work("10.1029/s2"), work("10.1029/tldr"), work("10.1029/short"), work("10.1029/none"), work("10.1029/s2", "arxiv", { id: "arxiv:2" })];
+  const storage = createMemoryStorage();
+  const progress = [];
+  const result = await enrichMissingAbstracts(http, works, {
+    crossref: false,
+    openalexKey: "oa-key",
+    s2Key: "s2-key",
+    cache: storage,
+    now: NOW,
+    retry: noSleep,
+    onProgress: (done, total) => progress.push([done, total]),
+  });
+  assert.deepEqual(
+    works.map((w) => w.abstract),
+    [text("OpenAlex"), text("Scholar"), null, null, null, text("Scholar")],
+  );
+  assert.deepEqual(works.map((w) => w.tldr ?? null), [null, "One-line summary.", "Only a TLDR here.", null, null, "One-line summary."]);
+  assert.equal(result.openalex, 1);
+  assert.equal(result.s2, 2);
+  assert.equal(result.filled, 3);
+  assert.equal(result.tldr, 3);
+  // OpenAlex found one: only the other four DOIs go to Semantic Scholar, in one batch
+  assert.deepEqual(s2Calls, [["DOI:10.1029/s2", "DOI:10.1029/tldr", "DOI:10.1029/short", "DOI:10.1029/none"]]);
+  const s2 = http.calls.find((c) => c.url.includes("semanticscholar"));
+  assert.equal(s2.headers["x-api-key"], "s2-key");
+  assert.match(decodeURIComponent(s2.url), /fields=paperId,abstract,tldr$/);
+  assert.match(http.calls.find((c) => c.url.includes("openalex")).url, /&api_key=oa-key$/, "the OpenAlex batch carries its key");
+  assert.deepEqual(progress.at(-1), [5, 5], "every DOI is counted once");
+
+  const cache = (await storage.readJSON(ABSTRACT_CACHE_FILE)).entries;
+  assert.deepEqual(cache["10.1029/s2"], { a: text("Scholar"), s: "s2", exp: NOW + 30 * DAY, t: "One-line summary." });
+  assert.deepEqual(cache["10.1029/tldr"], { a: null, s: ["openalex", "s2"], exp: NOW + 7 * DAY, t: "Only a TLDR here." });
+  assert.deepEqual(cache["10.1029/none"], { a: null, s: ["openalex", "s2"], exp: NOW + 7 * DAY });
+
+  // The next run answers from the cache, TLDRs included
+  http.calls.length = 0;
+  const again = [work("10.1029/s2"), work("10.1029/tldr")];
+  const second = await enrichMissingAbstracts(http, again, { crossref: false, s2Key: "s2-key", cache: storage, now: NOW + DAY, retry: noSleep });
+  assert.equal(http.calls.length, 0);
+  assert.equal(second.cacheHits, 1);
+  assert.equal(second.negativeSkips, 1);
+  assert.deepEqual(again.map((w) => w.tldr), ["One-line summary.", "Only a TLDR here."]);
+
+  // Without a key Semantic Scholar is never asked
+  const keyless = mockHttp([["https://api.openalex.org/works", () => ({ results: [] })]]);
+  const off = await enrichMissingAbstracts(keyless, [work("10.1029/zzz")], { crossref: false, now: NOW, retry: noSleep });
+  assert.equal(off.s2, 0);
+  assert.ok(!keyless.calls.some((c) => c.url.includes("semanticscholar")));
+});
+
+test("Semantic Scholar batches hold up to 500 DOIs", async () => {
+  const s2Calls = [];
+  const http = mockHttp([s2Route({}, s2Calls)]);
+  const works = Array.from({ length: 501 }, (_, i) => work(`10.1029/n${i}`));
+  const result = await enrichMissingAbstracts(http, works, { crossref: false, openalex: false, s2Key: "k", now: NOW, retry: noSleep });
+  assert.deepEqual(s2Calls.map((ids) => ids.length), [500, 1]);
+  assert.equal(result.failed, 501);
+});
+
+test("adding a Semantic Scholar key re-checks recent misses there only", async () => {
+  const storage = createMemoryStorage();
+  const http = mockHttp([
+    ["https://api.crossref.org/works/", () => ({ status: 404, data: {} })],
+    ["https://api.openalex.org/works", () => ({ results: [] })],
+    s2Route({ "10.31223/late": { abstract: text("Late"), tldr: { text: "Late TLDR." } } }),
+  ]);
+  const first = await enrichMissingAbstracts(http, [work("10.31223/late", "eartharxiv")], { cache: storage, now: NOW, retry: noSleep });
+  assert.equal(first.failed, 1);
+  assert.deepEqual((await storage.readJSON(ABSTRACT_CACHE_FILE)).entries["10.31223/late"].s, ["crossref", "openalex"]);
+
+  http.calls.length = 0;
+  const works = [work("10.31223/late", "eartharxiv")];
+  const second = await enrichMissingAbstracts(http, works, { cache: storage, now: NOW + DAY, s2Key: "k", retry: noSleep });
+  assert.equal(second.s2, 1);
+  assert.equal(works[0].abstract, text("Late"));
+  assert.equal(works[0].tldr, "Late TLDR.");
+  assert.deepEqual(urls(http).map((u) => u.split("?")[0]), ["https://api.semanticscholar.org/graph/v1/paper/batch"], "Crossref and OpenAlex are not asked again");
+});
+
+test("a rejected Semantic Scholar key is reported once and its misses are not cached", async () => {
+  const storage = createMemoryStorage();
+  const http = mockHttp([["https://api.semanticscholar.org/", () => ({ status: 403, data: { message: "Forbidden" } })]]);
+  const works = Array.from({ length: 3 }, (_, i) => work(`10.1029/k${i}`));
+  const result = await enrichMissingAbstracts(http, works, { crossref: false, openalex: false, s2Key: "bad", cache: storage, now: NOW, retry: noSleep });
+  assert.deepEqual(result.errors, [{ source: "Semantic Scholar", message: "API Key 无效或无权限（HTTP 403），本次运行已停用" }]);
+  assert.equal(http.calls.length, 1);
+  assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null);
+
+  // Throttling (429 / 5xx) is retried once, then counts as unavailable (never cached)
+  const busy = mockHttp([["https://api.semanticscholar.org/", () => ({ status: 500, data: {} })]]);
+  const sleeps = [];
+  const out = await enrichMissingAbstracts(busy, [work("10.1029/busy")], { crossref: false, openalex: false, s2Key: "k", cache: storage, now: NOW, retry: { sleep: async (ms) => sleeps.push(ms) } });
+  assert.equal(out.failed, 1);
+  assert.equal(busy.calls.length, 2);
+  assert.deepEqual(sleeps, [3000], "Semantic Scholar gets a 3 s base delay");
+  assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null);
+
+  // A non-array 2xx body is unavailable too
+  const odd = mockHttp([["https://api.semanticscholar.org/", () => ({ error: "maintenance" })]]);
+  const oddOut = await enrichMissingAbstracts(odd, [work("10.1029/odd")], { crossref: false, openalex: false, s2Key: "k", cache: storage, now: NOW, retry: noSleep });
+  assert.equal(oddOut.failed, 1);
+  assert.equal(await storage.readJSON(ABSTRACT_CACHE_FILE), null);
+});
+
+test("cancelling during the Semantic Scholar batch keeps what was found before", async () => {
+  const storage = createMemoryStorage();
+  const http = mockHttp([
+    ["https://api.openalex.org/works", () => ({ results: [{ doi: "https://doi.org/10.1029/a", abstract_inverted_index: invert(text("Alpha")) }] })],
+    ["https://api.semanticscholar.org/", () => {
+      throw new CancelledRequestError();
+    }],
+  ]);
+  const works = [work("10.1029/a"), work("10.1029/b")];
+  await assert.rejects(enrichMissingAbstracts(http, works, { crossref: false, s2Key: "k", cache: storage, now: NOW, retry: noSleep }), (e) => e.cancelled === true);
+  assert.equal(works[0].abstract, text("Alpha"));
+  assert.deepEqual(Object.keys((await storage.readJSON(ABSTRACT_CACHE_FILE)).entries), ["10.1029/a"], "no miss cached for the cancelled DOI");
+});
+
 // ----------------------------------------------------------- cancellation
 
 test("cancellation stops the lookups, keeps the abstracts found so far and caches no misses", async () => {
@@ -558,8 +705,10 @@ test("the engine fills missing abstracts before the keyword filters and caches t
     elsevier: 1,
     springer: 0,
     openalex: 0,
+    s2: 0,
     filled: 1,
     failed: 1,
+    tldr: 0,
   });
   assert.equal(run.stats.abstractsEnriched, 1);
   assert.equal(run.stats.afterKeywords, 2, "the enriched abstract matches the include keyword");

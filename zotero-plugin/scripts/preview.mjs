@@ -9,7 +9,7 @@
 //   npm run build && node scripts/preview.mjs <out-dir> [options]
 //
 // Options (comma-separated lists):
-//   --pages overview,inbox,settings,settings/embedding   routes to capture
+//   --pages overview,inbox,settings,settings/apis       routes to capture
 //   --schemes light,dark        --sizes 1120x820,820x700
 //   --states default,running,error,empty                 extra states (light, first size only)
 //   --styleguide                also capture the shared components (main.css)
@@ -31,7 +31,7 @@ import { createEmptyFixtures, createFixtures } from "./preview-fixtures.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentDir = join(root, "build", "addon", "content");
-const DEFAULT_PAGES = ["overview", "inbox", "settings", "settings/embedding", "settings/ai"];
+const DEFAULT_PAGES = ["overview", "inbox", "settings", "settings/embedding", "settings/apis", "settings/ai"];
 const TYPES = {
   ".xhtml": "application/xhtml+xml; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -121,7 +121,7 @@ async function coreBundle() {
     stdin: {
       contents: [
         'export { parseFollowedAuthors } from "./src/core/authors.js";',
-        'export { summarizeWhitelist } from "./src/core/journals.js";',
+        'export { journalRows, mergeWhitelistRows, summarizeWhitelist } from "./src/core/journals.js";',
         'export { autoValues } from "./src/settings.js";',
       ].join("\n"),
       resolveDir: root,
@@ -168,7 +168,7 @@ function installMock({ fixtures, defaults, state }) {
   let running = null;
   const ZotWatch = {
     lastPage: null,
-    version: "0.3.0",
+    version: "0.4.0",
     async getView() {
       return JSON.parse(JSON.stringify(data.view));
     },
@@ -239,7 +239,35 @@ function installMock({ fixtures, defaults, state }) {
     },
     async suggestJournals() {
       await delay(500);
-      return data.whitelist;
+      return JSON.parse(JSON.stringify(data.proposals));
+    },
+    mergeJournals: (text, journals) => core.mergeWhitelistRows(text, core.journalRows(journals)),
+    async fillJournalMetadata(text) {
+      await delay(600);
+      const filled = { "1674-7313": "GEOLOGY,4.8", "1000-0569": "GEOLOGY (CN),1.3" };
+      let count = 0;
+      const next = String(text).replace(/^(1674-7313|1000-0569)(,[^,\n]*),library:\d+,$/gm, (m, issn, title) => (count++, `${issn}${title},${filled[issn]}`));
+      return { text: next, filled: count, incomplete: count, notFound: [] };
+    },
+    cancelJournalAction() {},
+    async searchJournals(query) {
+      await delay(350);
+      const q = String(query).toLowerCase();
+      return data.journalSearch.filter((j) => j.title.toLowerCase().includes(q.slice(0, 3)) || j.issns.some((i) => i.includes(q)));
+    },
+    async searchAuthors() {
+      await delay(350);
+      return JSON.parse(JSON.stringify(data.authorSearch));
+    },
+    async lookupJournalNames(issns) {
+      await delay(200);
+      const builtIn = { "0028-0836": "Nature", "1476-4687": "Nature", "0036-8075": "Science", "1095-9203": "Science", "2041-1723": "Nature Communications", "1752-0894": "Nature Geoscience", "1752-0908": "Nature Geoscience" };
+      const names = {};
+      for (const issn of issns) {
+        if (builtIn[issn]) names[issn] = { title: builtIn[issn], issns: [issn] };
+        else if (Object.hasOwn(data.journalNames, issn)) names[issn] = data.journalNames[issn];
+      }
+      return { names, error: null };
     },
     async loadPresetJournals() {
       return data.whitelist;
@@ -256,6 +284,7 @@ function installMock({ fixtures, defaults, state }) {
     parseFollowedAuthors: (text) => core.parseFollowedAuthors(text),
     summarizeWhitelist: (text) => core.summarizeWhitelist(text),
     getAutoValues: () => core.autoValues(prefs.get(`${PREFIX}embedding.provider`)),
+    getApiStatus: () => JSON.parse(JSON.stringify(data.apiStatus)),
   };
 
   const Zotero = {

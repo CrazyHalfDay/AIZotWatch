@@ -52,6 +52,21 @@ export const FLAGSHIP_DEFAULTS = Object.freeze({
   maxResults: 30,
 });
 
+/**
+ * Names of the default flagship journals (FLAGSHIP_DEFAULTS.issns, print and
+ * online ISSNs), so the 顶刊 chips of the settings page need no lookup for them.
+ */
+export const FLAGSHIP_JOURNALS = Object.freeze([
+  { title: "Nature", issns: ["0028-0836", "1476-4687"] },
+  { title: "Science", issns: ["0036-8075", "1095-9203"] },
+  { title: "Nature Communications", issns: ["2041-1723"] },
+  { title: "Science Advances", issns: ["2375-2548"] },
+  { title: "Communications Earth & Environment", issns: ["2662-4435"] },
+  { title: "Proceedings of the National Academy of Sciences", issns: ["0027-8424", "1091-6490"] },
+  { title: "Nature Geoscience", issns: ["1752-0894", "1752-0908"] },
+  { title: "Nature Reviews Earth & Environment", issns: ["2662-138X"] },
+]);
+
 /** Normalized ISSNs ("1234-567X"), invalid entries dropped, first occurrence kept. */
 export function normalizeIssnList(list) {
   return [...new Set((list || []).map(normalizeIssn).filter(Boolean))];

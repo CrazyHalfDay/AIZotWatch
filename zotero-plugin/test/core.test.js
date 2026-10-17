@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { parseAuthorName, toZoteroCreator } from "../src/core/authors.js";
 import { dedupeAgainstLibrary, ratio, tokenSetRatio } from "../src/core/dedupe.js";
 import { excludeByKeywords, filterRecent, includeByKeywords, limitPreprints } from "../src/core/filters.js";
-import { libraryVenues, parseWhitelist, serializeWhitelist, splitCsvLine } from "../src/core/journals.js";
+import { isChineseCoreCategory, libraryVenues, parseWhitelist, serializeWhitelist, splitCsvLine } from "../src/core/journals.js";
 import {
   cleanHtml,
   cleanTitle,
@@ -128,6 +131,17 @@ test("journal whitelist parsing and library venues", () => {
   assert.equal(map.get("0016-7037").impactFactor, 5);
   assert.equal(map.get("1869-1897").isChineseCore, true);
   assert.equal(parseWhitelist(serializeWhitelist([...map.values()])).size, 2);
+  assert.equal(map.get("0016-7037").isChineseCore, false);
+
+  // Chinese core journals: "(CN)" anywhere or a "_CN" suffix (the preset and the Python data)
+  const cn = parseWhitelist("1869-1897,Science China Earth Sciences,GEOSCIENCES_CN,5\n1000-0569,岩石学报,geology_cn,\n0016-7037,GCA,CNS_JOURNALS,5\n1674-7313,Sci China,library:14,");
+  assert.deepEqual([...cn.values()].map((j) => j.isChineseCore), [true, true, false, false]);
+  for (const [category, expected] of [["GEOSCIENCES (CN)", true], ["(cn) 地学", true], ["GEOSCIENCES_CN ", true], ["CN_GEO", false], ["", false], [null, false]]) {
+    assert.equal(isChineseCoreCategory(category), expected, String(category));
+  }
+  // The bundled preset marks its Chinese journals with _CN
+  const preset = parseWhitelist(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../addon/content/presets/geoscience-journals.csv"), "utf8"));
+  assert.equal(preset.get("1869-1897").isChineseCore, true);
 
   const venues = libraryVenues([
     { itemType: "journalArticle", venue: "Geochimica et Cosmochimica Acta", issn: "0016-7037" },

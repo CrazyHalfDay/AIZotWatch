@@ -218,6 +218,25 @@ test("cards show track badges, scores and chips", () => {
   assert.equal(withClass(cards["Personal second"], "card-meta")[0].textContent.includes("arXiv"), true);
 });
 
+test("a Semantic Scholar TLDR is a muted line without an abstract and a tooltip next to one", () => {
+  const works = [
+    { ...base, id: "t1", source: "openalex", title: "Only a TLDR", label: "followed", score: 0, published: "2024-10-03T00:00:00Z", followedAuthors: ["Ann Lee"], abstract: null, tldr: "Slab melts carry copper to arcs." },
+    { ...base, id: "t2", source: "crossref", title: "Abstract and TLDR", label: "consider", score: 0.5, abstract: "A long abstract.", tldr: "Short version." },
+    { ...base, id: "t3", source: "crossref", title: "Neither", label: "consider", score: 0.4, abstract: null },
+  ];
+  const { $ } = loadWindow(view({ works }));
+  const cards = Object.fromEntries($("inbox-list").childNodes.filter((n) => n.tagName === "article").map((n) => [withClass(n, "title")[0].textContent, n]));
+  const line = withClass(cards["Only a TLDR"], "tldr")[0];
+  assert.equal(line.textContent, "TLDR：Slab melts carry copper to arcs.");
+  assert.match(line.attributes.title, /^Semantic Scholar 自动生成的一句话总结：Slab melts/);
+  assert.equal(withClass(cards["Only a TLDR"], "abstract").length, 0);
+
+  const both = cards["Abstract and TLDR"];
+  assert.equal(withClass(both, "tldr").length, 0, "no extra line when the abstract is there");
+  assert.equal(withClass(both, "abstract")[0].attributes.title, "点击展开摘要\nTLDR：Short version.");
+  assert.equal(withClass(cards.Neither, "tldr").length, 0);
+});
+
 test("the track filter shows a flat list and keeps the other filters", async () => {
   const { run, $, statusCalls } = loadWindow(view());
   const state = (src) => run(`(() => { const state = ZotWatchInbox.state; ${src}; ZotWatchInbox.renderList(); })()`);

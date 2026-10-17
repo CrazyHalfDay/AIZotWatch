@@ -69,7 +69,7 @@ var ZotWatchInbox = (() => {
     if (state.filter === "latest") works = works.filter((w) => w.firstRunId === latestRun);
     if (q) {
       works = works.filter((w) =>
-        [w.title, w.translatedTitle, w.venue, authorLine(w.authors), (w.followedAuthors || []).join(" "), w.topic, w.abstract].some((s) =>
+        [w.title, w.translatedTitle, w.venue, authorLine(w.authors), (w.followedAuthors || []).join(" "), w.topic, w.abstract, w.tldr].some((s) =>
           (s || "").toLowerCase().includes(q),
         ),
       );
@@ -272,14 +272,17 @@ var ZotWatchInbox = (() => {
       work.abstract
         ? el("p", {
             class: expanded ? "abstract" : "abstract clamped",
-            title: expanded ? "点击收起" : "点击展开摘要",
+            // Semantic Scholar's one-sentence summary stays a tooltip next to a real abstract
+            title: [expanded ? "点击收起" : "点击展开摘要", work.tldr ? `TLDR：${work.tldr}` : null].filter(Boolean).join("\n"),
             text: work.abstract,
             onclick: () => {
               expanded ? state.expanded.delete(work.id) : state.expanded.add(work.id);
               renderList();
             },
           })
-        : null,
+        : work.tldr
+          ? el("p", { class: "tldr", title: `Semantic Scholar 自动生成的一句话总结：${work.tldr}`, text: `TLDR：${work.tldr}` })
+          : null,
       summaryBlock(work),
       error ? el("div", { class: "card-error", role: "alert" }, svgIcon("alert"), el("span", { text: error })) : null,
       el("div", { class: "card-actions" }, actions),

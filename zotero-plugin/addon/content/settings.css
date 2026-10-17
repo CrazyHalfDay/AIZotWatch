@@ -459,6 +459,10 @@
   color: var(--good);
 }
 
+.sf-result.warning .icon {
+  color: var(--warning);
+}
+
 .sf-result.critical .icon {
   color: var(--critical);
 }
@@ -505,12 +509,12 @@
   font-weight: 600;
 }
 
-/* Followed authors: live preview of the parsed list */
+/* Followed authors: the parsed list (rows with 移除, see search.css .sf-rows) */
 .sf-preview {
-  padding: 10px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .sf-preview-head {
@@ -519,10 +523,7 @@
 }
 
 .sf-preview-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -561,7 +562,7 @@
   overflow-wrap: anywhere;
 }
 
-.sf-invalid .icon,
+.sf-invalid > .icon,
 .sf-inline-warning .icon {
   width: 14px;
   height: 14px;
@@ -618,7 +619,8 @@
 }
 
 /* Read-only rows, the data directory and links */
-.sf-run-status {
+.sf-run-status,
+.sf-usage {
   white-space: normal;
   text-align: end;
 }
@@ -736,7 +738,8 @@
   }
 
   .field-note,
-  .sf-run-status {
+  .sf-run-status,
+  .sf-usage {
     text-align: start;
   }
 

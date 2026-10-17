@@ -12,13 +12,14 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 import { parseFollowedAuthors } from "../src/core/authors.js";
-import { summarizeWhitelist } from "../src/core/journals.js";
+import { journalRows, mergeWhitelistRows, summarizeWhitelist } from "../src/core/journals.js";
 import { EMBEDDING_PRESETS } from "../src/embedding/providers.js";
 import { autoValues, loadSettings } from "../src/settings.js";
 import { PREFS_0_2_0 } from "./helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCode = readFileSync(join(root, "addon/content/main.js"), "utf8");
+const searchCode = readFileSync(join(root, "addon/content/search.js"), "utf8");
 const settingsCode = readFileSync(join(root, "addon/content/settings.js"), "utf8");
 const PREFIX = "extensions.zotwatch.";
 // Values created inside the VM have foreign prototypes; compare them structurally
@@ -117,9 +118,15 @@ class FakeNode {
   addEventListener(type, fn) {
     (this.listeners[type] ||= []).push(fn);
   }
-  dispatch(type) {
-    for (const fn of this.listeners[type] || []) fn({ type, target: this, preventDefault() {} });
+  /** Fire an event; `extra` adds fields such as `key` for keyboard events. */
+  dispatch(type, extra = {}) {
+    const event = { type, target: this, defaultPrevented: false, preventDefault() {
+      event.defaultPrevented = true;
+    }, stopPropagation() {}, ...extra };
+    for (const fn of this.listeners[type] || []) fn(event);
+    return event;
   }
+  focus() {}
   append(...nodes) {
     this.childNodes.push(...nodes);
   }
@@ -198,7 +205,26 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
   const checks = [];
   const resets = [];
   // failSaves: how many of the next whitelist saves fail (like the addon: nothing changes then)
-  const control = { failSaves: 0, confirmReply: true, allowErrors: false, errors: [] };
+  // checkRows: rows checkConnections() answers per key (default: every key passes, llm fails);
+  // apiStatus: what getApiStatus() returns (the 学术数据接口 budget line)
+  const control = {
+    failSaves: 0,
+    confirmReply: true,
+    allowErrors: false,
+    errors: [],
+    checkRows: {},
+    apiStatus: { openalexKey: false, semanticScholarKey: false, mailto: false, openalexUsage: null },
+    // Journal tools: proposals of 从文库生成, answers of the search boxes and of the name lookup
+    proposals: { proposals: [], warnings: [], missing: [], stats: {} },
+    fills: [],
+    fillResult: (text) => ({ text, filled: 0, incomplete: 0, notFound: [] }),
+    journalCancels: 0,
+    searches: [],
+    searchJournals: async () => [],
+    searchAuthors: async () => [],
+    nameLookups: [],
+    lookupNames: async () => ({ names: {}, error: null }),
+  };
   const api = {
     version: "0.3.0",
     whitelistError: null,
@@ -218,16 +244,38 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
     async resetData() {
       resets.push(true);
     },
+    // OpenAlex-backed journal tools (journal-proposals.js / openalex-entities.js), with the real merge
     async suggestJournals() {
-      return `${whitelist}\n0012-821X,EPSL,GEO,5.3`;
+      return control.proposals;
+    },
+    mergeJournals: (text, journals) => mergeWhitelistRows(text, journalRows(journals)),
+    async fillJournalMetadata(text) {
+      control.fills.push(text);
+      return control.fillResult(text);
+    },
+    cancelJournalAction() {
+      control.journalCancels += 1;
+    },
+    async searchJournals(query) {
+      control.searches.push(["journals", query]);
+      return control.searchJournals(query);
+    },
+    async searchAuthors(query) {
+      control.searches.push(["authors", query]);
+      return control.searchAuthors(query);
+    },
+    async lookupJournalNames(issns) {
+      control.nameLookups.push(issns);
+      return control.lookupNames(issns);
     },
     async loadPresetJournals() {
       return "issn,title\n0016-7037,GCA";
     },
     async checkConnections(keys) {
       checks.push(keys);
-      return keys.map((key) => ({ key, name: key, ok: key !== "llm", detail: key === "llm" ? "HTTP 401" : "正常，维度 1024" }));
+      return keys.map((key) => control.checkRows[key] || { key, name: key, ok: key !== "llm", detail: key === "llm" ? "HTTP 401" : "正常，维度 1024" });
     },
+    getApiStatus: () => control.apiStatus,
     getDataDir: () => "/data/zotwatch",
     async getView() {
       return { works: [], lastRun: null, history: [], running: false, schedule: null, version: "0.3.0" };
@@ -295,6 +343,7 @@ function loadSettingsPage({ prefs = {}, whitelist = "" } = {}) {
     clearInterval() {},
   });
   vm.runInContext(mainCode, context, { filename: "main.js" });
+  vm.runInContext(searchCode, context, { filename: "search.js" });
   vm.runInContext(settingsCode, context, { filename: "settings.js" });
   const run = (src) => vm.runInContext(src, context);
   const page = run("ZotWatchSettings");
@@ -432,7 +481,7 @@ test("the settings page binds every setting and writes it with the default's typ
   assert.equal(writes.length, 0, "showing the page writes nothing");
 
   // The index lists every section with a status; sections are hidden until chosen
-  assert.equal(byClass(root, "sf-index-item").length, 10);
+  assert.equal(byClass(root, "sf-index-item").length, 11);
   assert.equal(byId(root, "settings-index").hidden, false);
   assert.equal(byId(root, "settings-ai").hidden, true);
   const statuses = byClass(root, "sf-index-status").map((n) => n.textContent);
@@ -587,23 +636,25 @@ test("followed authors and the journal list have live previews; whitelist edits 
   await clock.advance(800);
   assert.deepEqual(saved, [list.value]);
 
-  // Generating the list locks the field and its buttons until it is done
+  // Generating the proposals locks the field and its buttons until they arrive (nothing is written)
   let finishSuggest;
   api.suggestJournals = () => new Promise((r) => (finishSuggest = r));
   const suggest = byId(root, "sp-journals-suggest");
-  const buttons = ["sp-journals-suggest", "sp-journals-import", "sp-journals-preset"].map((id) => byId(root, id));
+  const buttons = ["sp-journals-suggest", "sp-journals-fill", "sp-journals-import", "sp-journals-preset"].map((id) => byId(root, id));
   suggest.dispatch("click");
   await new Promise((r) => setImmediate(r));
   assert.equal(list.disabled, true, "the list is locked while it is generated");
-  assert.deepEqual(buttons.map((b) => b.disabled), [true, true, true]);
+  assert.deepEqual(buttons.map((b) => b.disabled), [true, true, true, true]);
   assert.match(byClass(root, "sf-action-message")[0].textContent, /正在分析文库期刊/);
-  finishSuggest(`${list.value}\n0012-821X,EPSL,GEO,5.3`);
+  const savedBefore = saved.length;
+  finishSuggest({ proposals: [{ title: "Chemical Geology", issns: ["0009-2541"], category: "GEOCHEMISTRY_AND_PETROLOGY", impactFactor: 3.9, libraryCount: 3, origin: "library", checked: true, verified: true }], warnings: [], missing: [] });
   await new Promise((r) => setImmediate(r));
   assert.equal(list.disabled, false);
-  assert.deepEqual(buttons.map((b) => b.disabled), [false, false, false]);
-  assert.match(list.value, /0012-821X,EPSL,GEO,5\.3$/);
-  assert.equal(saved.at(-1), list.value);
-  assert.match(byClass(root, "sf-action-message")[0].textContent, /已根据文库生成期刊列表/);
+  assert.deepEqual(buttons.map((b) => b.disabled), [false, false, false, false]);
+  assert.equal(byId(root, "sp-journals-review").hidden, false, "the review panel opens");
+  assert.equal(saved.length, savedBefore, "nothing is saved before 加入所选");
+  byId(root, "sp-journals-review-cancel").dispatch("click");
+  assert.equal(byId(root, "sp-journals-review").hidden, true);
 
   // The example list replaces a non-empty list only after a confirmation
   byId(root, "sp-journals-preset").dispatch("click");
@@ -675,6 +726,75 @@ test("恢复默认, LLM presets and inline connection tests", async () => {
 });
 
 const tick = () => new Promise((r) => setImmediate(r));
+
+test("学术数据接口: keys with an eye toggle, the moved Crossref address, status, budget and 测试接口", async () => {
+  const { page, root, values, checks, control } = loadSettingsPage();
+  page.init();
+  page.show({});
+  const statusOf = (id) => byClass(root, "sf-index-item").find((n) => n.getAttribute("data-section") === id);
+  assert.equal(byClass(statusOf("apis"), "sf-index-status")[0].textContent, "未配置 OpenAlex API Key");
+  assert.equal(byClass(statusOf("apis"), "dot")[0].className, "dot warning");
+  // The section comes right after 向量化
+  assert.deepEqual(byClass(root, "sf-index-item").slice(1, 3).map((n) => n.getAttribute("data-section")), ["embedding", "apis"]);
+
+  page.show({ section: "apis" });
+  const section = byId(root, "settings-apis");
+  assert.equal(section.hidden, false);
+  // The Crossref contact address moved here from 文献来源 (same pref, bound once)
+  assert.equal(byPref(section, "sources.crossref.mailto").length, 1);
+  assert.equal(byPref(byId(root, "settings-sources"), "sources.crossref.mailto").length, 0);
+  assert.equal(byPref(root, "sources.crossref.mailto").length, 1);
+  assert.match(rowOf(section, "sources.crossref.mailto").textContent, /联系邮箱（Crossref 礼貌池）/);
+
+  const [openalexKey] = byPref(section, "apis.openalexKey");
+  const [s2Key] = byPref(section, "apis.semanticScholarKey");
+  assert.equal(openalexKey.type, "password");
+  assert.equal(s2Key.type, "password");
+  const eye = byClass(rowOf(section, "apis.openalexKey"), "sf-eye")[0];
+  eye.dispatch("click");
+  assert.equal(openalexKey.type, "text");
+  eye.dispatch("click");
+  assert.equal(openalexKey.type, "password");
+
+  // Without a key, the budget line warns
+  const usage = byClass(section, "sf-usage")[0];
+  assert.equal(usage.textContent, "未配置 Key：每日只有很少的免费额度");
+  assert.equal(byClass(usage, "dot")[0].className, "dot warning");
+
+  openalexKey.value = " oa-key ";
+  openalexKey.dispatch("change");
+  assert.equal(values.get("apis.openalexKey"), "oa-key");
+  assert.equal(byClass(statusOf("apis"), "sf-index-status")[0].textContent, "OpenAlex 已配置");
+  assert.equal(usage.textContent, "运行一次或点击「测试接口」后显示");
+  s2Key.value = "s2-key";
+  s2Key.dispatch("change");
+  assert.equal(byClass(statusOf("apis"), "sf-index-status")[0].textContent, "OpenAlex、Semantic Scholar 已配置");
+  assert.equal(byClass(statusOf("apis"), "dot")[0].className, "dot good");
+
+  // 测试接口 checks the three services together; each result names its service
+  control.checkRows = {
+    openalex: { key: "openalex", name: "OpenAlex", ok: true, detail: "Key 有效，今日剩余 $0.95 / $1.00" },
+    semanticscholar: { key: "semanticscholar", name: "Semantic Scholar", ok: false, detail: "Key 无效（HTTP 403）" },
+    crossref: { key: "crossref", name: "Crossref", ok: true, detail: "可访问" },
+  };
+  control.apiStatus = { ...control.apiStatus, openalexKey: true, openalexUsage: { remainingUsd: 0.95, limitUsd: 1, at: Date.now() - 3 * 3600000 - 60000, text: "今日剩余 $0.95 / $1.00" } };
+  const test = byClass(section, "sf-test")[0];
+  assert.match(test.childNodes[0].textContent, /测试接口/);
+  test.childNodes[0].dispatch("click");
+  await tick();
+  assert.deepEqual(plain(checks.at(-1)), ["openalex", "semanticscholar", "crossref"]);
+  assert.deepEqual(byClass(test, "sf-result").map((n) => n.textContent), ["OpenAlex：Key 有效，今日剩余 $0.95 / $1.00", "Semantic Scholar：Key 无效（HTTP 403）", "Crossref：可访问"]);
+  assert.deepEqual(byClass(test, "sf-result").map((n) => n.className), ["sf-result good", "sf-result critical", "sf-result good"]);
+  // OpenAlex reachable without a key is a warning, Semantic Scholar without one a plain notice
+  control.checkRows.openalex = { key: "openalex", name: "OpenAlex", ok: null, detail: "可访问，但未配置 API Key（每日免费额度很小）" };
+  control.checkRows.semanticscholar = { key: "semanticscholar", name: "Semantic Scholar", ok: null, detail: "未配置 API Key" };
+  test.childNodes[0].dispatch("click");
+  await tick();
+  assert.deepEqual(byClass(test, "sf-result").map((n) => n.className), ["sf-result warning", "sf-result off", "sf-result good"]);
+  // The budget the OpenAlex check read is shown right away
+  assert.equal(usage.textContent, "今日剩余 $0.95 / $1.00 · 3 小时前更新");
+  assert.equal(byClass(usage, "dot")[0].className, "dot good");
+});
 
 test("pending edits are saved on a page switch, a section switch and when the window closes", async () => {
   const { page, run, fire, root, values, saved } = loadSettingsPage({ whitelist: "issn,title\n0016-7037,GCA" });
@@ -800,4 +920,325 @@ test("向量维度 warns about sizes DashScope rejects; blank arXiv categories m
   const blank = loadSettings((k) => (k === "sources.arxiv.categories" ? " " : defaults[k]));
   assert.deepEqual(blank.sources.arxiv.categories, spec.placeholder.split(/,\s*/));
   assert.deepEqual(blank.sources.arxiv.categories, loadSettings((k) => defaults[k]).sources.arxiv.categories);
+});
+
+// ------------------------------------------- 0.4.0: search boxes, review panel, lists
+
+const flushPromises = () => new Promise((r) => setImmediate(r));
+const journal = (title, issns, extra = {}) => ({ title, issns, impactFactor: 3.9, worksCount: 12000, publisher: "Elsevier BV", country: "NL", category: "GEOCHEMISTRY_AND_PETROLOGY", subfield: "Geochemistry and Petrology", ...extra });
+
+test("search box: debounce, minimum length, stale answers, keyboard and 已在列表", async () => {
+  const { page, root, clock, control, saved } = loadSettingsPage({ whitelist: "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0" });
+  const answers = [];
+  control.searchJournals = (query) => new Promise((resolve) => answers.push({ query, resolve }));
+  page.init();
+  page.show({ section: "journals" });
+  const input = byId(root, "sp-journal-search");
+  const box = walk(root).find((n) => n.className === "sb" && walk(n).includes(input));
+  const results = byId(root, "sp-journal-search-results");
+  assert.equal(input.getAttribute("role"), "combobox");
+  assert.equal(input.getAttribute("aria-controls"), "sp-journal-search-results");
+
+  input.value = "g";
+  input.dispatch("input");
+  await clock.advance(1000);
+  assert.deepEqual(control.searches, [], "one character does not search");
+
+  input.value = "geo";
+  input.dispatch("input");
+  await clock.advance(300);
+  input.value = "geochim";
+  input.dispatch("input");
+  await clock.advance(399);
+  assert.deepEqual(control.searches, [], "debounced");
+  await clock.advance(1);
+  assert.deepEqual(control.searches, [["journals", "geochim"]]);
+  assert.equal(byClass(box, "sb-spinner")[0].hidden, false, "spinner while searching");
+  input.value = "geochimica";
+  input.dispatch("input");
+  await clock.advance(400);
+  // The older answer arrives last and is ignored
+  answers[1].resolve([journal("Geochimica et Cosmochimica Acta", ["0016-7037", "1872-9533"], { impactFactor: 5.04 }), journal("Chemical Geology", ["0009-2541"])]);
+  await flushPromises();
+  answers[0].resolve([journal("Stale result", ["1111-1119"])]);
+  await flushPromises();
+  const rows = byClass(results, "sb-result");
+  assert.equal(results.hidden, false);
+  assert.equal(input.getAttribute("aria-expanded"), "true");
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /^Geochimica et Cosmochimica ActaElsevier BV · NL · 0016-7037 \/ 1872-9533 · 近似 IF 5\.0 · 发文 12,000 篇已在列表$/);
+  assert.equal(byClass(rows[0], "sb-action")[0].disabled, true, "listed journals cannot be added again");
+  assert.equal(byClass(rows[1], "sb-action")[0].textContent, "添加");
+  assert.equal(byClass(box, "sb-spinner")[0].hidden, true);
+
+  // ↓ ↓ wraps to the first row, ↑ goes back; Enter adds the highlighted journal
+  input.dispatch("keydown", { key: "ArrowDown" });
+  assert.equal(input.getAttribute("aria-activedescendant"), "sp-journal-search-results-0");
+  input.dispatch("keydown", { key: "ArrowDown" });
+  input.dispatch("keydown", { key: "ArrowDown" });
+  assert.equal(input.getAttribute("aria-activedescendant"), "sp-journal-search-results-0");
+  input.dispatch("keydown", { key: "ArrowUp" });
+  assert.equal(rows[1].getAttribute("aria-selected"), "true");
+  const enter = input.dispatch("keydown", { key: "Enter" });
+  assert.equal(enter.defaultPrevented, true);
+  await flushPromises();
+  await flushPromises();
+  const list = byId(root, "sp-whitelist");
+  assert.equal(list.value, "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0\n0009-2541,Chemical Geology,GEOCHEMISTRY_AND_PETROLOGY,3.9");
+  assert.equal(saved.at(-1), list.value, "added rows are saved at once");
+  assert.equal(byClass(rows[1], "sb-action")[0].textContent, "已在列表");
+  assert.match(byClass(box, "sb-status")[0].textContent, /已添加 Chemical Geology（1 行 ISSN，近似 IF 3\.9）/);
+
+  // Esc closes the list, a second Esc clears the input
+  input.dispatch("keydown", { key: "Escape" });
+  assert.equal(results.hidden, true);
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+  input.dispatch("keydown", { key: "Escape" });
+  assert.equal(input.value, "");
+
+  // Failures are shown; Enter searches at once
+  control.searchJournals = async () => {
+    throw new Error("OpenAlex 免费额度已用完（HTTP 429），请在「学术数据接口」中填写 API Key");
+  };
+  input.value = "lithos";
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.match(byClass(box, "sb-status")[0].textContent, /^搜索失败：OpenAlex 免费额度已用完/);
+  control.searchJournals = async () => [];
+  input.value = "nothing";
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(byClass(box, "sb-status")[0].textContent, "OpenAlex 中没有找到匹配的期刊");
+  // A cancelled (superseded) search says nothing
+  control.searchJournals = async () => {
+    const e = new Error("已取消");
+    e.cancelled = true;
+    throw e;
+  };
+  input.value = "cancelled";
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(byClass(box, "sb-status")[0].hidden, true);
+});
+
+test("从文库生成: a review panel with defaults, 已在列表, 全选 and 加入所选", async () => {
+  const { page, root, control, saved } = loadSettingsPage({ whitelist: "issn,title,category,impact_factor\n# mine\n0012-821X,EPSL,library:9," });
+  control.proposals = {
+    proposals: [
+      { title: "Earth and Planetary Science Letters", libraryTitle: "EPSL", issns: ["0012-821X", "1385-013X"], category: "GEOPHYSICS", subfield: "Geophysics", impactFactor: 4.6, libraryCount: 9, origin: "library", checked: true, verified: true },
+      { title: "Acta Petrologica Sinica", issns: ["1000-0569"], category: "GEOLOGY (CN)", subfield: "Geology", impactFactor: 1.2, libraryCount: 4, origin: "library", checked: true, verified: true },
+      { title: "Lithos", issns: ["0024-4937"], category: "", impactFactor: null, libraryCount: 1, origin: "library", checked: false, verified: false },
+      { title: "Journal of Petrology", issns: ["0022-3530"], category: "GEOCHEMISTRY_AND_PETROLOGY", subfield: "Geochemistry and Petrology", impactFactor: 3.2, libraryCount: 0, origin: "ai", checked: true, verified: true },
+    ],
+    warnings: ["大模型推荐失败：HTTP 401"],
+    missing: ["Unknown Newsletter"],
+  };
+  page.init();
+  page.show({ section: "journals" });
+  byId(root, "sp-journals-suggest").dispatch("click");
+  await flushPromises();
+  await flushPromises();
+  const panel = byId(root, "sp-journals-review");
+  assert.equal(panel.hidden, false);
+  assert.match(byClass(panel, "jr-counts")[0].textContent, /^文库期刊 3 种 · AI 推荐 1 种 · 1 种已在列表$/);
+  assert.equal(byClass(panel, "jr-warning")[0].textContent, "大模型推荐失败：HTTP 401");
+  const rows = byClass(panel, "jr-row");
+  assert.equal(rows.length, 4);
+  const checks = rows.map((r) => byClass(r, "jr-check")[0]);
+  assert.deepEqual(checks.map((c) => [c.checked, c.disabled]), [[false, true], [true, false], [false, false], [true, false]], "listed ones locked; defaults from the proposals");
+  assert.match(rows[0].textContent, /文库中写作：EPSL已在列表/);
+  assert.match(rows[1].textContent, /Geology中文核心1\.24 篇$/);
+  assert.match(rows[2].textContent, /OpenAlex 中未找到.*–.*–1 篇$/);
+  assert.match(rows[3].textContent, /AI 推荐$/);
+  assert.deepEqual(byClass(panel, "jr-group").map((g) => g.textContent), ["来自文库（3）", "AI 推荐 · 已通过 OpenAlex 核实（1）"]);
+  assert.match(byClass(panel, "jr-note").map((n) => n.textContent).join(" "), /另有 1 种期刊没有找到 ISSN，无法加入：Unknown Newsletter/);
+  const add = byId(root, "sp-journals-add");
+  assert.equal(add.textContent, "加入所选（2）");
+  checks[2].checked = true;
+  checks[2].dispatch("change");
+  assert.equal(add.textContent, "加入所选（3）");
+  const [selectAll, selectNone] = byClass(panel, "jr-head-actions")[0].childNodes;
+  selectNone.dispatch("click");
+  assert.equal(add.textContent, "加入所选（0）");
+  assert.equal(add.disabled, true);
+  selectAll.dispatch("click");
+  assert.equal(add.textContent, "加入所选（3）");
+  assert.equal(checks[0].checked, false, "全选 skips listed journals");
+  checks[3].checked = false;
+  checks[3].dispatch("change");
+
+  add.dispatch("click");
+  await flushPromises();
+  await flushPromises();
+  const list = byId(root, "sp-whitelist");
+  assert.deepEqual(list.value.split("\n"), [
+    "issn,title,category,impact_factor",
+    "# mine",
+    "0012-821X,EPSL,library:9,",
+    "1000-0569,Acta Petrologica Sinica,GEOLOGY (CN),1.2",
+    "0024-4937,Lithos,,",
+  ]);
+  assert.equal(saved.at(-1), list.value);
+  assert.equal(panel.hidden, true, "the panel closes after adding");
+  assert.match(byClass(root, "sf-action-message")[0].textContent, /^已加入 2 种期刊（2 行 ISSN）。$/);
+});
+
+test("补全学科与影响因子 and 取消 of the OpenAlex actions", async () => {
+  const text = "issn,title,category,impact_factor\n1674-7313,Science China Earth Sciences,library:14,\n0016-7037,GCA,GEO,5.0";
+  const { page, root, control, saved, api } = loadSettingsPage({ whitelist: text });
+  control.fillResult = (t) => ({ text: t.replace("library:14,", "GEOLOGY,4.8"), filled: 1, incomplete: 1, notFound: [] });
+  page.init();
+  page.show({ section: "journals" });
+  const fill = byId(root, "sp-journals-fill");
+  assert.equal(fill.disabled, false);
+  assert.match(fill.getAttribute("title"), /^1 个期刊缺少/);
+  fill.dispatch("click");
+  await flushPromises();
+  await flushPromises();
+  assert.deepEqual(control.fills, [text]);
+  const list = byId(root, "sp-whitelist");
+  assert.match(list.value, /1674-7313,Science China Earth Sciences,GEOLOGY,4\.8/);
+  assert.equal(saved.at(-1), list.value);
+  assert.match(byClass(root, "sf-action-message")[0].textContent, /已补全 1 个期刊的学科或影响因子/);
+  assert.equal(fill.disabled, true, "nothing left to fill");
+  assert.equal(fill.getAttribute("title"), "所有期刊都已有学科和影响因子");
+
+  // 从文库生成 can be cancelled while it runs
+  let reject;
+  page.show({ section: "journals" });
+  api.suggestJournals = () => new Promise((_, r) => (reject = r));
+  byId(root, "sp-journals-suggest").dispatch("click");
+  await flushPromises();
+  const cancel = byId(root, "sp-journals-cancel");
+  assert.equal(cancel.textContent, "取消");
+  cancel.dispatch("click");
+  assert.equal(control.journalCancels, 1);
+  reject(Object.assign(new Error("已取消"), { cancelled: true }));
+  await flushPromises();
+  assert.match(byClass(root, "sf-action-message")[0].textContent, /^已取消$/);
+  assert.equal(list.disabled, false);
+});
+
+test("关注作者: search and 关注, removable rows, 编辑文本 and the missing-key notice", async () => {
+  const { page, root, control, values, clock } = loadSettingsPage({
+    prefs: { "followed.enabled": false, "followed.authors": "汪在聪, 0000-0002-3584-1673\nnobody\n# a comment" },
+  });
+  control.searchAuthors = async () => [
+    { id: "A5000000001", name: "Zaicong Wang", orcid: "0000-0002-3584-1673", institution: "China University of Geosciences", country: "CN", worksCount: 120, citedByCount: 3000, topic: "Platinum-group elements" },
+    { id: "A5023888391", name: "Cin-Ty Lee", orcid: null, institution: "Rice University", worksCount: 250, citedByCount: 18000, topic: null },
+  ];
+  page.init();
+  page.show({ section: "followed" });
+  const section = byId(root, "settings-followed");
+  // No OpenAlex key: a notice under the search box links to 学术数据接口
+  const hint = byClass(section, "sb-hint")[0];
+  assert.equal(hint.hidden, false);
+  assert.match(hint.textContent, /未配置 OpenAlex API Key/);
+  assert.equal(walk(hint).find((n) => n.tagName === "A").getAttribute("href"), "#settings/apis");
+  // The textarea lives under a collapsed 「编辑文本」
+  const [area] = byPref(root, "followed.authors");
+  const details = walk(section).find((n) => n.tagName === "DETAILS" && walk(n).includes(area));
+  assert.match(details.textContent, /^编辑文本/);
+
+  const input = byId(root, "sp-author-search");
+  input.value = "wang";
+  input.dispatch("input");
+  await clock.advance(400);
+  await flushPromises();
+  const rows = byClass(byId(root, "sp-author-search-results"), "sb-result");
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /^Zaicong WangORCID0000-0002-3584-1673China University of Geosciences · 120 篇论文 · 被引 3,000 · Platinum-group elements已关注$/);
+  assert.match(rows[1].textContent, /^Cin-Ty Lee无 ORCIDRice University · 250 篇论文 · 被引 18,000关注$/);
+  const follow = byClass(rows[1], "sb-action")[0];
+  assert.equal(follow.getAttribute("aria-label"), "关注：Cin-Ty Lee");
+  follow.dispatch("click");
+  await flushPromises();
+  assert.equal(values.get("followed.authors"), "汪在聪, 0000-0002-3584-1673\nnobody\n# a comment\nCin-Ty Lee, A5023888391", "no ORCID: the OpenAlex id");
+  assert.equal(follow.textContent, "已关注");
+  assert.match(byClass(section, "sb-status")[0].textContent, /已关注 Cin-Ty Lee（「关注指定作者的新论文」尚未开启）/);
+
+  // Rows: the parsed authors and the unparseable line, each removable
+  const preview = byClass(root, "sf-preview")[0];
+  assert.equal(byClass(preview, "sf-preview-head")[0].textContent, "已识别 2 位作者 · 1 行无法识别");
+  const authorRows = byClass(preview, "sf-author");
+  assert.equal(authorRows.length, 2);
+  byClass(authorRows[0], "sf-remove")[0].dispatch("click");
+  assert.equal(values.get("followed.authors"), "nobody\n# a comment\nCin-Ty Lee, A5023888391");
+  assert.equal(byClass(rows[0], "sb-action")[0].textContent, "关注", "an unfollowed author can be followed again");
+  byClass(byClass(preview, "sf-invalid")[0], "sf-remove")[0].dispatch("click");
+  assert.equal(values.get("followed.authors"), "# a comment\nCin-Ty Lee, A5023888391", "comments stay");
+  assert.equal(area.value, values.get("followed.authors"));
+  assert.equal(byClass(preview, "sf-preview-head")[0].textContent, "已识别 1 位作者");
+
+  // With a key the notice goes away
+  const [key] = byPref(root, "apis.openalexKey");
+  page.show({ section: "apis" });
+  key.value = "oa-key";
+  key.dispatch("change");
+  assert.equal(hint.hidden, true);
+});
+
+test("顶刊: journals grouped by name with removable rows, search to add, the default list kept blank", async () => {
+  const { page, root, control, values, clock } = loadSettingsPage({ prefs: { "apis.openalexKey": "oa-key" } });
+  const auto = autoValues("local");
+  const known = { "0028-0836": "Nature", "1476-4687": "Nature", "0036-8075": "Science", "1095-9203": "Science" };
+  control.lookupNames = async (issns) => ({
+    names: Object.fromEntries(issns.map((issn) => [issn, known[issn] ? { title: known[issn], issns: [issn] } : issn === "9999-9999" ? null : { title: `Journal ${issn}`, issns: [issn] }])),
+    error: null,
+  });
+  control.searchJournals = async () => [{ title: "Geology", issns: ["0091-7613", "1943-2682"], impactFactor: 4.8, worksCount: 15000, publisher: "GSA", country: "US" }];
+  page.init();
+  // Names are only looked up while the section is shown
+  page.show({ section: "general" });
+  assert.deepEqual(control.nameLookups, []);
+  page.show({ section: "flagship" });
+  await flushPromises();
+  await flushPromises();
+  assert.equal(control.nameLookups.length, 1);
+  const section = byId(root, "settings-flagship");
+  assert.equal(byClass(section, "sb-hint")[0].hidden, true, "a key is set: no notice");
+  const list = byClass(section, "fj-list")[0];
+  let rows = byClass(list, "fj-row");
+  assert.equal(rows[0].textContent, "Nature0028-08361476-4687");
+  assert.equal(rows[1].textContent, "Science0036-80751095-9203");
+  assert.equal(rows.length, auto.flagship.issns.length - 2);
+  assert.match(byClass(section, "sf-list-head")[0].textContent, /^顶刊列表10 种期刊 · 12 个 ISSN · 默认$/);
+
+  // 移除 Nature: both ISSNs go
+  byClass(rows[0], "sf-remove")[0].dispatch("click");
+  const stored = values.get("flagship.issns");
+  assert.deepEqual(stored.split("\n"), auto.flagship.issns.filter((i) => !["0028-0836", "1476-4687"].includes(i)));
+  rows = byClass(list, "fj-row");
+  assert.equal(rows[0].textContent.startsWith("Science"), true);
+  assert.match(byClass(section, "sf-list-head")[0].textContent, /9 种期刊 · 10 个 ISSN · 已自定义/);
+
+  // Search and 添加
+  const input = byId(root, "sp-flagship-search");
+  input.value = "geology";
+  input.dispatch("input");
+  await clock.advance(400);
+  await flushPromises();
+  const result = byClass(byId(root, "sp-flagship-search-results"), "sb-result")[0];
+  byClass(result, "sb-action")[0].dispatch("click");
+  await flushPromises();
+  assert.deepEqual(values.get("flagship.issns").split("\n").slice(-2), ["0091-7613", "1943-2682"]);
+  assert.equal(byClass(result, "sb-action")[0].textContent, "已添加");
+  rows = byClass(list, "fj-row");
+  assert.equal(rows.at(-1).textContent, "Geology0091-76131943-2682", "the searched name is used, no lookup");
+
+  // Back to the defaults stores a blank value; an unknown ISSN gets its own row; the last row cannot go
+  const [area] = byPref(root, "flagship.issns");
+  area.value = auto.flagship.issns.join("\n");
+  area.dispatch("input");
+  await clock.advance(600);
+  assert.equal(values.get("flagship.issns"), "");
+  area.value = "9999-9999";
+  area.dispatch("input");
+  await flushPromises();
+  await flushPromises();
+  rows = byClass(list, "fj-row");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].textContent, "未识别的期刊9999-9999");
+  assert.equal(byClass(rows[0], "sf-remove")[0].disabled, true);
+  assert.match(byClass(rows[0], "sf-remove")[0].getAttribute("title"), /至少保留一种期刊/);
 });

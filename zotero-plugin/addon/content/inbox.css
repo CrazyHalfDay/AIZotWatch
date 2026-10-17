@@ -226,6 +226,16 @@
   overflow: hidden;
 }
 
+/* Semantic Scholar TLDR of a work without an abstract: one muted line */
+.tldr {
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .summary {
   margin-top: 12px;
   padding: 10px 14px;

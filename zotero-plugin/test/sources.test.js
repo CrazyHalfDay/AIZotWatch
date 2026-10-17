@@ -5,7 +5,16 @@ import { CancelledRequestError, createCancelSignal, getJson, mapWithConcurrency,
 import { fetchArxiv, parseArxivFeed } from "../src/sources/arxiv.js";
 import { fetchCrossref, parseCrossrefItem, resolveJournalIssns } from "../src/sources/crossref.js";
 import { fetchEartharxiv, parseOaiPage } from "../src/sources/eartharxiv.js";
-import { openAlexAbstractsUrl, parseOpenAlexAbstracts, reconstructAbstract } from "../src/sources/openalex.js";
+import { apiUsage, resetApiUsage } from "../src/core/http.js";
+import {
+  checkOpenAlexRow,
+  openAlexAbstractsUrl,
+  openAlexAuth,
+  openAlexUsageText,
+  parseOpenAlexAbstracts,
+  parseOpenAlexRateLimit,
+  reconstructAbstract,
+} from "../src/sources/openalex.js";
 import { pastDaysWindow } from "../src/sources/window.js";
 import { fixture, mockHttp, noSleep } from "./helpers.js";
 
@@ -204,4 +213,68 @@ test("mapWithConcurrency stops handing out work after a failure", async () => {
   );
   await new Promise((r) => setTimeout(r, 60));
   assert.deepEqual(started, [1, 2]);
+});
+
+test("OpenAlex requests carry the API key when one is set", () => {
+  assert.deepEqual(openAlexAuth({ mailto: "me@x.org", apiKey: " k " }), { mailto: "me@x.org", api_key: "k" });
+  assert.deepEqual(openAlexAuth(), { mailto: "", api_key: "" });
+  const url = decodeURIComponent(openAlexAbstractsUrl(["10.1234/a"], "me@example.org", "oa-key"));
+  assert.match(url, /&per-page=200&mailto=me@example.org&api_key=oa-key$/);
+  assert.doesNotMatch(decodeURIComponent(openAlexAbstractsUrl(["10.1234/a"], "", "")), /api_key|mailto/);
+});
+
+test("OpenAlex budget: the /rate-limit body, header-based usage and its text", () => {
+  const usage = parseOpenAlexRateLimit({ rate_limit: { daily_budget_usd: 1, daily_used_usd: 0.25, resets_at: "2026-10-18T00:00:00Z" } }, 42);
+  assert.deepEqual(usage, { remainingUsd: 0.75, limitUsd: 1, remaining: null, limit: null, creditsUsed: null, keyed: true, resetsAt: "2026-10-18T00:00:00Z", at: 42 });
+  assert.equal(openAlexUsageText(usage), "今日剩余 $0.75 / $1.00");
+  assert.equal(openAlexUsageText(usage, { compact: true }), "今日剩余 $0.75");
+  assert.equal(openAlexUsageText({ remaining: 5, limit: 10 }, { compact: true }), "今日剩余 5 次额度");
+  assert.equal(openAlexUsageText({ remainingUsd: 0.004 }), "今日剩余 $0.004");
+  assert.equal(openAlexUsageText({ remaining: 99990, limit: 100000 }), "今日剩余 99,990 / 100,000 次额度");
+  assert.equal(openAlexUsageText({ remaining: 7 }), "今日剩余 7 次额度");
+  assert.equal(openAlexUsageText(null), "");
+  assert.equal(openAlexUsageText({}), "");
+  for (const body of [null, "x", [], {}, { rate_limit: "x" }, { rate_limit: { daily_budget_usd: "lots" } }]) {
+    assert.equal(parseOpenAlexRateLimit(body), null, JSON.stringify(body));
+  }
+});
+
+test("the OpenAlex check reads the budget with a key and reports keyless access as a notice", async () => {
+  resetApiUsage();
+  const answers = { rateLimit: { status: 200, data: { rate_limit: { daily_budget_usd: 1, daily_remaining_usd: 0.9 } } }, works: { status: 200, data: { results: [] } } };
+  const http = mockHttp([
+    ["https://api.openalex.org/rate-limit", () => answers.rateLimit],
+    ["https://api.openalex.org/works", () => answers.works],
+  ]);
+  assert.deepEqual(await checkOpenAlexRow(http, { apiKey: "k", now: 7 }), { key: "openalex", name: "OpenAlex", ok: true, detail: "Key 有效，今日剩余 $0.90 / $1.00" });
+  assert.equal(http.calls[0].url, "https://api.openalex.org/rate-limit?api_key=k");
+  assert.equal(apiUsage.openalex.remainingUsd, 0.9);
+  assert.equal(apiUsage.openalex.at, 7);
+
+  answers.rateLimit = { status: 401, data: {} };
+  assert.deepEqual(await checkOpenAlexRow(http, { apiKey: "bad" }), { key: "openalex", name: "OpenAlex", ok: false, detail: "Key 无效（HTTP 401）" });
+  // No /rate-limit endpoint: a one-record query decides
+  answers.rateLimit = { status: 404, data: {} };
+  http.calls.length = 0;
+  const fallback = await checkOpenAlexRow(http, { apiKey: "k", mailto: "me@x.org" });
+  assert.equal(fallback.ok, true);
+  assert.match(decodeURIComponent(http.calls[1].url), /^https:\/\/api\.openalex\.org\/works\?per-page=1&select=id&mailto=me@x\.org&api_key=k$/);
+  answers.works = { status: 403, data: {} };
+  assert.equal((await checkOpenAlexRow(http, { apiKey: "k" })).detail, "Key 无效（HTTP 403）");
+  answers.rateLimit = { status: 429, data: {} };
+  assert.match((await checkOpenAlexRow(http, { apiKey: "k" })).detail, /HTTP 429/);
+
+  // Keyless: reachable is only a notice (ok null); a used-up budget says what to do
+  answers.works = { status: 200, data: { results: [] } };
+  http.calls.length = 0;
+  assert.deepEqual(await checkOpenAlexRow(http, {}), { key: "openalex", name: "OpenAlex", ok: null, detail: "可访问，但未配置 API Key（每日免费额度很小）" });
+  assert.equal(http.calls.length, 1);
+  assert.doesNotMatch(http.calls[0].url, /rate-limit|api_key/);
+  answers.works = { status: 429, data: {} };
+  assert.match((await checkOpenAlexRow(http, {})).detail, /请填写 API Key/);
+  answers.works = { status: 503, data: {} };
+  assert.equal((await checkOpenAlexRow(http, {})).detail, "HTTP 503");
+  const offline = { request: async () => { throw new Error("网络连接失败：api.openalex.org"); } };
+  assert.equal((await checkOpenAlexRow(offline, { apiKey: "k" })).detail, "网络连接失败：api.openalex.org");
+  resetApiUsage();
 });

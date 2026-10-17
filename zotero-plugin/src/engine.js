@@ -8,24 +8,24 @@
 import { dedupeAgainstLibrary } from "./core/dedupe.js";
 import { excludeByKeywords, filterRecent, filterWithoutAbstract, includeByKeywords, limitPreprints } from "./core/filters.js";
 import { lexicalGray, newestFirst, partitionByAnchors, splitFlagship } from "./core/flagship.js";
-import { libraryVenues, parseWhitelist, venueKey } from "./core/journals.js";
+import { libraryVenues, parseWhitelist } from "./core/journals.js";
 import { ProfileRanker, buildClusters, computeTemporalWeights } from "./core/scoring.js";
 import { contentForEmbedding, hashString, normalizeDoi, normalizeIssn } from "./core/text.js";
 import { labelStoreOf, matchStoredEntries, sameLabelStore, storedLabelEntries, topKeywords, topicsOf } from "./core/topics.js";
 import { attachFollowed, countByTrack, selectSummaryTargets, trackOf, unionNames } from "./core/tracks.js";
 import { Matrix, toFloat32 } from "./core/vector.js";
 import { createEmbedder } from "./embedding/providers.js";
+import { resolveVenueIssns } from "./journal-proposals.js";
 import { createLlmClient, judgeRelevance, labelClusters, summarizePaper, translateTitles } from "./llm/llm.js";
 import { enrichMissingAbstracts } from "./sources/abstracts.js";
 import { fetchArxiv } from "./sources/arxiv.js";
-import { fetchCrossref, resolveJournalIssns } from "./sources/crossref.js";
+import { fetchCrossref } from "./sources/crossref.js";
 import { fetchEartharxiv } from "./sources/eartharxiv.js";
 import { fetchFollowedWorks } from "./sources/followed.js";
 import { loadVectorStore, saveVectorStore } from "./store.js";
 
 const DAY = 86400000;
 const CANDIDATE_CACHE_TTL = 30 * DAY;
-const JOURNAL_CACHE_TTL = 90 * DAY;
 const MIN_ABSTRACT_ITEMS = 10;
 const INBOX_FILE = "inbox.json";
 // Ids of followed-author works already fetched once: {version, seen: {id: lastSeenMs}}
@@ -38,6 +38,10 @@ const FOLLOWED_SEEN_GRACE_DAYS = 60;
 const TOPIC_LABELS_FILE = "cluster-labels.json";
 // Finished runs kept in inbox.history for the dashboard (newest last)
 export const HISTORY_LIMIT = 30;
+// Non-fatal error of a followed-authors fetch cut to its first page (no OpenAlex key)
+export const FOLLOWED_KEYLESS_MESSAGE = "未配置 OpenAlex API Key：只获取了第一页结果，请在设置 → 学术数据接口中填写";
+/** `code` of run errors caused by a missing OpenAlex key (the request itself worked). */
+export const OPENALEX_KEYLESS = "openalex-keyless";
 // Added / dismissed works are remembered at least this long (so they are not recommended again)
 export const HANDLED_MIN_DAYS = 60;
 // One write queue per storage backend, shared by all engine instances
@@ -55,12 +59,13 @@ export class CancelledError extends Error {
  * `label` is must_read | consider | ignore for personal recommendations, or the
  * track label "flagship" / "followed" (see core/tracks.js); `followedAuthors`
  * names the followed authors of a work of any track, `topic` its research
- * direction and `gate` the flagship gate details ({pos, neg, judged}).
+ * direction, `gate` the flagship gate details ({pos, neg, judged}) and `tldr`
+ * Semantic Scholar's one-sentence summary (abstract fallback).
  */
 const WORK_FIELDS = [
   "id", "source", "title", "abstract", "authors", "doi", "url", "published", "venue", "issns", "type",
   "citations", "arxivId", "score", "similarity", "micro", "macro", "ifScore", "impactFactor", "label",
-  "followedAuthors", "topic", "gate",
+  "followedAuthors", "topic", "gate", "tldr",
 ];
 
 function pick(work) {
@@ -245,30 +250,9 @@ export class ZotWatchEngine {
       venues = libraryVenues(items)
         .filter((v) => v.count >= cfg.autoMinItems)
         .slice(0, cfg.autoTopN);
-      const cache = (await this.storage.readJSON("journals-cache.json").catch(() => null)) || { titles: {} };
-      let dirty = false;
-      for (const v of venues) {
-        let found = v.issns;
-        if (!found.length) {
-          const key = venueKey(v.title);
-          const hit = cache.titles[key];
-          if (hit && this.now() - hit.at < JOURNAL_CACHE_TTL) {
-            found = hit.issns;
-          } else {
-            try {
-              found = await resolveJournalIssns(this.http, v.title, { mailto: this.settings.sources.crossref.mailto, retry: this.retry });
-              cache.titles[key] = { issns: found, at: this.now() };
-              dirty = true;
-            } catch (e) {
-              if (e?.cancelled) throw e;
-              this.log(`Journal lookup failed for "${v.title}": ${e.message}`);
-            }
-          }
-        }
-        v.issns = found;
-        found.forEach((issn) => issns.add(issn));
-      }
-      if (dirty) await this.storage.writeJSON("journals-cache.json", cache);
+      // Venues without ISSNs: Crossref title lookups through the shared title cache
+      await resolveVenueIssns(this.http, this.storage, venues, { mailto: this.settings.sources.crossref.mailto, retry: this.retry, now: this.now, log: this.log });
+      for (const v of venues) v.issns.forEach((issn) => issns.add(issn));
     }
     return { journals, issns: [...issns], venues };
   }
@@ -323,7 +307,11 @@ export class ZotWatchEngine {
     return { works, errors, perSource };
   }
 
-  /** Recent works of the followed authors; null (with a non-fatal error) when the fetch failed. */
+  /**
+   * Recent works of the followed authors; null (with a non-fatal error) when
+   * the fetch failed. Without an OpenAlex key only the first page of results
+   * is read, which is reported as a non-fatal error when results were left out.
+   */
   async fetchFollowed(errors) {
     const cfg = this.settings.followed;
     try {
@@ -331,9 +319,11 @@ export class ZotWatchEngine {
         authors: cfg.authors,
         daysBack: cfg.daysBack,
         mailto: this.settings.sources.crossref.mailto,
+        apiKey: this.settings.apis?.openalexKey || "",
         now: this.now(),
         retry: this.retry,
         log: this.log,
+        onTruncated: () => errors.push({ stage: "followed", source: "OpenAlex", code: OPENALEX_KEYLESS, message: FOLLOWED_KEYLESS_MESSAGE }),
       });
     } catch (e) {
       if (e?.cancelled) throw e;
@@ -345,14 +335,16 @@ export class ZotWatchEngine {
 
   /**
    * Fill in missing abstracts of this run's works (all tracks) in one pass:
-   * Crossref -> Elsevier -> Springer Nature -> OpenAlex, with a persistent
-   * cache (see sources/abstracts.js). Best effort: provider problems become
-   * non-fatal errors, only cancellation propagates.
+   * Crossref -> Elsevier -> Springer Nature -> OpenAlex -> Semantic Scholar
+   * (with its key), with a persistent cache (see sources/abstracts.js). Best
+   * effort: provider problems become non-fatal errors, only cancellation propagates.
    * @returns {Promise<object|null>} counts, or null when skipped (every tier off, or nothing to look up)
    */
   async enrichAbstracts(works, { progress, errors, checkpoint }) {
-    const cfg = this.settings.abstracts || { crossref: false, openalex: this.settings.sources.openalexAbstracts, elsevierKey: "", springerKey: "" };
-    if (!cfg.crossref && !cfg.openalex && !cfg.elsevierKey && !cfg.springerKey) return null;
+    const base = this.settings.abstracts || { crossref: false, openalex: this.settings.sources.openalexAbstracts, elsevierKey: "", springerKey: "" };
+    const apis = this.settings.apis || {};
+    const cfg = { ...base, openalexKey: apis.openalexKey || "", s2Key: apis.semanticScholarKey || "" };
+    if (!cfg.crossref && !cfg.openalex && !cfg.elsevierKey && !cfg.springerKey && !cfg.s2Key) return null;
     const targets = works.filter((w) => !(typeof w.abstract === "string" ? w.abstract.trim() : w.abstract) && normalizeDoi(w.doi));
     if (!targets.length) return null;
 
