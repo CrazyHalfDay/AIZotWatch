@@ -14,8 +14,9 @@ import vm from "node:vm";
 
 import { parseXml } from "../src/core/xml.js";
 import { DEFAULT_RATE_LIMITS } from "../src/core/ratelimit.js";
-import { apiStatus, apiStatusLine, connectionLine, nextRunAt, normalizePage, rateLimitsFromPref } from "../src/zotero/addon.js";
+import { apiStatus, apiStatusLine, connectionLine, nextRunAt, normalizePage, plainSurveyMenuLabel, rateLimitsFromPref, surveySeedKeys } from "../src/zotero/addon.js";
 import { PREFS_0_2_0, embeddingHandler, mockHttp } from "./helpers.js";
+import { FULL_TEXT, SURVEY_INPUT, libraryItems as surveyLibraryData, llmHandler, surveyHttp } from "./survey-fixtures.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Values created inside the VM have foreign prototypes; compare them structurally
@@ -78,13 +79,24 @@ function fakeWindow() {
   const popup = fakeElement(doc, "menupopup");
   popup.id = "menu_ToolsPopup";
   doc.elements.set(popup.id, popup);
+  // The item tree's context menu (Zotero's own entries are not modelled)
+  const itemMenu = fakeElement(doc, "menupopup");
+  itemMenu.id = "zotero-itemmenu";
+  doc.elements.set(itemMenu.id, itemMenu);
   const opened = [];
   const listeners = {};
   return {
     document: doc,
-    ZoteroPane: { async selectItem(id) {
-      this.selected = id;
-    } },
+    ZoteroPane: {
+      async selectItem(id) {
+        this.selected = id;
+      },
+      // Items selected in the item tree (set by tests)
+      selection: [],
+      getSelectedItems() {
+        return this.selection;
+      },
+    },
     opened,
     MozXULElement: {
       insertFTLIfNeeded(href) {
@@ -154,6 +166,15 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     setNote(html) {
       this.note = html;
     }
+    getCollections() {
+      return this.collections;
+    }
+    isNote() {
+      return this.itemType === "note";
+    }
+    isRegularItem() {
+      return this.itemType !== "note" && this.itemType !== "attachment";
+    }
     async saveTx() {
       this.id ||= nextId++;
       this.key ||= `KEY${this.id}`;
@@ -170,9 +191,53 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     async saveTx() {
       await new Promise((r) => setTimeout(r, 5));
       this.id = nextId++;
+      this.key = `COLL${this.id}`;
       collections.push(this);
     }
   }
+
+  // Library items keep their id and collections across getAll() calls (keyed by their data)
+  const itemStates = new WeakMap();
+  let nextLibraryId = 5000;
+  const stateOf = (data) => {
+    if (!itemStates.has(data)) itemStates.set(data, { id: data.id ?? nextLibraryId++, collections: [], saves: 0 });
+    return itemStates.get(data);
+  };
+  function fakeLibraryItem(data) {
+    const state = stateOf(data);
+    return {
+      ...data,
+      id: state.id,
+      libraryID: data.libraryID ?? 1,
+      deleted: false,
+      // Items without tags lack getTags(): the library adapter must tolerate it
+      ...(data.tags ? { getTags: () => data.tags.map((tag) => ({ tag, type: 0 })) } : {}),
+      // Survey items carry creators and attachments
+      ...(data.creators ? { getCreators: () => data.creators } : {}),
+      ...(data.attachments ? { getAttachments: () => data.attachments.map((a) => a.id) } : {}),
+      isRegularItem: () => data.itemType !== "note",
+      isNote: () => data.itemType === "note",
+      getField(name, unformatted, baseMapped) {
+        if (name === "publicationTitle" || name === "title") assert.equal(baseMapped, true);
+        return { title: data.title, abstractNote: data.abstract, DOI: data.doi, ISSN: data.issn, publicationTitle: data.venue, extra: data.extra || "", date: data.date || "" }[name] ?? "";
+      },
+      addToCollection(id) {
+        state.collections.push(id);
+      },
+      getCollections: () => state.collections,
+      async saveTx() {
+        state.saves++;
+        return state.id;
+      },
+    };
+  }
+  const findItem = (test) => {
+    for (const data of items) {
+      if (test(data, stateOf(data))) return fakeLibraryItem(data);
+      for (const a of data.attachments || []) if (test(a, a)) return a;
+    }
+    return savedItems.find((i) => test(i, i)) || null;
+  };
 
   class CancelledException extends Error {}
   class SecurityException extends Error {}
@@ -235,18 +300,16 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
       async getAll(libraryID, onlyTopLevel) {
         assert.equal(libraryID, 1);
         assert.equal(onlyTopLevel, true);
-        return items.map((data) => ({
-          ...data,
-          // Items without tags lack getTags(): the library adapter must tolerate it
-          ...(data.tags ? { getTags: () => data.tags.map((tag) => ({ tag, type: 0 })) } : {}),
-          isRegularItem: () => data.itemType !== "note",
-          getField(name, unformatted, baseMapped) {
-            if (name === "publicationTitle" || name === "title") assert.equal(baseMapped, true);
-            return { title: data.title, abstractNote: data.abstract, DOI: data.doi, ISSN: data.issn, publicationTitle: data.venue, extra: data.extra || "" }[name] ?? "";
-          },
-        }));
+        return items.map(fakeLibraryItem);
       },
       async loadDataTypes() {},
+      async getByLibraryAndKeyAsync(libraryID, key) {
+        return findItem((x) => x.key === key && (x.libraryID ?? 1) === libraryID) || false;
+      },
+      get(ids) {
+        const one = (id) => findItem((x, state) => (state.id ?? x.id) === id) || false;
+        return Array.isArray(ids) ? ids.map(one).filter(Boolean) : one(ids);
+      },
     },
     ItemTypes: { getID: (t) => (t === "preprint" ? 31 : 1) },
     Item: FakeItem,
@@ -304,7 +367,7 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     Zotero.MenuManager = {
       registerMenu(options) {
         menus.registered.push(options);
-        return "menu-key-1";
+        return `menu-key-${menus.registered.length}`;
       },
       unregisterMenu(key) {
         menus.unregistered.push(key);
@@ -537,12 +600,18 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   assert.match(addon.getJournalWhitelist(), /0016-7037/);
 
   // Menus go through MenuManager; nothing is injected into the DOM
-  assert.equal(menus.registered.length, 1);
+  assert.equal(menus.registered.length, 2);
   const menuOptions = menus.registered[0];
   assert.equal(menuOptions.target, "main/menubar/tools");
   assert.equal(menuOptions.pluginID, PLUGIN_ID);
   assert.deepEqual(plain(menuOptions.menus.map((m) => m.l10nID || m.menuType)), ["separator", "zotwatch-menu-open", "zotwatch-menu-run"]);
   assert.equal(mainWindow.document.getElementById("menu_ToolsPopup").children.length, 0);
+  // The item context menu entry 「用 ZotWatch 调研相关文献…」 (one menu item: grouped targets allow no separator)
+  const itemMenu = menus.registered[1];
+  assert.equal(itemMenu.target, "main/library/item");
+  assert.equal(itemMenu.pluginID, PLUGIN_ID);
+  assert.deepEqual(plain(itemMenu.menus.map((m) => [m.menuType, m.l10nID])), [["menuitem", "zotwatch-menu-survey"]]);
+  assert.equal(mainWindow.document.getElementById("zotero-itemmenu").children.length, 0);
   assert.ok(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), "Fluent file inserted");
 
   // Opening twice focuses the existing window, which switches to the requested page
@@ -559,6 +628,24 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   addon.openWindow("settings/ai");
   addon.openWindow("settings/<script>");
   assert.deepEqual(plain(mainWindow.opened[0].routes), ["inbox", "settings/ai", "settings"]);
+
+  // The item context menu shows for regular items of the profile library and opens 调研 with them as seeds
+  const all = await Zotero.Items.getAll(1, true);
+  const note = all.find((i) => i.itemType === "note");
+  const shown = [];
+  const menuContext = (items) => ({ items, setVisible: (on) => shown.push(on) });
+  for (const items of [[], [note], undefined, [{ ...all[2], libraryID: 7 }], [all[0]]]) itemMenu.menus[0].onShowing({}, menuContext(items));
+  assert.deepEqual(shown, [false, false, false, false, true]);
+  // A child attachment stands for its parent; duplicates, notes and items of other libraries are left out
+  const attachment = { key: "ATT1", itemType: "attachment", libraryID: 1, isRegularItem: () => false, parentItemID: all[1].id };
+  const draft = await itemMenu.menus[0].onCommand({}, menuContext([all[0], attachment, note, { ...all[2], libraryID: 7 }, all[0]]));
+  assert.deepEqual(plain(draft.seeds.map((s) => s.key)), ["C0", "C1"]);
+  assert.equal(draft.topic, "Copper isotope fractionation in porphyry systems 0");
+  assert.equal(mainWindow.opened.length, 1, "the open window switches to 调研");
+  assert.equal(mainWindow.opened[0].routes.at(-1), "survey");
+  assert.deepEqual(plain(addon.takeSurveyDraft()), plain(draft));
+  assert.equal(await itemMenu.menus[0].onCommand({}, menuContext([note])), null, "nothing to survey");
+  assert.equal(mainWindow.opened[0].routes.at(-1), "survey");
   assert.equal(mainWindow.opened.length, 1);
   // Without a page: the page last shown in this session (reported by the window)
   addon.lastPage = "settings/journals";
@@ -868,7 +955,7 @@ test("Zotero 10: lifecycle with MenuManager, run, add, cancel and shutdown", asy
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(await pending, null);
   assert.deepEqual(settledWith, [{ addon: true, chrome: true }], "run settled before teardown");
-  assert.deepEqual(plain(menus.unregistered), ["menu-key-1"]);
+  assert.deepEqual(plain(menus.unregistered), ["menu-key-1", "menu-key-2"]);
   assert.equal(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
   assert.equal(Zotero.ZotWatch, undefined);
   assert.equal(env.timers.size, 0);
@@ -904,9 +991,27 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
   assert.equal(menu.children[2].attributes.label, "ZotWatch：立即检查新文献");
   assert.equal(mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null, "no Fluent file in the main window");
 
+  // The item context menu gets 「用 ZotWatch 调研相关文献…」 after Zotero's own entries
+  const itemMenu = mainWindow.document.getElementById("zotero-itemmenu");
+  assert.deepEqual(itemMenu.children.map((c) => c.id), ["zotwatch-itemmenu-separator", "zotwatch-itemmenu-survey"]);
+  assert.equal(itemMenu.children[1].attributes.label, "用 ZotWatch 调研相关文献…");
+  const libraryNow = await Zotero.Items.getAll(1, true);
+  mainWindow.ZoteroPane.selection = [libraryNow.find((i) => i.itemType === "note")];
+  itemMenu.dispatch("popupshowing");
+  assert.deepEqual(itemMenu.children.map((c) => c.hidden), [true, true], "hidden without a regular item");
+  mainWindow.ZoteroPane.selection = [libraryNow[3], libraryNow[5]];
+  itemMenu.dispatch("popupshowing");
+  assert.deepEqual(itemMenu.children.map((c) => c.hidden), [false, false]);
+  itemMenu.children[1].dispatch("command");
+  for (let i = 0; i < 50 && !addon.surveyDraft; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(addon.lastPage, "survey");
+  assert.equal(mainWindow.opened.at(-1).url, "chrome://zotwatch/content/main.xhtml");
+  assert.deepEqual(plain(addon.takeSurveyDraft().seeds.map((s) => s.key)), ["C3", "C5"]);
+
   // A second main window load must not duplicate menu items
   vm.runInContext("onMainWindowLoad({ window: __win })", Object.assign(env.context, { __win: mainWindow }));
   assert.equal(menu.children.length, 3);
+  assert.equal(itemMenu.children.length, 2);
 
   // A failed run is reported to the main window (banner, sidebar) until the next run starts
   env.prefs.set("extensions.zotwatch.embedding.provider", "dashscope");
@@ -943,6 +1048,7 @@ test("Zotero 7: DOM menus and a deferred sticky notification", async (t) => {
 
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(menu.children.length, 0);
+  assert.equal(itemMenu.children.length, 0, "the item menu entry is removed on shutdown");
   assert.deepEqual(Zotero.errors.map(String), []);
 });
 
@@ -955,9 +1061,12 @@ test("Zotero 8: MenuManager is skipped so the main window keeps its locale", asy
   assert.equal(env.menus.registered.length, 0);
   const menu = env.mainWindow.document.getElementById("menu_ToolsPopup");
   assert.equal(menu.children.length, 3);
+  const itemMenu = env.mainWindow.document.getElementById("zotero-itemmenu");
+  assert.equal(itemMenu.children.length, 2, "the item menu entry is a DOM item too");
   assert.equal(env.mainWindow.document.querySelector('link[href="zotwatch-mainWindow.ftl"]'), null);
   await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
   assert.equal(menu.children.length, 0);
+  assert.equal(itemMenu.children.length, 0);
 });
 
 test("Zotero 10: followed authors reach the inbox, the notice, the status and the library", async (t) => {
@@ -1279,6 +1388,262 @@ test("Zotero 10: research directions are labeled from library titles and tags", 
   assert.deepEqual(env.Zotero.errors.map(String), []);
 });
 
+/** Wait until the running survey is in `stage` (its live progress), at most 20 s. */
+async function untilStage(addon, id, stage) {
+  const until = Date.now() + 20000;
+  for (;;) {
+    const entry = (await addon.listSurveys()).find((e) => e.id === id);
+    if (entry?.progress?.stage === stage) return;
+    if (Date.now() > until) throw new Error(`survey ${id} never reached ${stage} (${JSON.stringify(entry)})`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+/** Library of the survey test: the fixtures' items with dates, creators and attachments. */
+function surveyLibrary() {
+  const attachment = (id, key, parentItemID, contentType, { text = null, error = null, legacy = false } = {}) => {
+    const a = { id, key, parentItemID, libraryID: 1, itemType: "attachment", attachmentContentType: contentType, isRegularItem: () => false, isAttachment: () => true };
+    // Zotero 6 attachments have no attachmentText
+    if (!legacy) Object.defineProperty(a, "attachmentText", { get: () => (error ? Promise.reject(error) : Promise.resolve(text)) });
+    return a;
+  };
+  const [seed1, seed2, lib3, lib4] = surveyLibraryData();
+  const creators = [{ firstName: "Li", lastName: "Wang", fieldMode: 0 }, { firstName: "", lastName: "ZotWatch Group", fieldMode: 1 }];
+  return [
+    { ...seed1, id: 501, date: "2019-05-00 May 2019", creators, attachments: [attachment(9002, "ATTHTML", 501, "text/html", { text: "snapshot text" }), attachment(9001, "ATTPDF", 501, "application/pdf", { text: FULL_TEXT })] },
+    { ...seed2, id: 502, date: "2020-00-00 2020", creators: creators.slice(0, 1), attachments: [attachment(9003, "ATTOLD", 502, "application/pdf", { legacy: true })] },
+    { ...lib3, id: 503, date: "2012", attachments: [attachment(9004, "ATTBAD", 503, "application/pdf", { error: new Error("not indexed") })] },
+    { ...lib4, id: 504 },
+    { id: 505, key: "N1", itemType: "note", title: "a note" },
+  ];
+}
+
+test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const llm = {};
+  let gate = null;
+  const surveyRoutes = surveyHttp({}, {
+    llm: (req) => {
+      const handler = llmHandler(llm);
+      // A gate holds the query prompt every survey sends (reading notes may come from the cache)
+      return gate && JSON.parse(req.body).messages[0].content.includes("设计检索式") ? gate.then(() => handler(req)) : handler(req);
+    },
+  });
+  const items = surveyLibrary();
+  const env = createEnvironment({ dataDir, items, http: surveyRoutes, zoteroVersion: 10 });
+  t.after(env.cleanup);
+  const { Zotero, mainWindow, prefs } = env;
+  // The services are mocked: no pacing (the limiter has its own tests)
+  prefs.set("extensions.zotwatch.http.rateLimits", JSON.stringify({ "api.semanticscholar.org": null, "api.openalex.org": null, "api.crossref.org": null }));
+  const addon = await boot(env);
+  for (const [k, v] of Object.entries({
+    "embedding.provider": "dashscope",
+    "embedding.apiKey": "sk-test",
+    "llm.enabled": true,
+    "llm.apiKey": "sk-llm",
+    "llm.baseURL": "https://llm.example/v1",
+    "llm.model": "test-model",
+    "apis.openalexKey": "oa-key",
+    "apis.semanticScholarKey": "s2-key",
+  })) prefs.set(`extensions.zotwatch.${k}`, v);
+
+  // --- seed picker: library search (title words, creator, year, DOI) and the Zotero selection
+  assert.deepEqual(plain((await addon.searchLibrary("copper porphyry")).map((i) => i.key)), ["SEED1"]);
+  const hit = (await addon.searchLibrary("Copper"))[0];
+  assert.deepEqual(plain(hit), {
+    key: "SEED1",
+    title: "Copper isotope fractionation in porphyry copper deposits",
+    year: 2019,
+    creators: ["Li Wang", "ZotWatch Group"],
+    doi: "10.1000/seed1",
+    itemType: "journalArticle",
+  });
+  assert.deepEqual(plain((await addon.searchLibrary("wang 2020")).map((i) => i.key)), ["SEED2"]);
+  assert.deepEqual(plain((await addon.searchLibrary("https://doi.org/10.1000/LIB3")).map((i) => i.key)), ["LIB3"]);
+  assert.deepEqual(plain(await addon.searchLibrary("  ")), []);
+  assert.deepEqual(plain(await addon.searchLibrary("a note")), [], "notes are not seeds");
+  assert.equal((await addon.searchLibrary("isotope", { limit: 1 })).length, 1);
+  mainWindow.ZoteroPane.selection = [
+    Zotero.Items.get(501),
+    Zotero.Items.get(9003), // an attachment stands for its parent (SEED2)
+    Zotero.Items.get(502),
+    Zotero.Items.get(505), // a note without parent
+    { ...Zotero.Items.get(504), libraryID: 7 }, // another library
+  ];
+  assert.deepEqual(plain(addon.getSelectedItems().map((i) => [i.key, i.year, i.tags])), [
+    ["SEED1", 2019, ["Copper isotopes", "Porphyry"]],
+    ["SEED2", 2020, ["Sulfur"]],
+  ]);
+
+  // --- full text: the PDF is preferred; a missing attachmentText or a failing one gives ""
+  const library = addon.createSurveyLibrary();
+  assert.equal(await library.getItemFullText("SEED1", { maxChars: 30 }), FULL_TEXT.slice(0, 30));
+  assert.equal(await library.getItemFullText("SEED2", { maxChars: 30 }), "");
+  assert.equal(await library.getItemFullText("LIB3", { maxChars: 30 }), "");
+  assert.equal(await library.getItemFullText("LIB4", { maxChars: 30 }), "");
+  assert.equal(await library.getItemFullText("NOPE", { maxChars: 30 }), "");
+  assert.deepEqual(plain((await library.getItemsByKeys(["SEED2", "NOPE", "N1"])).map((i) => i.key)), ["SEED2"]);
+
+  // --- options, estimates, validation
+  const options = addon.getSurveyOptions();
+  assert.equal(options.llm, true);
+  assert.equal(options.semanticScholarKey, true);
+  assert.deepEqual(plain(options.stages.map((s) => s.label)), ["种子", "检索词", "扩展", "去重", "排序", "补全", "精读", "主题", "综述"]);
+  assert.deepEqual(plain(options.depths.map((d) => [d.key, d.label, d.pool, d.deepRead])), [["quick", "快速", 150, 15], ["standard", "标准", 400, 40], ["deep", "深度", 1000, 80]]);
+  assert.match(options.depths[0].estimate.text, /^约 \d+ 次 AI 调用/);
+  assert.equal(options.running, null);
+  assert.equal(addon.surveyEstimate("deep", { seeds: 5 }).deepRead, 80);
+  await assert.rejects(addon.startSurvey({ topic: "", keywords: "x" }), /请填写调研主题/);
+  await assert.rejects(addon.startSurvey({ topic: "T" }), /至少填写一个关键词/);
+
+  // --- a survey runs in the background and reports through events
+  const events = [];
+  addon.addListener((e) => e.type === "survey" && events.push(e));
+  const { id } = await addon.startSurvey({ ...SURVEY_INPUT, seedKeys: ["SEED1", "SEED2"] });
+  assert.ok(id);
+  await assert.rejects(addon.startSurvey(SURVEY_INPUT), /已有一项调研正在进行/);
+  assert.equal((await addon.listSurveys())[0].status, "running");
+  assert.equal(addon.getSurveyOptions().running.id, id);
+  const finished = await addon.waitForSurvey(id);
+  assert.equal(finished.status, "done");
+  assert.equal(addon.waitForSurvey(), null);
+  assert.deepEqual(plain([...new Set(events.map((e) => e.action))]), ["start", "progress", "done"]);
+  assert.ok(events.every((e) => e.id === id));
+  assert.equal(events.at(-1).status, "done");
+  assert.ok(events.some((e) => e.progress?.stage === "read" && e.progress.total > 0));
+  // The window was closed: a notice says the survey is done
+  assert.match(Zotero.notifications.at(-1).text, /主题调研「Copper isotopes in porphyry systems」已完成/);
+  assert.ok(Zotero.HTTP.requests.every((r) => r.options.anon === true));
+  assert.ok(llm.read > 0, "the LLM read papers");
+  assert.ok(llm.prompts.some((p) => p.kind === "read" && p.prompt.includes("全文节选")), "the seed's PDF text was read");
+
+  const [entry] = await addon.listSurveys();
+  assert.equal(entry.id, id);
+  assert.equal(entry.status, "done");
+  assert.equal(entry.topic, SURVEY_INPUT.topic);
+  assert.equal(entry.interrupted, false);
+  const survey = await addon.getSurvey(id);
+  assert.equal(survey.running, false);
+  assert.equal(survey.report.kind, "review");
+  assert.ok(survey.references.length > 3);
+  assert.equal(await addon.getSurvey("zzzzzz99"), null);
+  assert.ok(existsSync(join(dataDir, "zotwatch", `survey-${id}.json`)));
+  assert.ok(existsSync(join(dataDir, "zotwatch", "surveys.json")));
+
+  // --- save to Zotero: a collection with the note, cited library papers linked, the others imported
+  const saveEvents = events.length;
+  const saved = await addon.saveSurveyToZotero(id, { addPapers: "cited" });
+  const collection = env.collections.find((c) => c.name === "ZotWatch 调研 · Copper isotopes in porphyry systems");
+  assert.ok(collection, "the survey collection");
+  assert.equal(saved.collectionName, collection.name);
+  const note = env.savedItems.find((i) => i.itemType === "note");
+  assert.equal(saved.noteKey, note.key);
+  assert.deepEqual(plain(note.collections), [collection.id]);
+  assert.match(note.note, /^<h1>斑岩铜矿中的铜同位素研究综述<\/h1>/);
+  assert.match(note.note, /本综述由 AI 根据所列文献/);
+  assert.match(note.note, /<a href="https:\/\/doi\.org\/10\.1000\/seed1">doi:10\.1000\/seed1<\/a> （已在文库）/);
+  assert.ok(saved.total > 0 && saved.total === saved.linked + saved.imported + saved.failed + saved.skipped);
+  assert.equal(saved.failed, 0);
+  assert.ok(saved.linked >= 1, "the cited seed is linked, not imported");
+  const seedItem = Zotero.Items.get(501);
+  assert.deepEqual(plain(seedItem.getCollections()), [collection.id]);
+  const imported = env.savedItems.filter((i) => i.itemType !== "note");
+  assert.equal(imported.length, saved.imported);
+  assert.ok(imported.every((i) => i.collections.includes(collection.id) && i.tags.includes("ZotWatch")));
+  assert.ok(events.slice(saveEvents).some((e) => e.action === "save-progress"));
+  assert.equal(events.at(-1).action, "saved");
+  const afterSave = await addon.getSurvey(id);
+  const importedRef = afterSave.references.find((r) => r.itemKey === imported[0].key);
+  assert.equal(importedRef.inLibrary, true);
+  // One paper at a time (the result list's 加入 Zotero); quick clicks on two papers both stick
+  const uncited = afterSave.references.filter((r) => !r.inLibrary).slice(0, 2);
+  assert.equal(uncited.length, 2, "references the review does not cite stay outside the library");
+  const [added, added2] = await Promise.all(uncited.map((r) => addon.addSurveyPaper(id, r.id)));
+  assert.equal(added.existing, false);
+  assert.equal(env.savedItems.find((i) => i.key === added.itemKey).collections[0], collection.id);
+  const refsNow = (await addon.getSurvey(id)).references;
+  assert.deepEqual(plain(uncited.map((r) => refsNow.find((x) => x.id === r.id).itemKey)), [added.itemKey, added2.itemKey]);
+  assert.deepEqual(plain(await addon.addSurveyPaper(id, uncited[0].id)), { itemID: added.itemID, itemKey: added.itemKey, existing: true });
+  // Saving again updates the same note and links the papers imported the first time
+  const saving = addon.saveSurveyToZotero(id, { addPapers: "read" });
+  await assert.rejects(addon.saveSurveyToZotero(id), /正在保存这项调研/);
+  const again = await saving;
+  assert.equal(env.savedItems.filter((i) => i.itemType === "note").length, 1);
+  assert.equal(again.noteKey, saved.noteKey);
+  assert.deepEqual(plain(note.collections), [collection.id], "no duplicate collection entry");
+  assert.ok(again.linked >= saved.linked + saved.imported + 2);
+  assert.equal(env.collections.filter((c) => c.name === collection.name).length, 1);
+
+  await assert.rejects(addon.addSurveyPaper(id, "doi:10.0000/none"), /不在调研结果中/);
+  assert.equal(await addon.showItemByKey("SEED1"), true);
+  assert.equal(mainWindow.ZoteroPane.selected, 501);
+  assert.equal(await addon.showItemByKey("GONE"), false);
+
+  // --- Markdown export (returned, and written when a path is given)
+  const mdPath = join(dataDir, "export.md");
+  const md = await addon.exportSurveyMarkdown(id, mdPath);
+  assert.match(md.filename, /^ZotWatch 调研 - Copper isotopes in porphyry systems - \d{4}-\d{2}-\d{2}\.md$/);
+  assert.equal(readFileSync(mdPath, "utf8"), md.text);
+  assert.match(md.text, /^# 斑岩铜矿中的铜同位素研究综述\n/);
+
+  // --- regenerate the review (stage 9 only)
+  const reads = llm.read;
+  assert.deepEqual(plain(await addon.regenerateReport(id)), { id, from: "write" });
+  await addon.waitForSurvey(id);
+  assert.equal(llm.read, reads, "nothing is read again");
+  assert.equal((await addon.getSurvey(id)).status, "done");
+  await assert.rejects(addon.resumeSurvey(id), /已经完成/);
+
+  // --- cancel a running survey, then resume it
+  gate = new Promise(() => {});
+  const second = await addon.startSurvey({ ...SURVEY_INPUT, topic: "Second survey", seedKeys: ["SEED1"] });
+  await untilStage(addon, second.id, "queries");
+  await assert.rejects(addon.resetData(), /正在进行主题调研/);
+  assert.equal(addon.cancelSurvey("other0000"), false);
+  assert.equal(addon.cancelSurvey(second.id), true);
+  assert.equal(await addon.waitForSurvey(second.id), null);
+  assert.equal(events.at(-1).action, "cancelled");
+  const cancelled = (await addon.listSurveys()).find((e) => e.id === second.id);
+  assert.equal(cancelled.status, "cancelled");
+  await assert.rejects(addon.saveSurveyToZotero(second.id), /还没有生成结果/);
+  gate = null;
+  await addon.resumeSurvey(second.id);
+  assert.equal((await addon.waitForSurvey(second.id)).status, "done");
+
+  // --- the item context menu's entry point: the window opens on 调研 with the selection as seeds
+  mainWindow.ZoteroPane.selection = [Zotero.Items.get(502)];
+  const draft = await addon.openSurvey();
+  assert.deepEqual(plain(draft.seeds.map((s) => s.key)), ["SEED2"]);
+  assert.equal(draft.topic, "Sulfur isotopes of arc magmas");
+  assert.equal(mainWindow.opened.at(-1).url, "chrome://zotwatch/content/main.xhtml");
+  assert.equal(addon.lastPage, "survey");
+  assert.deepEqual(plain(addon.takeSurveyDraft()), plain(draft));
+  assert.equal(addon.takeSurveyDraft(), null);
+  addon.openWindow(`survey/${second.id}`);
+  assert.equal(mainWindow.opened.at(-1).routes.at(-1), `survey/${second.id}`);
+  assert.deepEqual(plain((await addon.openSurvey({ seedKeys: ["SEED1"], topic: " 自定义主题 " })).topic), "自定义主题");
+
+  // --- delete, and reset removes the rest
+  assert.equal(await addon.deleteSurvey(id), true);
+  assert.equal(events.at(-1).action, "deleted");
+  assert.ok(!existsSync(join(dataDir, "zotwatch", `survey-${id}.json`)));
+  assert.deepEqual(plain((await addon.listSurveys()).map((e) => e.id)), [second.id]);
+  await addon.resetData();
+  assert.deepEqual(plain(await addon.listSurveys()), []);
+  assert.ok(!existsSync(join(dataDir, "zotwatch", "survey-cache.json")));
+
+  // --- shutdown cancels a running survey and waits for it
+  gate = new Promise(() => {});
+  const third = await addon.startSurvey({ ...SURVEY_INPUT, topic: "Third", seedKeys: ["SEED1"] });
+  await untilStage(addon, third.id, "queries");
+  const running = addon.waitForSurvey(third.id);
+  await vm.runInContext("shutdown({}, ADDON_DISABLE)", env.context);
+  assert.equal(await running, null);
+  assert.equal(Zotero.ZotWatch, undefined);
+  assert.deepEqual(Zotero.errors.map(String), []);
+});
+
 test("an unreadable journals.csv does not stop the plugin", async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), "zotwatch-"));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
@@ -1412,7 +1777,7 @@ test("preference pane initialises from Zotero's events inside a sandbox", async 
   assert.equal(addonListeners.size, 0, "the listener is removed when the pane closes");
 });
 
-const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "settings.js"];
+const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "survey.js", "settings.js"];
 
 /** Every element below `node` (document order). */
 const allElements = (node, out = []) => {
@@ -1482,7 +1847,7 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   const mainJs = readFileSync(join(root, "addon/content/main.js"), "utf8");
   const inboxJs = readFileSync(join(root, "addon/content/inbox.js"), "utf8");
   const pageKeys = JSON.parse(mainJs.match(/const PAGE_KEYS = (\[[^\]]*\]);/)[1]);
-  assert.deepEqual(pageKeys, ["overview", "inbox", "settings"]);
+  assert.deepEqual(pageKeys, ["overview", "inbox", "survey", "settings"]);
   const elements = allElements(mainDoc);
   const dataOf = (cls, attr) => elements.filter((el) => hasClass(el, cls)).map((el) => el.attrs[attr]);
   assert.deepEqual(dataOf("nav-item", "data-page"), pageKeys, "one sidebar button per page");
@@ -1539,7 +1904,7 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
   // Both locales define every Fluent message used by the menus
   for (const locale of ["zh-CN", "en-US"]) {
     const ftl = readFileSync(join(root, `addon/locale/${locale}/zotwatch-mainWindow.ftl`), "utf8");
-    for (const id of ["zotwatch-menu-open", "zotwatch-menu-run"]) assert.match(ftl, new RegExp(`^${id} =`, "m"), `${locale} lacks ${id}`);
+    for (const id of ["zotwatch-menu-open", "zotwatch-menu-run", "zotwatch-menu-survey"]) assert.match(ftl, new RegExp(`^${id} =`, "m"), `${locale} lacks ${id}`);
   }
 });
 
@@ -1558,7 +1923,25 @@ test("window routes and the run schedule", () => {
   assert.equal(normalizePage("#settings/ai"), "settings/ai");
   assert.equal(normalizePage("settings/../x"), "settings");
   assert.equal(normalizePage("chrome://evil"), "overview");
+  assert.equal(normalizePage("#survey"), "survey");
+  assert.equal(normalizePage("survey/mvq2k3a01x"), "survey/mvq2k3a01x");
+  assert.equal(normalizePage("survey/../../x"), "survey");
   assert.equal(normalizePage(undefined), "overview");
+
+  // Seeds of the item context menu: regular items of the library, children as their parents, once each
+  const item = (key, extra = {}) => ({ key, libraryID: 1, isRegularItem: () => true, ...extra });
+  const parent = item("P1");
+  const child = { key: "A1", libraryID: 1, parentItemID: 9, isRegularItem: () => false };
+  const parentOf = (i) => (i.parentItemID === 9 ? parent : null);
+  const keysOf = (items, libraryID = 1) => surveySeedKeys(items, { libraryID, parentOf });
+  assert.deepEqual(keysOf([item("K1"), child, item("K1"), parent]), ["K1", "P1"]);
+  assert.deepEqual(keysOf([{ key: "N1", libraryID: 1, isRegularItem: () => false }, item("G1", { libraryID: 3 }), item("D1", { deleted: true })]), []);
+  assert.deepEqual(keysOf([{ key: "X", parentItemID: 5, isRegularItem: () => false }, null, {}, "junk"]), [], "orphans and junk are skipped");
+  assert.deepEqual(keysOf([item("G1", { libraryID: 3 })], null), ["G1"], "no library filter");
+  assert.deepEqual(surveySeedKeys(undefined), []);
+  assert.deepEqual(keysOf([item("T1", { isRegularItem: () => { throw new Error("gone"); } }), item("K2")]), ["K2"]);
+  assert.equal(plainSurveyMenuLabel("zh-CN"), "用 ZotWatch 调研相关文献…");
+  assert.equal(plainSurveyMenuLabel("en-US"), "Survey Related Literature with ZotWatch…");
 
   const H = 3600000;
   assert.equal(nextRunAt({ autoRun: false, intervalHours: 24, lastRun: 0, lastAttempt: 0 }), null);

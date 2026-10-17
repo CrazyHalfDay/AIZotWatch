@@ -295,6 +295,24 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* 调研 runs in the background: a pulsing dot (its label is for screen readers) */
+.nav-dot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.nav-dot-label {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .subnav {
   display: flex;
   flex-direction: column;
@@ -561,6 +579,17 @@ p {
 
   .nav-item[aria-current="page"] .nav-count {
     box-shadow: 0 0 0 2px var(--surface);
+  }
+
+  .nav-dot {
+    position: absolute;
+    top: 6px;
+    left: 24px;
+    padding: 0;
+  }
+
+  .nav-dot .dot {
+    box-shadow: 0 0 0 2px var(--sidebar);
   }
 
   .sidebar-footer {

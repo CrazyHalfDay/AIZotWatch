@@ -6,3 +6,5 @@ zotwatch-menu-open =
         }
 zotwatch-menu-run =
     .label = ZotWatch：立即检查新文献
+zotwatch-menu-survey =
+    .label = 用 ZotWatch 调研相关文献…

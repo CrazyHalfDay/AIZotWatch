@@ -350,6 +350,12 @@ test("shell helpers: formatting, run status and routes", () => {
   assert.deepEqual(plain(run("parseRoute('settings/nope')")), { page: "settings", section: null, route: "settings" });
   assert.deepEqual(plain(run("parseRoute('#inbox/ai')")), { page: "inbox", section: null, route: "inbox" });
   assert.deepEqual(plain(run("parseRoute('')")), { page: "overview", section: null, route: "overview" });
+  // 调研: the list or one survey (ids as src/survey/store.js makes them)
+  assert.deepEqual(plain(run("parseRoute('#survey/mvq2k3a01x')")), { page: "survey", section: "mvq2k3a01x", route: "survey/mvq2k3a01x" });
+  assert.deepEqual(plain(run("parseRoute('survey/../x')")), { page: "survey", section: null, route: "survey" });
+  assert.deepEqual(plain(run("parseRoute('survey/AB')")), { page: "survey", section: null, route: "survey" });
+  assert.equal(run("scrollKey('survey', 'mvq2k3a01x')"), "survey/mvq2k3a01x");
+  assert.equal(run("scrollKey('settings', 'ai')"), "settings", "settings sections share the page's position");
 });
 
 test("navigate switches pages and remembers the page, without touching the URL", () => {

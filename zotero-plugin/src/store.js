@@ -1,5 +1,6 @@
 // Persistence helpers over an injectable storage backend:
 //   storage.readJSON(name) / writeJSON(name, obj) / readBinary(name) / writeBinary(name, bytes)
+//   (plus readText / writeText, and remove(name) for single files)
 // In Zotero these map to files in <Zotero data dir>/zotwatch/.
 
 import { bytesToFloat32, float32ToBytes } from "./core/vector.js";
@@ -51,6 +52,9 @@ export function createMemoryStorage() {
     },
     async writeText(name, text) {
       files.set(name, String(text));
+    },
+    async remove(name) {
+      files.delete(name);
     },
   };
 }

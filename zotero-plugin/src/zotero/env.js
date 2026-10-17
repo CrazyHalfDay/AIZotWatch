@@ -111,6 +111,10 @@ export function createZoteroStorage() {
       await ensureDir();
       await IOUtils.writeUTF8(path(name), text, { tmpPath: `${path(name)}.tmp` });
     },
+    /** Delete one file (no error when it does not exist). */
+    async remove(name) {
+      await IOUtils.remove(path(name), { ignoreAbsent: true });
+    },
     async clear() {
       await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
       ready = null;

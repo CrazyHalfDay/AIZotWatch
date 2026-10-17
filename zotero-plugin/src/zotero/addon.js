@@ -19,7 +19,22 @@ import { checkPublisherKeyRows } from "../sources/abstracts.js";
 import { checkOpenAlexRow, openAlexUsageText } from "../sources/openalex.js";
 import { lookupSourcesByIssn, openAlexErrorText, searchAuthors, searchSources } from "../sources/openalex-entities.js";
 import { checkSemanticScholarRow } from "../sources/semanticscholar.js";
+import { SurveyEngine, createSurvey, regenerateFrom } from "../survey/engine.js";
+import { MAX_SEEDS, SURVEY_DEPTHS, SURVEY_STAGES, normalizeSurveyInput, surveyEstimate } from "../survey/presets.js";
+import { markdownFileName, surveyMarkdown } from "../survey/report.js";
+import { deleteSurvey as deleteStoredSurvey, isSurveyId, loadSurvey, readIndex, saveSurvey } from "../survey/store.js";
 import { addWorkToZotero } from "./items.js";
+import {
+  getItemFullText,
+  getItemsByKeys,
+  getSelectedItems,
+  itemByKey,
+  saveSurveyToZotero,
+  searchLibrary,
+  surveyCollectionName,
+  workOfPaper,
+  writeTextFile,
+} from "./survey.js";
 import {
   createZoteroLibrary,
   createZoteroStorage,
@@ -37,7 +52,7 @@ const PANE_ID = "zotwatch-prefpane";
 const helpURL = (version) => `https://github.com/CrazyHalfDay/AIZotWatch/blob/zotero-plugin-v${version}/zotero-plugin/README.md`;
 const DIALOG_URL = "chrome://zotwatch/content/main.xhtml";
 const DIALOG_TYPE = "zotwatch:main";
-const PAGES = new Set(["overview", "inbox", "settings"]);
+const PAGES = new Set(["overview", "inbox", "survey", "settings"]);
 const MENU_ICON = "chrome://zotwatch/content/icons/menu.svg";
 const MAIN_WINDOW_FTL = "zotwatch-mainWindow.ftl";
 const WHITELIST_FILE = "journals.csv";
@@ -53,6 +68,8 @@ const QUIT_GRACE = 1500;
 // English, so older versions get plain-text menu labels instead.
 const MIN_FLUENT_MENU_VERSION = 9;
 const DOM_MENU_IDS = ["zotwatch-menu-separator", "zotwatch-menu-open", "zotwatch-menu-run"];
+// Item context menu entry 「用 ZotWatch 调研相关文献…」 on Zotero 7/8 (MenuManager on 9+)
+const ITEM_MENU_IDS = ["zotwatch-itemmenu-separator", "zotwatch-itemmenu-survey"];
 
 /** Wait for `promise` to settle, but at most `ms` milliseconds (leaves no timer behind). */
 async function settleWithin(promise, ms) {
@@ -73,6 +90,34 @@ export function plainMenuLabels(count, locale) {
     open: count > 0 ? `ZotWatch Recommendations (${count} new)…` : "ZotWatch Recommendations…",
     run: "ZotWatch: Check for New Papers",
   };
+}
+
+/** Plain-text label of the item context menu entry for Zotero 7/8. */
+export function plainSurveyMenuLabel(locale) {
+  return /^zh/i.test(locale || "") ? "用 ZotWatch 调研相关文献…" : "Survey Related Literature with ZotWatch…";
+}
+
+/**
+ * Keys of the regular items of `libraryID` among the selected `items` (a
+ * child note or attachment stands for its parent item), unique, in
+ * selection order; items of other libraries and standalone notes are left out.
+ * @param {object[]} items - Zotero items
+ * @param {{libraryID: number|null, parentOf: (item) => object|null}} options
+ */
+export function surveySeedKeys(items, { libraryID = null, parentOf = () => null } = {}) {
+  const keys = [];
+  for (const selected of Array.isArray(items) ? items : []) {
+    let item = selected;
+    try {
+      if (item && !item.isRegularItem?.() && item.parentItemID) item = parentOf(item);
+      if (!item || !item.isRegularItem?.() || item.deleted) continue;
+    } catch {
+      continue;
+    }
+    if (libraryID !== null && item.libraryID !== libraryID) continue;
+    if (typeof item.key === "string" && item.key && !keys.includes(item.key)) keys.push(item.key);
+  }
+  return keys;
 }
 
 /** Background notice for a run that found new recommendations (all tracks). */
@@ -123,13 +168,21 @@ export function topicsStatusLine(topics, max = 8) {
 }
 
 /**
- * Route of the main window: "overview", "inbox", "settings" or
- * "settings/<section>"; anything else falls back to "overview".
+ * Route of the main window: "overview", "inbox", "survey", "survey/<id>",
+ * "settings" or "settings/<section>"; anything else falls back to "overview".
  */
 export function normalizePage(page) {
   const [name, section] = String(page ?? "").replace(/^#/, "").split("/");
   if (!PAGES.has(name)) return "overview";
-  return name === "settings" && /^[a-z]+$/.test(section || "") ? `settings/${section}` : name;
+  if (name === "settings" && /^[a-z]+$/.test(section || "")) return `settings/${section}`;
+  if (name === "survey" && isSurveyId(section)) return `survey/${section}`;
+  return name;
+}
+
+/** Background notice of a finished survey (shown when the ZotWatch window is closed). */
+export function surveyDoneNotice(survey) {
+  const read = survey.counts?.read ? `，精读 ${survey.counts.read} 篇` : "";
+  return `主题调研「${survey.input?.topic || ""}」已完成：候选 ${survey.counts?.candidates ?? 0} 篇${read}。在 ZotWatch →「调研」中查看。`;
 }
 
 /**
@@ -216,6 +269,8 @@ export class ZotWatchAddon {
     this.whitelistError = null;
     this.pendingCount = 0;
     this.menuKey = null;
+    // MenuManager key of the item context menu entry (Zotero 9+)
+    this.itemMenuKey = null;
     this.windowHooks = new Map();
     this.pendingNotice = null;
     // Message and time of the last failed run (cleared when a run starts)
@@ -227,6 +282,14 @@ export class ZotWatchAddon {
     this.searchSignals = null;
     this.searchCache = null;
     this.journalNames = null;
+    // The running topic survey ({id, signal, promise, progress, survey}), one at a time
+    this.surveyTask = null;
+    // Form values for the 调研 page from the item context menu (taken once by the page)
+    this.surveyDraft = null;
+    // Surveys being saved to Zotero: id -> {cancelled}
+    this.surveySaves = new Map();
+    // Per-survey queue of edits of the stored survey (saving, adding papers): id -> promise
+    this.surveyEdits = new Map();
   }
 
   // ------------------------------------------------------------- lifecycle
@@ -270,16 +333,18 @@ export class ZotWatchAddon {
   async shutdown({ appShutdown = false } = {}) {
     this.stopScheduler();
     this.cancelRun();
+    this.surveyTask?.signal.cancel();
+    for (const save of this.surveySaves.values()) save.cancelled = true;
     this.uiSignal?.cancel();
     this.journalSignal?.cancel();
     for (const signal of this.searchSignals?.values() || []) signal.cancel();
-    if (this.running) await settleWithin(this.running, appShutdown ? QUIT_GRACE : this.shutdownGraceMs);
+    const pending = [this.running, this.surveyTask?.promise].filter(Boolean);
+    if (pending.length) await settleWithin(Promise.allSettled(pending), appShutdown ? QUIT_GRACE : this.shutdownGraceMs);
     if (appShutdown) return;
 
-    if (this.menuKey) {
-      Zotero.MenuManager?.unregisterMenu(this.menuKey);
-      this.menuKey = null;
-    }
+    for (const key of [this.menuKey, this.itemMenuKey]) if (key) Zotero.MenuManager?.unregisterMenu(key);
+    this.menuKey = null;
+    this.itemMenuKey = null;
     for (const win of Zotero.getMainWindows()) {
       if (win.ZoteroPane) this.removeFromWindow(win);
     }
@@ -318,6 +383,43 @@ export class ZotWatchAddon {
     });
     this.menuKey = key || null;
     if (!key) log("MenuManager registration failed; using DOM menu items");
+    // Item context menu: 「用 ZotWatch 调研相关文献…」 for the selected regular items
+    try {
+      this.itemMenuKey =
+        Zotero.MenuManager.registerMenu({
+          menuID: "zotwatch-item-survey",
+          pluginID: this.id,
+          target: "main/library/item",
+          menus: [
+            {
+              menuType: "menuitem",
+              l10nID: "zotwatch-menu-survey",
+              icon: MENU_ICON,
+              onShowing: (event, context) => context.setVisible(this.seedKeysOf(context.items).length > 0),
+              onCommand: (event, context) => this.surveyFromItems(context.items),
+            },
+          ],
+        }) || null;
+    } catch (e) {
+      this.itemMenuKey = null;
+      log(`Item menu registration: ${e?.message || e}`);
+    }
+    if (!this.itemMenuKey) log("Item menu registration failed; using a DOM menu item");
+  }
+
+  /** Seed keys (at most MAX_SEEDS) of items selected in Zotero: regular items of the profile library. */
+  seedKeysOf(items) {
+    return surveySeedKeys(items, { libraryID: profileLibraryID(), parentOf: (item) => Zotero.Items.get(item.parentItemID) }).slice(0, MAX_SEEDS);
+  }
+
+  /** The item context menu's command: open 调研 with the selected items as seeds (null when none qualifies). */
+  surveyFromItems(items) {
+    const seedKeys = this.seedKeysOf(items);
+    if (!seedKeys.length) return null;
+    return this.openSurvey({ seedKeys }).catch((e) => {
+      Zotero.logError(e);
+      return null;
+    });
   }
 
   menuArgs() {
@@ -330,15 +432,19 @@ export class ZotWatchAddon {
   }
 
   addToWindow(win) {
-    const doc = win.document;
-    if (this.menuKey) {
-      // MenuManager items are labelled through this Fluent file
-      win.MozXULElement?.insertFTLIfNeeded(MAIN_WINDOW_FTL);
-      return;
-    }
+    // MenuManager items are labelled through this Fluent file
+    if (this.menuKey || this.itemMenuKey) win.MozXULElement?.insertFTLIfNeeded(MAIN_WINDOW_FTL);
     if (this.windowHooks.has(win)) return;
+    // Zotero 7/8: plain-text menu items injected into the window ourselves
+    const hooks = [];
+    if (!this.menuKey) this.addToolsMenu(win, hooks);
+    if (!this.itemMenuKey) this.addItemMenu(win, hooks);
+    if (hooks.length) this.windowHooks.set(win, () => hooks.forEach((remove) => remove()));
+  }
 
-    // Zotero 7/8: inject plain-text menu items into the Tools menu ourselves
+  /** Tools menu: 「ZotWatch 文献推荐…」 and 「立即检查新文献」 (`hooks` collects the listener removers). */
+  addToolsMenu(win, hooks) {
+    const doc = win.document;
     const popup = doc.getElementById("menu_ToolsPopup");
     if (!popup || doc.getElementById(DOM_MENU_IDS[1])) return;
     const labels = () => plainMenuLabels(this.pendingCount, Services.locale?.appLocaleAsBCP47);
@@ -360,14 +466,49 @@ export class ZotWatchAddon {
       run.disabled = !!this.running;
     };
     popup.addEventListener("popupshowing", onShowing);
-    this.windowHooks.set(win, () => popup.removeEventListener("popupshowing", onShowing));
+    hooks.push(() => popup.removeEventListener("popupshowing", onShowing));
+  }
+
+  /**
+   * Item context menu: 「用 ZotWatch 调研相关文献…」, shown when the selection
+   * holds regular items of the profile library. Appended after Zotero's own
+   * items, which buildItemContextMenu addresses by position.
+   */
+  addItemMenu(win, hooks) {
+    const doc = win.document;
+    const popup = doc.getElementById("zotero-itemmenu");
+    if (!popup || doc.getElementById(ITEM_MENU_IDS[1])) return;
+    const separator = doc.createXULElement("menuseparator");
+    separator.id = ITEM_MENU_IDS[0];
+    const survey = doc.createXULElement("menuitem");
+    survey.id = ITEM_MENU_IDS[1];
+    survey.setAttribute("class", "menuitem-iconic");
+    survey.setAttribute("image", MENU_ICON);
+    survey.setAttribute("label", plainSurveyMenuLabel(Services.locale?.appLocaleAsBCP47));
+    const selection = () => {
+      try {
+        return win.ZoteroPane?.getSelectedItems?.() || [];
+      } catch {
+        return [];
+      }
+    };
+    survey.addEventListener("command", () => this.surveyFromItems(selection()));
+    popup.append(separator, survey);
+    const onShowing = (event) => {
+      if (event.target !== popup) return;
+      const visible = this.seedKeysOf(selection()).length > 0;
+      separator.hidden = !visible;
+      survey.hidden = !visible;
+    };
+    popup.addEventListener("popupshowing", onShowing);
+    hooks.push(() => popup.removeEventListener("popupshowing", onShowing));
   }
 
   removeFromWindow(win) {
     const doc = win.document;
     this.windowHooks.get(win)?.();
     this.windowHooks.delete(win);
-    for (const id of DOM_MENU_IDS) doc.getElementById(id)?.remove();
+    for (const id of [...DOM_MENU_IDS, ...ITEM_MENU_IDS]) doc.getElementById(id)?.remove();
     doc.querySelector(`link[rel="localization"][href="${MAIN_WINDOW_FTL}"]`)?.remove();
     if (this.pendingNotice?.win === win) {
       win.removeEventListener("activate", this.pendingNotice.show);
@@ -1135,12 +1276,367 @@ export class ZotWatchAddon {
     return { names, error };
   }
 
+  // ------------------------------------------------------------ topic survey
+
+  /** Whether the AI stages of a survey can run (LLM enabled with a key). */
+  static llmReady(settings) {
+    return !!(settings.llm.enabled && settings.llm.apiKey);
+  }
+
+  /** Library adapter of the survey: the watch adapter plus seed metadata and full text. */
+  createSurveyLibrary() {
+    return { ...createZoteroLibrary(), getItemsByKeys, getItemFullText };
+  }
+
+  createSurveyEngine(settings, http) {
+    return new SurveyEngine({ http, storage: this.storage, library: this.createSurveyLibrary(), settings, log });
+  }
+
+  /**
+   * What the 调研 form needs: whether the LLM and the API keys are set, the
+   * stages (stepper labels), the depth presets with their cost estimates, and
+   * the running survey ({id, progress}) if any.
+   */
+  getSurveyOptions() {
+    const settings = this.getSettings();
+    const llm = ZotWatchAddon.llmReady(settings);
+    const keys = { openalexKey: !!settings.apis.openalexKey, semanticScholarKey: !!settings.apis.semanticScholarKey };
+    return {
+      llm,
+      ...keys,
+      stages: SURVEY_STAGES.map((s) => ({ ...s })),
+      depths: Object.values(SURVEY_DEPTHS).map((d) => ({
+        key: d.key,
+        label: d.label,
+        pool: d.pool,
+        deepRead: d.deepRead,
+        estimate: surveyEstimate(d.key, { llm, sources: { s2: keys.semanticScholarKey } }),
+      })),
+      running: this.surveyTask ? { id: this.surveyTask.id, progress: this.surveyTask.progress } : null,
+    };
+  }
+
+  /**
+   * Cost hints of a depth ({aiCalls, apiRequests, minutes, text, …}, see
+   * survey/presets.js surveyEstimate); `options` may give {seeds, sources, keywords}.
+   */
+  surveyEstimate(depth, options = {}) {
+    const settings = this.getSettings();
+    const sources = { s2: !!settings.apis.semanticScholarKey, ...(options.sources || {}) };
+    if (!settings.apis.semanticScholarKey) sources.s2 = false;
+    return surveyEstimate(depth, { llm: ZotWatchAddon.llmReady(settings), ...options, sources });
+  }
+
+  assertNoSurvey() {
+    if (this.surveyTask) throw new Error("已有一项调研正在进行，请等待它完成或先取消");
+  }
+
+  async requireSurvey(id) {
+    const survey = await loadSurvey(this.storage, id);
+    if (!survey) throw new Error("找不到这项调研（可能已被删除）");
+    return survey;
+  }
+
+  /**
+   * Start a survey (see survey/presets.js normalizeSurveyInput for `input`:
+   * {topic, description, keywords, seedKeys, depth, yearFrom, sources}).
+   * Throws a readable message for an invalid input or while another survey
+   * runs; otherwise resolves with {id} once the survey is stored, and the
+   * survey goes on in the background, reporting through events
+   * {type: "survey", action: "start" | "progress" | "done" | "cancelled" | "error", id, progress?, message?}.
+   */
+  async startSurvey(input) {
+    this.assertNoSurvey();
+    const settings = this.getSettings();
+    const normalized = normalizeSurveyInput(input);
+    const llm = ZotWatchAddon.llmReady(settings);
+    const survey = createSurvey(normalized, { llm, model: llm ? settings.llm.model : null });
+    await saveSurvey(this.storage, survey);
+    this.launchSurvey(survey, settings);
+    return { id: survey.id };
+  }
+
+  /** Run (or go on with) a survey in the background; the promise resolves with the survey, or null. */
+  launchSurvey(survey, settings, { from = null } = {}) {
+    this.applyRateLimits();
+    const signal = createCancelSignal();
+    const engine = this.createSurveyEngine(settings, createZoteroTransport({ signal }));
+    const task = { id: survey.id, signal, progress: null, survey, promise: null };
+    this.surveyTask = task;
+    const id = survey.id;
+    task.promise = (async () => {
+      this.emit({ type: "survey", action: "start", id });
+      try {
+        const result = await engine.run(survey, {
+          from,
+          isCancelled: () => signal.cancelled,
+          onProgress: (p) => {
+            task.progress = p;
+            this.emit({ type: "survey", action: "progress", id, progress: p });
+          },
+        });
+        this.surveyTask = this.surveyTask === task ? null : this.surveyTask;
+        this.emit({ type: "survey", action: "done", id, status: result.status });
+        if (!Services.wm.getMostRecentWindow(DIALOG_TYPE)) this.notify("ZotWatch 主题调研", surveyDoneNotice(result), { sticky: true });
+        return result;
+      } catch (e) {
+        if (this.surveyTask === task) this.surveyTask = null;
+        if (signal.cancelled || e instanceof CancelledError || e?.cancelled) {
+          this.emit({ type: "survey", action: "cancelled", id });
+          return null;
+        }
+        Zotero.logError(e);
+        this.emit({ type: "survey", action: "error", id, message: e?.message || String(e) });
+        return null;
+      } finally {
+        if (this.surveyTask === task) this.surveyTask = null;
+      }
+    })();
+    return task.promise;
+  }
+
+  /** The running survey's promise (resolves with the survey, or null when it stopped), null when none runs. */
+  waitForSurvey(id = null) {
+    const task = this.surveyTask;
+    return task && (!id || task.id === id) ? task.promise : null;
+  }
+
+  /** Cancel the running survey (any, or only the one with this id); false when none matched. */
+  cancelSurvey(id = null) {
+    const task = this.surveyTask;
+    if (!task || (id && task.id !== id)) return false;
+    task.signal.cancel();
+    return true;
+  }
+
+  /** Run `task` after the earlier edits of the same stored survey (load-modify-save never interleaves). */
+  async withSurveyEdit(id, task) {
+    const previous = this.surveyEdits.get(id) || Promise.resolve();
+    const run = previous.then(task);
+    const tail = run.catch(() => {});
+    this.surveyEdits.set(id, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.surveyEdits.get(id) === tail) this.surveyEdits.delete(id);
+    }
+  }
+
+  /** Go on with a cancelled or failed survey from its last finished stage: {id}. */
+  async resumeSurvey(id) {
+    this.assertNoSurvey();
+    const survey = await this.requireSurvey(id);
+    if (survey.status === "done") throw new Error("这项调研已经完成");
+    this.launchSurvey(survey, this.getSettings());
+    return { id };
+  }
+
+  /**
+   * Write the review again (stage 9, with the current LLM settings); a survey
+   * made without an LLM is read first (stages 7–9). Runs like a survey: {id, from}.
+   */
+  async regenerateReport(id) {
+    this.assertNoSurvey();
+    const settings = this.getSettings();
+    if (!ZotWatchAddon.llmReady(settings)) throw new Error("生成综述需要开启大模型（设置 → AI 助手）");
+    const survey = await this.requireSurvey(id);
+    const from = regenerateFrom(survey);
+    const needs = from === "write" ? "themes" : "enrich";
+    if (!survey.completed.includes(needs)) throw new Error("这项调研还没有进行到这一步，请先「继续」");
+    this.launchSurvey(survey, settings, { from });
+    return { id, from };
+  }
+
+  /**
+   * Past surveys, newest first: [{id, topic, createdAt, updatedAt, status,
+   * depth, stage, counts: {seeds, candidates, read, references}, error,
+   * hasReport, llm, interrupted, progress}]. A survey stopped by quitting
+   * Zotero reads "cancelled" with `interrupted` (it can go on).
+   */
+  async listSurveys() {
+    const task = this.surveyTask;
+    return (await readIndex(this.storage)).map((entry) => {
+      const live = task?.id === entry.id;
+      return {
+        ...entry,
+        status: live ? "running" : entry.status === "running" ? "cancelled" : entry.status,
+        interrupted: !live && entry.status === "running",
+        progress: live ? task.progress : null,
+      };
+    });
+  }
+
+  /**
+   * One survey with everything the result view shows (input, seeds, queries,
+   * stage summaries, pool of candidates with scores and provenance, themes,
+   * references, report, errors), plus `running` and the live `progress`; null when unknown.
+   */
+  async getSurvey(id) {
+    const task = this.surveyTask;
+    if (task?.id === id) return { ...JSON.parse(JSON.stringify(task.survey)), status: "running", running: true, progress: task.progress };
+    const survey = await loadSurvey(this.storage, id);
+    if (!survey) return null;
+    const interrupted = survey.status === "running";
+    return { ...survey, status: interrupted ? "cancelled" : survey.status, interrupted, running: false, progress: null };
+  }
+
+  /** Delete a survey (a running one is cancelled first); true when it existed. */
+  async deleteSurvey(id) {
+    const task = this.surveyTask;
+    if (task?.id === id) {
+      task.signal.cancel();
+      await settleWithin(task.promise, this.shutdownGraceMs);
+    }
+    const removed = await deleteStoredSurvey(this.storage, id);
+    this.emit({ type: "survey", action: "deleted", id });
+    return removed;
+  }
+
+  /**
+   * Save a finished survey in Zotero: the collection 「ZotWatch 调研 · <topic>」
+   * with a note holding the report and, by `addPapers`, its papers ("cited":
+   * the references the report cites, "read": every reference, "none"); see
+   * zotero/survey.js. Progress events {type: "survey", action: "save-progress",
+   * id, progress: {current, total, title}}; resolves with the counts
+   * {collectionName, noteID, noteKey, total, linked, imported, failed, skipped, cancelled}.
+   */
+  async saveSurveyToZotero(id, { addPapers = "cited", collectionName = null } = {}) {
+    if (this.surveyTask?.id === id) throw new Error("调研仍在进行，请等它完成后再保存");
+    if (this.surveySaves.has(id)) throw new Error("正在保存这项调研，请稍候");
+    const control = { cancelled: false };
+    this.surveySaves.set(id, control);
+    try {
+      return await this.withSurveyEdit(id, () => this.writeSurveyToZotero(id, { addPapers, collectionName, control }));
+    } finally {
+      this.surveySaves.delete(id);
+    }
+  }
+
+  async writeSurveyToZotero(id, { addPapers, collectionName, control }) {
+    const survey = await this.requireSurvey(id);
+    if (!survey.report) throw new Error("这项调研还没有生成结果");
+    const settings = this.getSettings();
+    const result = await saveSurveyToZotero(survey, {
+      libraryID: targetLibraryID(),
+      collectionName: collectionName || surveyCollectionName(survey),
+      addPapers: ["cited", "read", "none"].includes(addPapers) ? addPapers : "cited",
+      tag: settings.output.tag,
+      useTranslator: settings.output.useTranslator,
+      isCancelled: () => control.cancelled,
+      onProgress: (p) => this.emit({ type: "survey", action: "save-progress", id, progress: p }),
+      log,
+    });
+    survey.updatedAt = Date.now();
+    await saveSurvey(this.storage, survey);
+    this.emit({ type: "survey", action: "saved", id, result });
+    return result;
+  }
+
+  /** Stop importing papers of a survey being saved (the note is already written). */
+  cancelSurveySave(id) {
+    const control = this.surveySaves.get(id);
+    if (control) control.cancelled = true;
+    return !!control;
+  }
+
+  /**
+   * Add one paper of a survey (candidate or reference, by its `id`) to Zotero,
+   * in the survey's collection: {itemID, itemKey, existing}. A paper already in
+   * the library is not added again.
+   */
+  async addSurveyPaper(id, paperId) {
+    if (this.surveyTask?.id === id) throw new Error("调研仍在进行，请等它完成后再添加");
+    return this.withSurveyEdit(id, () => this.addSurveyPaperNow(id, paperId));
+  }
+
+  async addSurveyPaperNow(id, paperId) {
+    const survey = await this.requireSurvey(id);
+    const paper = survey.pool.find((p) => p.id === paperId);
+    const ref = survey.references.find((r) => r.id === paperId);
+    const source = paper || ref;
+    if (!source) throw new Error("这篇文献不在调研结果中");
+    if (source.inLibrary && source.itemKey) {
+      const item = await itemByKey(source.itemKey);
+      if (item) return { itemID: item.id, itemKey: item.key, existing: true };
+    }
+    const settings = this.getSettings();
+    const item = await addWorkToZotero(workOfPaper(source), {
+      libraryID: targetLibraryID(),
+      collectionName: surveyCollectionName(survey),
+      tag: settings.output.tag,
+      withNote: false,
+      useTranslator: settings.output.useTranslator,
+      log,
+    });
+    for (const target of [paper, ref]) {
+      if (!target) continue;
+      target.inLibrary = true;
+      target.itemKey = item.key;
+    }
+    survey.updatedAt = Date.now();
+    await saveSurvey(this.storage, survey);
+    this.emit({ type: "survey", action: "updated", id });
+    return { itemID: item.id, itemKey: item.key, existing: false };
+  }
+
+  /** Select a library item (by key) in Zotero's main window; false when it no longer exists. */
+  async showItemByKey(key) {
+    const item = await itemByKey(key);
+    if (!item) return false;
+    await this.showItem(item.id);
+    return true;
+  }
+
+  /**
+   * The survey as Markdown: {filename, text}; with `path` (from a FilePicker)
+   * the file is also written there.
+   */
+  async exportSurveyMarkdown(id, path = null) {
+    const survey = await this.requireSurvey(id);
+    if (!survey.report) throw new Error("这项调研还没有生成结果");
+    const text = surveyMarkdown(survey);
+    if (path) await writeTextFile(path, text);
+    return { filename: markdownFileName(survey), text };
+  }
+
+  /** Library items for the seed picker (title / creator / year / DOI search): [{key, title, year, creators, doi, itemType}]. */
+  searchLibrary(query, options = {}) {
+    return searchLibrary(query, options);
+  }
+
+  /** Regular items selected in Zotero's main window (profile library): [{key, title, year, creators, doi, itemType, …}]. */
+  getSelectedItems() {
+    return getSelectedItems();
+  }
+
+  /**
+   * Open the ZotWatch window on 调研 with seeds (the given item keys, or the
+   * items selected in Zotero) for the form; the page takes them with
+   * takeSurveyDraft(). Returns the draft {topic, topics, seeds}.
+   */
+  async openSurvey({ seedKeys = null, topic = null } = {}) {
+    const items = Array.isArray(seedKeys) ? await getItemsByKeys(seedKeys) : getSelectedItems();
+    const seeds = items.map(({ key, title, year, creators, doi, itemType }) => ({ key, title, year, creators, doi, itemType }));
+    const topics = seeds.map((s) => s.title).filter(Boolean);
+    this.surveyDraft = { topic: typeof topic === "string" && topic.trim() ? topic.trim() : topics[0] || "", topics, seeds };
+    this.openWindow("survey");
+    return this.surveyDraft;
+  }
+
+  /** The draft of openSurvey (once), or null. */
+  takeSurveyDraft() {
+    const draft = this.surveyDraft;
+    this.surveyDraft = null;
+    return draft;
+  }
+
   async loadPresetJournals() {
     return Zotero.File.getResourceAsync("chrome://zotwatch/content/presets/geoscience-journals.csv");
   }
 
   async resetData() {
     if (this.running) throw new Error("正在运行，请稍后再试");
+    if (this.surveyTask) throw new Error("正在进行主题调研，请等待完成或先取消");
     await this.storage.clear();
     // In-memory OpenAlex answers of the settings page are caches too
     this.searchCache?.clear();

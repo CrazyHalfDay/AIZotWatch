@@ -301,6 +301,10 @@ test("keyboard shortcuts switch pages, focus search, and Escape clears, leaves o
   assert.equal(w.run("shell.page"), "settings");
   w.key("1", { ctrl: true });
   assert.equal(w.run("shell.page"), "overview");
+  // 调研 came later: Ctrl+4 (Ctrl+3 stays 设置)
+  w.key("4", { ctrl: true });
+  assert.equal(w.run("shell.page"), "survey");
+  assert.equal(w.api.lastPage, "survey");
   w.key("f", { ctrl: true });
   assert.equal(w.run("shell.page"), "inbox");
   const search = w.$("inbox-search");
@@ -493,4 +497,24 @@ test("inbox controls: tabs, filters, search, 全部忽略 and the card actions",
   await tick();
   assert.deepEqual(w.last("setStatus"), ["setStatus", "d1", "new"]);
   assert.deepEqual(w.errors, []);
+});
+
+test("调研 remembers the scroll position of its list and of each survey", () => {
+  const w = openWindow();
+  w.fire("load");
+  const pagesNode = w.$("pages");
+  w.window.ZotWatchMain.navigate("survey/aaaaaa1");
+  pagesNode.scrollTop = 300;
+  w.window.ZotWatchMain.navigate("inbox");
+  assert.equal(pagesNode.scrollTop, 0);
+  pagesNode.scrollTop = 50;
+  w.window.ZotWatchMain.navigate("survey/aaaaaa1");
+  assert.equal(pagesNode.scrollTop, 300, "back on the same survey");
+  w.window.ZotWatchMain.navigate("inbox");
+  assert.equal(pagesNode.scrollTop, 50);
+  w.window.ZotWatchMain.navigate("survey");
+  assert.equal(pagesNode.scrollTop, 0, "the list has its own position");
+  w.window.ZotWatchMain.navigate("overview");
+  w.window.ZotWatchMain.navigate("survey/bbbbbb2");
+  assert.equal(pagesNode.scrollTop, 0, "another survey starts at the top");
 });

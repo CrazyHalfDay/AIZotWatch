@@ -25,7 +25,7 @@ var ZotWatchSettings = (() => {
   const WHITELIST_DELAY = 800;
   const VIEW_REFRESH_DELAY = 800;
   const README_URL = (version) => `https://github.com/CrazyHalfDay/AIZotWatch/blob/zotero-plugin-v${version}/zotero-plugin/README.md`;
-  const RESET_CONFIRM = "将删除向量缓存、聚类结果和全部推荐记录（不会影响 Zotero 文库和期刊列表）。下次运行会重新向量化文库。确定继续吗？";
+  const RESET_CONFIRM = "将删除向量缓存、聚类结果和全部推荐记录，以及主题调研的记录（不会影响 Zotero 文库、期刊列表和已保存到 Zotero 的调研笔记）。下次运行会重新向量化文库。确定继续吗？";
 
   /** Embedding services; models and endpoints as in src/embedding/providers.js (EMBEDDING_PRESETS). */
   const PROVIDERS = {
@@ -1956,12 +1956,12 @@ var ZotWatchSettings = (() => {
       data.readme = el("a", { class: "sf-link", href: README_URL("0.4.0") }, "使用说明（README）", svgIcon("external"));
       return [
         card(
-          { title: "数据目录", help: "向量缓存、推荐记录、研究方向标签、摘要缓存和期刊列表都保存在这里。" },
+          { title: "数据目录", help: "向量缓存、推荐记录、研究方向标签、摘要缓存、主题调研记录和期刊列表都保存在这里。" },
           el("div", { class: "sf-path-row" }, data.path, data.reveal),
         ),
         card({
           title: "清除缓存与推荐记录",
-          help: "删除向量缓存、聚类结果和全部推荐记录，不影响 Zotero 文库和期刊列表；下次运行会重新向量化文库。",
+          help: "删除向量缓存、聚类结果、全部推荐记录和主题调研的记录，不影响 Zotero 文库、期刊列表和已保存到 Zotero 的调研笔记；下次运行会重新向量化文库。",
           actions: data.reset,
         }),
         card(

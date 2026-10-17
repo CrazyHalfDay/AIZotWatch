@@ -52,29 +52,42 @@ export class TitleIndex {
   constructor(threshold = 0.9) {
     this.threshold = threshold * 100;
     this.titles = [];
-    this.exact = new Set();
+    // Normalised title -> id
+    this.exact = new Map();
     this.postings = new Map();
   }
 
+  /**
+   * Index a title; returns its id (the id of the identical title already
+   * indexed, -1 for a title without any letter or digit). Ids count up from 0
+   * in the order distinct titles were added.
+   */
   add(title) {
     const norm = normalizeTitle(title);
-    if (!norm || this.exact.has(norm)) return;
+    if (!norm) return -1;
+    if (this.exact.has(norm)) return this.exact.get(norm);
     const id = this.titles.length;
     this.titles.push(norm);
-    this.exact.add(norm);
+    this.exact.set(norm, id);
     for (const t of tokensOf(norm)) {
       let list = this.postings.get(t);
       if (!list) this.postings.set(t, (list = []));
       list.push(id);
     }
+    return id;
   }
 
   has(title) {
+    return this.find(title) >= 0;
+  }
+
+  /** Id of an indexed title identical or similar to `title` (see add), -1 when none. */
+  find(title) {
     const norm = normalizeTitle(title);
-    if (!norm) return false;
-    if (this.exact.has(norm)) return true;
+    if (!norm) return -1;
+    if (this.exact.has(norm)) return this.exact.get(norm);
     const tokens = tokensOf(norm);
-    if (!tokens.length) return false;
+    if (!tokens.length) return -1;
     // Count shared tokens per indexed title; only near-complete overlaps can pass
     const overlap = new Map();
     for (const t of tokens) {
@@ -88,9 +101,9 @@ export class TitleIndex {
       const other = this.titles[id];
       if (other.length < minLen || other.length > maxLen) continue;
       if (shared < Math.ceil(tokens.length * 0.6)) continue;
-      if (tokenSetRatio(norm, other) >= this.threshold) return true;
+      if (tokenSetRatio(norm, other) >= this.threshold) return id;
     }
-    return false;
+    return -1;
   }
 }
 

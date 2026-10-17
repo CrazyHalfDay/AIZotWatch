@@ -12,6 +12,8 @@
 //   --pages overview,inbox,settings,settings/apis       routes to capture
 //   --schemes light,dark        --sizes 1120x820,820x700
 //   --states default,running,error,empty                 extra states (light, first size only)
+//   --state-pages overview,inbox                         routes the extra states capture
+//                                                        (e.g. survey,survey/mvrunning01 for 调研)
 //   --styleguide                also capture the shared components (main.css)
 //   --script <file.mjs>         run its default export `async (page, {route, scheme, size})`
 //                               before each screenshot (e.g. to type into fields)
@@ -44,7 +46,7 @@ const TYPES = {
 // ------------------------------------------------------------------ args
 
 function parseArgs(argv) {
-  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], styleguide: false, script: null };
+  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], statePages: ["overview", "inbox"], styleguide: false, script: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const list = () => argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
@@ -52,6 +54,7 @@ function parseArgs(argv) {
     else if (arg === "--schemes") opts.schemes = list();
     else if (arg === "--sizes") opts.sizes = list();
     else if (arg === "--states") opts.states = list();
+    else if (arg === "--state-pages") opts.statePages = list();
     else if (arg === "--styleguide") opts.styleguide = true;
     else if (arg === "--script") opts.script = resolve(argv[++i]);
     else if (!arg.startsWith("--")) opts.out = resolve(arg);
@@ -123,6 +126,7 @@ async function coreBundle() {
         'export { parseFollowedAuthors } from "./src/core/authors.js";',
         'export { journalRows, mergeWhitelistRows, summarizeWhitelist } from "./src/core/journals.js";',
         'export { autoValues } from "./src/settings.js";',
+        'export { surveyMarkdown } from "./src/survey/report.js";',
       ].join("\n"),
       resolveDir: root,
       loader: "js",
@@ -155,6 +159,42 @@ function installMock({ fixtures, defaults, state }) {
     data.view.progress = { stage: "embed", message: "候选文献向量化 412/1012", current: 412, total: 1012 };
   }
   if (state === "error") data.view.lastError = { message: "网络连接失败：api.crossref.org（0x804b0014）", at: Date.now() - 10 * 60000 };
+  // Topic surveys (src/survey/): the state "running" shows a survey in its read stage
+  let surveyRun = null;
+  if (state === "running") {
+    const entry = { ...data.surveys[0], id: "mvrunning01", topic: "岩浆氧逸度与斑岩成矿潜力", status: "running", stage: "read", hasReport: false, progress: data.surveyProgress, createdAt: Date.now() - 4 * 60000 };
+    data.surveys.unshift(entry);
+    data.surveyOptions.running = { id: entry.id, progress: data.surveyProgress };
+    const done = data.surveyDetails[data.surveys[1].id];
+    data.surveyDetails[entry.id] = { ...done, id: entry.id, status: "running", stage: "read", createdAt: entry.createdAt, updatedAt: Date.now(), completed: done.completed.slice(0, 6), report: null, references: [], themes: [], errors: [], running: true, progress: data.surveyProgress, counts: data.surveyProgress.counts, input: { ...done.input, topic: entry.topic, description: "" } };
+  }
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const surveyEntry = (s) => ({ id: s.id, topic: s.input.topic, createdAt: s.createdAt, updatedAt: s.updatedAt, status: s.status, depth: s.input.depth, stage: s.stage, counts: s.counts, error: s.error?.message || null, hasReport: !!s.report, llm: s.llm, interrupted: false, progress: null });
+  /** Simulated survey run: progress through the stages, then a copy of the finished fixture. */
+  function simulateSurvey(id, input) {
+    const template = Object.values(data.surveyDetails).find((s) => s.status === "done");
+    const run = { id, cancelled: false };
+    surveyRun = run;
+    emit({ type: "survey", action: "start", id });
+    (async () => {
+      for (const [index, stage] of data.surveyOptions.stages.entries()) {
+        const total = stage.key === "read" ? 12 : stage.key === "expand" ? 8 : null;
+        for (let i = 0; i <= (total || 0); i += total ? 4 : 1) {
+          if (run.cancelled) return;
+          const progress = { stage: stage.key, index, label: stage.label, message: `${stage.label}${total ? ` ${i}/${total}` : "…"}`, current: total ? i : null, total, counts: { seeds: input.seedKeys?.length || 0, candidates: index >= 2 ? 120 + i : 0, read: stage.key === "read" ? i : 0, references: 0 } };
+          data.surveyOptions.running = { id, progress };
+          emit({ type: "survey", action: "progress", id, progress });
+          await delay(250);
+        }
+      }
+      const finished = { ...clone(template), id, input: { ...template.input, ...input }, createdAt: Date.now(), updatedAt: Date.now() };
+      data.surveyDetails[id] = finished;
+      data.surveys = [surveyEntry(finished), ...data.surveys.filter((e) => e.id !== id)];
+      data.surveyOptions.running = null;
+      surveyRun = null;
+      emit({ type: "survey", action: "done", id, status: "done" });
+    })();
+  }
 
   const Prefs = {
     get: (key) => prefs.get(key),
@@ -285,6 +325,96 @@ function installMock({ fixtures, defaults, state }) {
     summarizeWhitelist: (text) => core.summarizeWhitelist(text),
     getAutoValues: () => core.autoValues(prefs.get(`${PREFIX}embedding.provider`)),
     getApiStatus: () => JSON.parse(JSON.stringify(data.apiStatus)),
+    // ---- topic survey (same shapes as src/zotero/addon.js; see scripts/preview-survey-fixtures.mjs)
+    getSurveyOptions: () => clone(data.surveyOptions),
+    surveyEstimate: (depth) => clone(data.surveyOptions.depths.find((d) => d.key === depth)?.estimate || data.surveyOptions.depths[1].estimate),
+    async listSurveys() {
+      await delay(60);
+      return clone(data.surveys);
+    },
+    async getSurvey(id) {
+      await delay(80);
+      if (!data.surveyDetails[id]) return null;
+      // The running survey carries its live progress (as addon.getSurvey does)
+      const live = data.surveyOptions.running?.id === id ? { status: "running", running: true, progress: data.surveyOptions.running.progress } : {};
+      return clone({ ...data.surveyDetails[id], ...live });
+    },
+    async startSurvey(input) {
+      if (!String(input?.topic || "").trim()) throw new Error("请填写调研主题");
+      if (surveyRun || data.surveyOptions.running) throw new Error("已有一项调研正在进行，请等待它完成或先取消");
+      const id = `mvpreview${Math.floor(Math.random() * 1000)}`;
+      const template = Object.values(data.surveyDetails).find((s) => s.status === "done");
+      const keywords = String(input.keywords || "").split(/[\n,;，；、]+/).map((k) => k.trim()).filter(Boolean);
+      const detail = { ...clone(template), id, input: { ...template.input, ...input, keywords }, status: "running", stage: "seeds", completed: [], report: null, references: [], themes: [], pool: [], errors: [], createdAt: Date.now(), updatedAt: Date.now(), running: true, progress: null };
+      data.surveyDetails[id] = detail;
+      data.surveys.unshift({ ...surveyEntry(detail), hasReport: false });
+      data.surveyOptions.running = { id, progress: null };
+      simulateSurvey(id, detail.input);
+      return { id };
+    },
+    cancelSurvey(id) {
+      if (!surveyRun || (id && surveyRun.id !== id)) return false;
+      surveyRun.cancelled = true;
+      const entry = data.surveys.find((e) => e.id === surveyRun.id);
+      if (entry) entry.status = "cancelled";
+      emit({ type: "survey", action: "cancelled", id: surveyRun.id });
+      surveyRun = null;
+      data.surveyOptions.running = null;
+      return true;
+    },
+    async resumeSurvey(id) {
+      simulateSurvey(id, data.surveyDetails[id]?.input || {});
+      return { id };
+    },
+    async regenerateReport(id) {
+      simulateSurvey(id, data.surveyDetails[id]?.input || {});
+      return { id, from: "write" };
+    },
+    async deleteSurvey(id) {
+      data.surveys = data.surveys.filter((e) => e.id !== id);
+      delete data.surveyDetails[id];
+      emit({ type: "survey", action: "deleted", id });
+      return true;
+    },
+    async saveSurveyToZotero(id, { addPapers = "cited" } = {}) {
+      const refs = addPapers === "none" ? [] : data.surveyDetails[id]?.references || [];
+      for (let i = 0; i <= refs.length; i += 4) {
+        emit({ type: "survey", action: "save-progress", id, progress: { current: Math.min(i, refs.length), total: refs.length, title: refs[i]?.title || null } });
+        await delay(200);
+      }
+      const result = { collectionName: `ZotWatch 调研 · ${data.surveyDetails[id]?.input.topic}`, collectionID: 7, noteID: 90, noteKey: "NOTEKEY1", total: refs.length, linked: 2, imported: Math.max(0, refs.length - 2), failed: 0, skipped: 0, cancelled: false };
+      emit({ type: "survey", action: "saved", id, result });
+      return result;
+    },
+    cancelSurveySave: () => true,
+    async addSurveyPaper(id, paperId) {
+      await delay(400);
+      const survey = data.surveyDetails[id];
+      for (const p of [...(survey?.pool || []), ...(survey?.references || [])]) {
+        if (p.id !== paperId) continue;
+        p.inLibrary = true;
+        p.itemKey = "NEWKEY1";
+      }
+      emit({ type: "survey", action: "updated", id });
+      return { itemID: 98, itemKey: "NEWKEY1", existing: false };
+    },
+    async showItemByKey() {
+      return true;
+    },
+    async exportSurveyMarkdown(id) {
+      const survey = data.surveyDetails[id];
+      return { filename: `ZotWatch 调研 - ${survey.input.topic}.md`, text: core.surveyMarkdown(survey) };
+    },
+    async searchLibrary(query) {
+      await delay(250);
+      const q = String(query).trim().toLowerCase();
+      return q ? clone(data.libraryResults.filter((i) => `${i.title} ${i.creators.join(" ")} ${i.year}`.toLowerCase().includes(q.split(/\s+/)[0]))) : [];
+    },
+    getSelectedItems: () => clone(data.selectedItems),
+    async openSurvey() {
+      return { topic: data.selectedItems[0]?.title || "", topics: data.selectedItems.map((i) => i.title), seeds: clone(data.selectedItems) };
+    },
+    takeSurveyDraft: () => null,
   };
 
   const Zotero = {
@@ -365,7 +495,7 @@ function renderStyleguide() {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.out) {
-    console.error("Usage: node scripts/preview.mjs <out-dir> [--pages a,b] [--schemes light,dark] [--sizes 1120x820,820x700] [--states default,running,error,empty] [--styleguide]");
+    console.error("Usage: node scripts/preview.mjs <out-dir> [--pages a,b] [--schemes light,dark] [--sizes 1120x820,820x700] [--states default,running,error,empty] [--state-pages overview,inbox] [--styleguide] [--script file.mjs]");
     process.exit(2);
   }
   if (!existsSync(join(contentDir, "main.xhtml"))) {
@@ -388,7 +518,7 @@ async function main() {
     const [width, height] = size.split("x").map(Number);
     const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: scheme });
     const page = await context.newPage();
-    const label = `${styleguide ? "styleguide" : route.replace("/", "-")}${state === "default" ? "" : `-${state}`}-${scheme}-${size}`;
+    const label = `${styleguide ? "styleguide" : route.replaceAll("/", "-")}${state === "default" ? "" : `-${state}`}-${scheme}-${size}`;
     page.on("pageerror", (e) => problems.push(`${label}: page error: ${e.message}`));
     page.on("console", (msg) => {
       if (msg.type() === "error") problems.push(`${label}: console error: ${msg.text()}`);
@@ -422,7 +552,7 @@ async function main() {
       }
     }
     for (const state of opts.states.filter((s) => s !== "default")) {
-      for (const route of ["overview", "inbox"]) {
+      for (const route of opts.statePages) {
         await capture({ route, scheme: opts.schemes[0], size: opts.sizes[0], state });
       }
     }

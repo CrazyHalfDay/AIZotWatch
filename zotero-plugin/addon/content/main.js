@@ -3,7 +3,7 @@
 // ZotWatch main window shell: sidebar, router, page header, run progress,
 // error banner, toasts, keyboard shortcuts and addon events.
 //
-// The page scripts (overview.js, inbox.js, settings.js) are classic scripts
+// The page scripts (overview.js, inbox.js, survey.js, settings.js) are classic scripts
 // sharing this window's global scope: the top-level helpers below ($, el,
 // svgIcon, segmented, format*, toast, refresh, ...) are theirs too. Each page
 // registers { init(), show(params), refresh(view), hide?(), flush?(), tick?()
@@ -14,8 +14,12 @@
 var { Zotero } = ChromeUtils.importESModule("chrome://zotero/content/zotero.mjs");
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const PAGE_TITLES = { overview: "概览", inbox: "推荐", settings: "设置" };
-const PAGE_KEYS = ["overview", "inbox", "settings"];
+const PAGE_TITLES = { overview: "概览", inbox: "推荐", survey: "调研", settings: "设置" };
+const PAGE_KEYS = ["overview", "inbox", "survey", "settings"];
+// Keyboard shortcuts of the pages (Ctrl/Cmd + digit); 调研 came after the first three
+const PAGE_SHORTCUTS = { 1: "overview", 2: "inbox", 3: "settings", 4: "survey" };
+// Survey ids (src/survey/store.js isSurveyId): #survey/<id>
+const SURVEY_ID = /^[a-z0-9]{6,40}$/;
 
 /** Sections of the settings page (sidebar sub-navigation and #settings/<id>). */
 const SETTINGS_SECTIONS = [
@@ -236,11 +240,16 @@ function runStatus(view, now = Date.now()) {
   return { tone, label, next };
 }
 
-/** Parse "#settings/ai" into {page, section, route}; unknown pages fall back to the overview. */
+/**
+ * Parse "#settings/ai" or "#survey/<id>" into {page, section, route}; unknown
+ * pages fall back to the overview. The section of 调研 is the survey shown.
+ */
 function parseRoute(route) {
   const [name, section] = String(route || "").replace(/^#/, "").split("/");
   const page = PAGE_TITLES[name] ? name : "overview";
-  const sectionId = page === "settings" && SETTINGS_SECTIONS.some((s) => s.id === section) ? section : null;
+  let sectionId = null;
+  if (page === "settings" && SETTINGS_SECTIONS.some((s) => s.id === section)) sectionId = section;
+  if (page === "survey" && SURVEY_ID.test(section || "")) sectionId = section;
   return { page, section: sectionId, route: sectionId ? `${page}/${sectionId}` : page };
 }
 
@@ -276,8 +285,12 @@ function setSubtitle(key, text) {
 /** Highlight a settings section in the sidebar (also used by the settings page's scroll spy). */
 function setActiveSection(id) {
   shell.section = id || null;
+  highlightSection(shell.section);
+}
+
+function highlightSection(id) {
   for (const link of document.querySelectorAll(".subnav-item")) {
-    const on = link.dataset.section === shell.section;
+    const on = link.dataset.section === id;
     link.classList.toggle("active", on);
     if (on) link.setAttribute("aria-current", "true");
     else link.removeAttribute("aria-current");
@@ -290,7 +303,9 @@ function renderNav() {
     else item.removeAttribute("aria-current");
   }
   $("settings-nav").hidden = shell.page !== "settings";
-  setActiveSection(shell.page === "settings" ? shell.section : null);
+  // The section of another page (the survey shown on 调研) is not a settings section
+  if (shell.page === "settings") setActiveSection(shell.section);
+  else highlightSection(null);
 }
 
 /** Route of the page shown now ("inbox", "settings/ai", ...). */
@@ -305,6 +320,14 @@ function focusLost() {
 }
 
 /**
+ * Key of a remembered scroll position: the page, or the survey shown on 调研
+ * (its list and each survey keep their own position).
+ */
+function scrollKey(page, section) {
+  return page === "survey" && section ? `survey/${section}` : page;
+}
+
+/**
  * Switch to a page ("inbox", "settings/ai", ...). The document URL keeps no
  * route: Zotero stores the window's size and position under the document URI.
  */
@@ -313,7 +336,7 @@ function navigate(route) {
   const previous = shell.page;
   const pagesNode = $("pages");
   if (previous && previous !== next.page) {
-    shell.scroll[previous] = pagesNode.scrollTop;
+    shell.scroll[scrollKey(previous, shell.section)] = pagesNode.scrollTop;
     try {
       // Unsaved input (e.g. a settings field still in its debounce) is saved on leaving
       pages[previous]?.flush?.();
@@ -340,9 +363,10 @@ function navigate(route) {
   } catch (e) {
     Zotero.logError(e);
   }
-  if (previous !== next.page && !next.section) pagesNode.scrollTop = shell.scroll[next.page] || 0;
+  // A settings section scrolls itself into view; 调研 remembers its list and each survey
+  if (previous !== next.page && (!next.section || next.page === "survey")) pagesNode.scrollTop = shell.scroll[scrollKey(next.page, next.section)] || 0;
   // Switching from a control the switch hides (a link or button on the old
-  // page, Ctrl+1…3 in a field) would drop focus to the window: move it to
+  // page, Ctrl+1…4 in a field) would drop focus to the window: move it to
   // the new page's heading (sidebar buttons stay visible and keep it)
   if (previous && focusLost()) {
     try {
@@ -476,6 +500,8 @@ function toast(text, { tone = "info", key = null, duration = 2500 } = {}) {
 // ------------------------------------------------------------------ events
 
 function onAddonEvent(event) {
+  // Topic-survey events concern the 调研 page only (they would reload the shell on every progress step)
+  if (event.type === "survey") return;
   // shell.view keeps the run state current: the 60 s sidebar ticker repaints from it
   if (event.type === "start") {
     shell.bannerDismissed = null;
@@ -509,7 +535,7 @@ function onKeyDown(event) {
   const accel = Zotero.isMac ? event.metaKey : event.ctrlKey;
   const key = String(event.key || "").toLowerCase();
   if (accel && !event.altKey && !event.shiftKey) {
-    const page = { 1: "overview", 2: "inbox", 3: "settings" }[key];
+    const page = PAGE_SHORTCUTS[key];
     if (page) {
       event.preventDefault();
       navigate(page);

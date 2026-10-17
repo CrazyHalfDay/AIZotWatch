@@ -3,6 +3,8 @@
 // last run with one problem. Everything is relative to `now` so relative times
 // ("2 小时前") look the same on every run.
 
+import { createEmptySurveyFixtures, createSurveyFixtures } from "./preview-survey-fixtures.mjs";
+
 const HOUR = 3600000;
 const DAY = 86400000;
 
@@ -285,7 +287,7 @@ export function createFixtures(now = Date.now()) {
     "1234-5679": null,
   };
 
-  return { view, dashboard, connections, whitelist, apiStatus, journalSearch, authorSearch, proposals, journalNames, prefs: { "apis.openalexKey": "oa-preview-key", "apis.semanticScholarKey": "s2-preview-key", "sources.crossref.mailto": "li.wang@example.edu", "embedding.provider": "dashscope", "embedding.apiKey": "sk-preview", "llm.enabled": true, "llm.apiKey": "sk-preview", "followed.enabled": true, "followed.authors": "汪在聪, 0000-0002-3584-1673\nJay J. Ague, https://orcid.org/0000-0001-8408-0279\nCin-Ty Lee, https://openalex.org/A5023888391\n张伟（没有 ORCID）", "flagship.enabled": true, "flagship.issns": "0028-0836\n1476-4687\n0036-8075\n1095-9203\n2041-1723\n1752-0894\n1752-0908\n0091-7613\n1943-2682\n1234-5679", "sources.arxiv.enabled": true } };
+  return { view, dashboard, connections, whitelist, apiStatus, journalSearch, authorSearch, proposals, journalNames, ...createSurveyFixtures(now), prefs: { "apis.openalexKey": "oa-preview-key", "apis.semanticScholarKey": "s2-preview-key", "sources.crossref.mailto": "li.wang@example.edu", "embedding.provider": "dashscope", "embedding.apiKey": "sk-preview", "llm.enabled": true, "llm.apiKey": "sk-preview", "followed.enabled": true, "followed.authors": "汪在聪, 0000-0002-3584-1673\nJay J. Ague, https://orcid.org/0000-0001-8408-0279\nCin-Ty Lee, https://openalex.org/A5023888391\n张伟（没有 ORCID）", "flagship.enabled": true, "flagship.issns": "0028-0836\n1476-4687\n0036-8075\n1095-9203\n2041-1723\n1752-0894\n1752-0908\n0091-7613\n1943-2682\n1234-5679", "sources.arxiv.enabled": true } };
 }
 
 /** A fresh install: nothing has run yet. */
@@ -327,6 +329,7 @@ export function createEmptyFixtures(now = Date.now()) {
       apis: { openalexKey: false, semanticScholarKey: false, mailto: false, openalexUsage: null },
     },
     apiStatus: { openalexKey: false, semanticScholarKey: false, mailto: false, openalexUsage: null },
+    ...createEmptySurveyFixtures(now),
     prefs: {},
   };
 }

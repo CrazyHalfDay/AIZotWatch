@@ -6,3 +6,5 @@ zotwatch-menu-open =
         }
 zotwatch-menu-run =
     .label = ZotWatch: Check for New Papers
+zotwatch-menu-survey =
+    .label = Survey Related Literature with ZotWatch…
