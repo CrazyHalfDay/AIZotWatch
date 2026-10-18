@@ -399,6 +399,13 @@
   font-weight: 600;
 }
 
+/* The footnotes read as one block under the table */
+.jr-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .jr-note {
   margin: 0;
   color: var(--ink-3);

@@ -722,20 +722,29 @@
   padding-bottom: 0;
 }
 
+/* Name and detail on one line when they fit; a long detail (an embedding
+   model, an API budget) moves under the name instead of being cut off */
 .ov-source-main {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  min-width: 0;
 }
 
 .ov-source-name {
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .ov-source-detail {
-  margin-left: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--ink-3);
   font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ov-source-status {

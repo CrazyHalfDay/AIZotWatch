@@ -337,6 +337,10 @@ test("a failing service, paper or section is reported but does not stop the surv
   const sources = survey.errors.map((e) => `${e.stage}/${e.source}`);
   assert.ok(sources.includes("expand/Semantic Scholar"));
   assert.ok(survey.errors.some((e) => e.stage === "expand" && /连续失败 3 次/.test(e.message)), "a failing source is skipped after 3 failures");
+  // A number and the CJK text after it are spaced; a Chinese label is not
+  const messages = survey.errors.map((e) => e.message);
+  assert.ok(messages.some((m) => /^检索 \d+\/\d+ 失败：/.test(m)), messages.join("\n"));
+  assert.ok(messages.some((m) => m.startsWith("推荐文献失败：")), messages.join("\n"));
   assert.ok(survey.errors.some((e) => e.stage === "read" && /1 篇文献精读失败/.test(e.message)));
   assert.match(byTitle(survey, "Galaxy formation in the early universe").readError, /解析|JSON/);
   assert.ok(survey.errors.some((e) => e.stage === "write" && /一节生成失败/.test(e.message)));

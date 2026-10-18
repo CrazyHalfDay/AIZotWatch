@@ -11,9 +11,11 @@
 // Options (comma-separated lists):
 //   --pages overview,inbox,settings,settings/apis       routes to capture
 //   --schemes light,dark        --sizes 1120x820,820x700
-//   --states default,running,error,empty                 extra states (light, first size only)
+//   --states default,running,error,empty,draft           extra states (light, first size only;
+//                                                        draft = 调研 opened from the item context menu)
 //   --state-pages overview,inbox                         routes the extra states capture
 //                                                        (e.g. survey,survey/mvrunning01 for 调研)
+//   --state-matrix              capture the extra states in every scheme and size too
 //   --styleguide                also capture the shared components (main.css)
 //   --script <file.mjs>         run its default export `async (page, {route, scheme, size})`
 //                               before each screenshot (e.g. to type into fields)
@@ -46,7 +48,7 @@ const TYPES = {
 // ------------------------------------------------------------------ args
 
 function parseArgs(argv) {
-  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], statePages: ["overview", "inbox"], styleguide: false, script: null };
+  const opts = { out: null, pages: DEFAULT_PAGES, schemes: ["light", "dark"], sizes: ["1120x820", "820x700"], states: ["default"], statePages: ["overview", "inbox"], stateMatrix: false, styleguide: false, script: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const list = () => argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
@@ -55,6 +57,7 @@ function parseArgs(argv) {
     else if (arg === "--sizes") opts.sizes = list();
     else if (arg === "--states") opts.states = list();
     else if (arg === "--state-pages") opts.statePages = list();
+    else if (arg === "--state-matrix") opts.stateMatrix = true;
     else if (arg === "--styleguide") opts.styleguide = true;
     else if (arg === "--script") opts.script = resolve(argv[++i]);
     else if (!arg.startsWith("--")) opts.out = resolve(arg);
@@ -126,6 +129,7 @@ async function coreBundle() {
         'export { parseFollowedAuthors } from "./src/core/authors.js";',
         'export { journalRows, mergeWhitelistRows, summarizeWhitelist } from "./src/core/journals.js";',
         'export { autoValues } from "./src/settings.js";',
+        'export { FLAGSHIP_JOURNALS } from "./src/core/flagship.js";',
         'export { surveyMarkdown } from "./src/survey/report.js";',
       ].join("\n"),
       resolveDir: root,
@@ -169,6 +173,10 @@ function installMock({ fixtures, defaults, state }) {
     data.surveyDetails[entry.id] = { ...done, id: entry.id, status: "running", stage: "read", createdAt: entry.createdAt, updatedAt: Date.now(), completed: done.completed.slice(0, 6), report: null, references: [], themes: [], errors: [], running: true, progress: data.surveyProgress, counts: data.surveyProgress.counts, input: { ...done.input, topic: entry.topic, description: "" } };
   }
   const clone = (x) => JSON.parse(JSON.stringify(x));
+  // The template's seeds that a new survey's input names
+  const seedsOf = (template, input) => clone((template.seeds || []).filter((s) => (input.seedKeys || []).includes(s.key)));
+  // The state "draft": the window was opened from the item context menu with the selected items as seeds
+  let draft = state === "draft" ? { topic: data.selectedItems[0]?.title || "", topics: data.selectedItems.map((i) => i.title), seeds: clone(data.selectedItems) } : null;
   const surveyEntry = (s) => ({ id: s.id, topic: s.input.topic, createdAt: s.createdAt, updatedAt: s.updatedAt, status: s.status, depth: s.input.depth, stage: s.stage, counts: s.counts, error: s.error?.message || null, hasReport: !!s.report, llm: s.llm, interrupted: false, progress: null });
   /** Simulated survey run: progress through the stages, then a copy of the finished fixture. */
   function simulateSurvey(id, input) {
@@ -187,7 +195,7 @@ function installMock({ fixtures, defaults, state }) {
           await delay(250);
         }
       }
-      const finished = { ...clone(template), id, input: { ...template.input, ...input }, createdAt: Date.now(), updatedAt: Date.now() };
+      const finished = { ...clone(template), id, input: { ...template.input, ...input }, seeds: seedsOf(template, input), createdAt: Date.now(), updatedAt: Date.now() };
       data.surveyDetails[id] = finished;
       data.surveys = [surveyEntry(finished), ...data.surveys.filter((e) => e.id !== id)];
       data.surveyOptions.running = null;
@@ -301,10 +309,11 @@ function installMock({ fixtures, defaults, state }) {
     },
     async lookupJournalNames(issns) {
       await delay(200);
-      const builtIn = { "0028-0836": "Nature", "1476-4687": "Nature", "0036-8075": "Science", "1095-9203": "Science", "2041-1723": "Nature Communications", "1752-0894": "Nature Geoscience", "1752-0908": "Nature Geoscience" };
+      // The built-in flagship journals need no lookup (as in addon.lookupJournalNames)
+      const builtIn = Object.fromEntries(core.FLAGSHIP_JOURNALS.flatMap((j) => j.issns.map((issn) => [issn, j])));
       const names = {};
       for (const issn of issns) {
-        if (builtIn[issn]) names[issn] = { title: builtIn[issn], issns: [issn] };
+        if (builtIn[issn]) names[issn] = { title: builtIn[issn].title, issns: [...builtIn[issn].issns] };
         else if (Object.hasOwn(data.journalNames, issn)) names[issn] = data.journalNames[issn];
       }
       return { names, error: null };
@@ -345,7 +354,7 @@ function installMock({ fixtures, defaults, state }) {
       const id = `mvpreview${Math.floor(Math.random() * 1000)}`;
       const template = Object.values(data.surveyDetails).find((s) => s.status === "done");
       const keywords = String(input.keywords || "").split(/[\n,;，；、]+/).map((k) => k.trim()).filter(Boolean);
-      const detail = { ...clone(template), id, input: { ...template.input, ...input, keywords }, status: "running", stage: "seeds", completed: [], report: null, references: [], themes: [], pool: [], errors: [], createdAt: Date.now(), updatedAt: Date.now(), running: true, progress: null };
+      const detail = { ...clone(template), id, input: { ...template.input, ...input, keywords }, seeds: seedsOf(template, input), status: "running", stage: "seeds", completed: [], report: null, references: [], themes: [], pool: [], errors: [], createdAt: Date.now(), updatedAt: Date.now(), running: true, progress: null };
       data.surveyDetails[id] = detail;
       data.surveys.unshift({ ...surveyEntry(detail), hasReport: false });
       data.surveyOptions.running = { id, progress: null };
@@ -414,7 +423,11 @@ function installMock({ fixtures, defaults, state }) {
     async openSurvey() {
       return { topic: data.selectedItems[0]?.title || "", topics: data.selectedItems.map((i) => i.title), seeds: clone(data.selectedItems) };
     },
-    takeSurveyDraft: () => null,
+    takeSurveyDraft() {
+      const d = draft;
+      draft = null;
+      return d;
+    },
   };
 
   const Zotero = {
@@ -495,7 +508,7 @@ function renderStyleguide() {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.out) {
-    console.error("Usage: node scripts/preview.mjs <out-dir> [--pages a,b] [--schemes light,dark] [--sizes 1120x820,820x700] [--states default,running,error,empty] [--state-pages overview,inbox] [--styleguide] [--script file.mjs]");
+    console.error("Usage: node scripts/preview.mjs <out-dir> [--pages a,b] [--schemes light,dark] [--sizes 1120x820,820x700] [--states default,running,error,empty] [--state-pages overview,inbox] [--state-matrix] [--styleguide] [--script file.mjs]");
     process.exit(2);
   }
   if (!existsSync(join(contentDir, "main.xhtml"))) {
@@ -552,8 +565,10 @@ async function main() {
       }
     }
     for (const state of opts.states.filter((s) => s !== "default")) {
-      for (const route of opts.statePages) {
-        await capture({ route, scheme: opts.schemes[0], size: opts.sizes[0], state });
+      for (const scheme of opts.stateMatrix ? opts.schemes : opts.schemes.slice(0, 1)) {
+        for (const size of opts.stateMatrix ? opts.sizes : opts.sizes.slice(0, 1)) {
+          for (const route of opts.statePages) await capture({ route, scheme, size, state });
+        }
       }
     }
     if (opts.styleguide) {

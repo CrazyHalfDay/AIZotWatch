@@ -81,8 +81,8 @@ var ZotWatchSurvey = (() => {
     starting: false,
     formNodes: null,
     home: null,
-    // Result view: tab of the single column, and the side pane of the two-column layout
-    tab: "report",
+    // Result view: tab of the single column (null: not chosen, see activeTab), and the side pane of the two-column layout
+    tab: null,
     side: "candidates",
     table: { filter: "all", sort: "score", dir: "desc", limit: PAGE_SIZE },
     expanded: new Set(),
@@ -343,6 +343,7 @@ var ZotWatchSurvey = (() => {
     }
     const dd = st.dedupe;
     if (dd) lines.push(["去重", [`保留 ${n(dd.after) ?? 0} 篇`, dd.merged ? `合并 ${n(dd.merged)} 篇重复` : null, dd.inLibrary ? `${n(dd.inLibrary)} 篇已在文库` : null].filter(Boolean).join("，")]);
+    if (st.rank) lines.push(["排序", `按相似度、与种子的关联、被引次数和新近程度为 ${n(st.rank.ranked) ?? 0} 篇打分`]);
     if (st.enrich) {
       const e = st.enrich;
       lines.push(["补全", [Number.isFinite(e.missing) ? `补全摘要 ${n(e.filled ?? 0)}/${n(e.missing)} 篇` : null, e.tldr ? `TLDR ${n(e.tldr)} 篇` : null].filter(Boolean).join("，") || "无需补全"]);
@@ -352,6 +353,15 @@ var ZotWatchSurvey = (() => {
       lines.push(["精读", rd.skipped ? "未启用大模型，跳过" : [`精读 ${n((rd.read ?? 0) + (rd.cached ?? 0))} 篇`, rd.cached ? `其中 ${n(rd.cached)} 篇来自缓存` : null, rd.failed ? `${n(rd.failed)} 篇失败` : null].filter(Boolean).join("，")]);
     }
     if (st.themes) lines.push(["主题", `${n(st.themes.themes) ?? 0} 个${st.themes.labelled === "llm" ? "，由大模型命名" : "，以关键词命名"}`]);
+    const wr = st.write;
+    if (wr?.kind === "review") {
+      lines.push([
+        "综述",
+        [`${n(wr.sections) ?? 0} 节`, wr.failed ? `${n(wr.failed)} 节生成失败` : null, wr.unverified ? `${n(wr.unverified)} 节没有有效引用` : null].filter(Boolean).join("，"),
+      ]);
+    } else if (wr?.kind === "list") {
+      lines.push(["综述", `未启用大模型，按 ${n(wr.groups) ?? 0} 组列出候选文献`]);
+    }
     return lines;
   }
 
@@ -823,6 +833,18 @@ var ZotWatchSurvey = (() => {
     };
   }
 
+  /**
+   * Empty the form for the next survey once one has started (its input is
+   * kept with the survey); the depth and the sources stay as chosen.
+   */
+  function resetForm() {
+    Object.assign(state.form, { topic: "", description: "", keywords: "", seeds: [], yearFrom: "" });
+    if (!state.formNodes) return;
+    setSeedStatus("");
+    state.formNodes.seedSearch.clear();
+    syncFormInputs();
+  }
+
   function clearFormError() {
     const n = state.formNodes;
     if (!n || n.error.hidden) return;
@@ -852,6 +874,7 @@ var ZotWatchSurvey = (() => {
     try {
       const { id } = await api().startSurvey(input);
       clearFormError();
+      resetForm();
       state.options = { ...options(), running: { id, progress: null } };
       setNavDot(true);
       navigate(`survey/${id}`);
@@ -1258,7 +1281,8 @@ var ZotWatchSurvey = (() => {
       "div",
       { class: "callout warning sv-problems" },
       svgIcon("alert"),
-      el("div", { class: "callout-body" }, el("div", { class: "callout-title", text: `调研中有 ${errors.length} 个问题（其余步骤照常完成）` }), list),
+      // Only a finished survey went on past its problems; a stopped one says why in its own callout
+      el("div", { class: "callout-body" }, el("div", { class: "callout-title", text: `调研中有 ${errors.length} 个问题${s.status === "done" ? "（其余步骤照常完成）" : ""}` }), list),
     );
   }
 
@@ -1297,6 +1321,15 @@ var ZotWatchSurvey = (() => {
     });
   }
 
+  /**
+   * Tab of the single column: the one chosen, else the review, or the
+   * candidates found so far of a survey without one (cancelled or failed).
+   */
+  function activeTab(s) {
+    if (["report", "candidates", "themes"].includes(state.tab)) return state.tab;
+    return !s?.report && Array.isArray(s?.pool) && s.pool.length ? "candidates" : "report";
+  }
+
   /** The tabs and panes under the header (re-rendered alone on a tab, filter or sort change). */
   function renderBody() {
     const s = state.survey;
@@ -1329,7 +1362,7 @@ var ZotWatchSurvey = (() => {
         el("div", { class: "sv-col sv-col-side" }, el("div", { class: "sv-tabs" }, sideSeg.node), side === "themes" ? themesPane(s) : candidatesPane(s)),
       );
     } else {
-      const tab = ["report", "candidates", "themes"].includes(state.tab) ? state.tab : "report";
+      const tab = activeTab(s);
       const tabSeg = seg(
         "tab",
         [
@@ -1377,7 +1410,7 @@ var ZotWatchSurvey = (() => {
 
   /** Scroll to a reference and highlight it (switching to the 综述 tab in one column). */
   function jumpToRef(n) {
-    if (!isWide() && state.tab !== "report") {
+    if (!isWide() && activeTab(state.survey) !== "report") {
       state.tab = "report";
       renderBody();
     }
@@ -2061,7 +2094,7 @@ var ZotWatchSurvey = (() => {
     if (id !== state.id) {
       state.id = id;
       state.survey = state.survey?.id === id ? state.survey : null;
-      state.tab = "report";
+      state.tab = null;
       state.table = { ...state.table, filter: "all", limit: PAGE_SIZE };
       state.expanded = new Set();
       state.rowErrors = new Map();

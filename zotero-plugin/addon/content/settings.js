@@ -707,6 +707,7 @@ var ZotWatchSettings = (() => {
       ? [`已识别 ${authors.length} 位作者`, invalid.length ? `${invalid.length} 行无法识别` : null].filter(Boolean).join(" · ")
       : "还没有关注的作者：在上面搜索后点「关注」，或在「编辑文本」中按行填写";
     host.head.classList.toggle("warning", invalid.length > 0);
+    if (host.title) host.title.hidden = !authors.length && !invalid.length;
     host.list.replaceChildren(
       ...authors.map((a) =>
         el(
@@ -1568,7 +1569,7 @@ var ZotWatchSettings = (() => {
           ),
         ),
       ),
-      ...notes.map((text) => el("p", { class: "jr-note", text })),
+      notes.length ? el("div", { class: "jr-notes" }, ...notes.map((text) => el("p", { class: "jr-note", text }))) : null,
       el("div", { class: "jr-foot" }, button, cancel),
     );
     wl.panel.hidden = false;
@@ -1830,9 +1831,11 @@ var ZotWatchSettings = (() => {
     ],
 
     followed: () => {
-      const head = el("p", { class: "sf-preview-head" });
-      const list = el("ul", { class: "sf-preview-list sf-rows" });
-      state.followedPreview = { head, list };
+      // The same header as the 顶刊列表: a title (when there are rows) and the counts
+      const head = el("span", { class: "sf-meta sf-preview-head" });
+      const title = el("span", { class: "sf-list-title", text: "关注列表" });
+      const list = el("ul", { class: "sf-preview-list sf-rows", "aria-label": "关注列表" });
+      state.followedPreview = { head, title, list };
       const box = createSearchBox({
         id: "sp-author-search",
         label: "搜索作者",
@@ -1855,7 +1858,7 @@ var ZotWatchSettings = (() => {
         emptyText: "OpenAlex 中没有找到匹配的作者",
         hint: keyHint(),
       });
-      const preview = el("div", { class: "sf-preview", "aria-live": "polite" }, head, list);
+      const preview = el("div", { class: "sf-preview", "aria-live": "polite" }, el("div", { class: "sf-list-head" }, title, head), list);
       return [
         card(
           { toggle: "followed.enabled" },

@@ -517,4 +517,16 @@ test("调研 remembers the scroll position of its list and of each survey", () =
   w.window.ZotWatchMain.navigate("overview");
   w.window.ZotWatchMain.navigate("survey/bbbbbb2");
   assert.equal(pagesNode.scrollTop, 0, "another survey starts at the top");
+  // Within 调研: from the list (scrolled down to the history) to a survey and back
+  w.window.ZotWatchMain.navigate("survey");
+  pagesNode.scrollTop = 640;
+  w.window.ZotWatchMain.navigate("survey/aaaaaa1");
+  assert.equal(pagesNode.scrollTop, 300, "the survey's own position");
+  w.window.ZotWatchMain.navigate("survey");
+  assert.equal(pagesNode.scrollTop, 640, "back on the list where it was left");
+  // Settings sections still share one position (a section scrolls itself into view)
+  w.window.ZotWatchMain.navigate("settings");
+  pagesNode.scrollTop = 120;
+  w.window.ZotWatchMain.navigate("settings/ai");
+  assert.equal(pagesNode.scrollTop, 120);
 });

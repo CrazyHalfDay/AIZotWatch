@@ -615,8 +615,19 @@ test("followed authors and the journal list have live previews; whitelist edits 
   assert.match(byClass(preview, "sf-author")[1].textContent, /OpenAlexA5023888391/);
   assert.equal(byClass(preview, "sf-invalid")[0].textContent, "无法识别：nobody");
   assert.equal(byClass(preview, "sf-preview-head")[0].textContent, "已识别 2 位作者 · 1 行无法识别");
+  // Like the 顶刊列表: a list title next to the counts, shown only with rows
+  const listTitle = byClass(preview, "sf-list-title")[0];
+  assert.equal(listTitle.textContent, "关注列表");
+  assert.equal(listTitle.hidden, false);
   await clock.advance(600);
   assert.equal(values.get("followed.authors"), authors.value);
+  authors.value = "";
+  authors.dispatch("input");
+  assert.equal(listTitle.hidden, true);
+  assert.match(byClass(preview, "sf-preview-head")[0].textContent, /^还没有关注的作者/);
+  authors.value = "汪在聪, 0000-0002-3584-1673\nA. Smith A5023888391\nnobody";
+  authors.dispatch("input");
+  await clock.advance(600);
 
   // Showing a section never writes the whitelist back (it is only saved after an edit)
   page.show({ section: "journals" });

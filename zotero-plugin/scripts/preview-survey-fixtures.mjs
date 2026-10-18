@@ -21,7 +21,7 @@ const person = (name) => {
 
 /**
  * Papers: [title, venue, year, citations, via, scores {total, sim, link, cites, recency}, theme (null: not read),
- * reading note fields or null, extra]. Order = rank.
+ * reading note fields or null, extra]. Ranks are assigned by score in buildPool.
  */
 const PAPERS = [
   ["Copper isotope fractionation during magmatic sulfide saturation and porphyry ore formation", "Geochimica et Cosmochimica Acta", 2019, 142, ["seed", "search"], [0.93, 1, 1, 0.82, 0.6], 0,
@@ -140,7 +140,7 @@ function buildPool(now) {
       itemKey: extra.itemKey || null,
       searchHits: via.includes("search") ? 2 : 0,
       scores: { total, sim, cosine: Math.round((0.35 + sim * 0.4) * 1000) / 1000, link, cites, recency },
-      rank: i + 1,
+      rank: null,
     };
     if (note) {
       const [question, method, data, findings, contribution, limitations, relevance] = note;
@@ -150,6 +150,8 @@ function buildPool(now) {
     }
     return paper;
   });
+  // Ranks follow the total score (as stage 5 sets them); the pool is stored best first
+  pool.sort((a, b) => b.scores.total - a.scores.total).forEach((p, i) => (p.rank = i + 1));
   // References: by theme, then score (the order the engine numbers them)
   const byTheme = THEMES.map((_, t) => read.filter((p) => p.theme === t));
   let n = 0;
@@ -205,7 +207,7 @@ export function createSurveyFixtures(now = Date.now()) {
     themes,
     references,
     report: { kind: "review", ...REPORT, generatedAt: created + 9 * 60000, model: "deepseek/deepseek-chat" },
-    errors: [{ stage: "expand", source: "Crossref", message: "检索 6/7失败：HTTP 504 for https://api.crossref.org/works?query.bibliographic=…" }],
+    errors: [{ stage: "expand", source: "Crossref", message: "检索 6/7 失败：HTTP 504 for https://api.crossref.org/works?query.bibliographic=…" }],
     error: null,
     counts: { seeds: 2, candidates: pool.length, read: readIds.length, references: references.length },
     llm: true,
@@ -231,8 +233,55 @@ export function createSurveyFixtures(now = Date.now()) {
     progress: null,
     ...extra,
   });
-  const cancelled = { ...done, id: "mvn8w1k02b", input: { ...input, topic: "俯冲带流体的氧化还原状态", depth: "quick", seedKeys: [] }, status: "cancelled", stage: "read", createdAt: now - 2 * DAY, updatedAt: now - 2 * DAY + 4 * 60000, completed: SURVEY_STAGES.slice(0, 6).map((s) => s.key), report: null, references: [], themes: [], counts: { seeds: 0, candidates: 142, read: 6, references: 0 } };
-  const failed = { ...done, id: "mvk3p9x07c", input: { ...input, topic: "Tibetan Plateau uplift and monsoon climate", depth: "deep" }, status: "failed", stage: "expand", createdAt: now - 6 * DAY, updatedAt: now - 6 * DAY + 60000, completed: ["seeds", "queries"], report: null, references: [], themes: [], pool: [], error: { stage: "expand", message: "所有数据源都请求失败：OpenAlex 免费额度已用完（HTTP 429）" }, counts: { seeds: 2, candidates: 0, read: 0, references: 0 } };
+  // Cancelled while reading (keywords only, 6 papers read so far) and failed while expanding
+  const stagesUpTo = (keys) => Object.fromEntries(Object.entries(done.stages).filter(([key]) => keys.includes(key)));
+  const cancelledPool = pool.map((p, i) => {
+    const { read, theme, ...rest } = p;
+    return i < 6 && read ? { ...rest, read } : rest;
+  });
+  const cancelledStages = SURVEY_STAGES.slice(0, 6).map((s) => s.key);
+  const cancelled = {
+    ...done,
+    id: "mvn8w1k02b",
+    input: { ...input, topic: "俯冲带流体的氧化还原状态", description: "", keywords: ["slab fluids", "redox state", "oxygen fugacity"], depth: "quick", seedKeys: [] },
+    status: "cancelled",
+    stage: "read",
+    createdAt: now - 2 * DAY,
+    updatedAt: now - 2 * DAY + 4 * 60000,
+    finishedAt: null,
+    completed: cancelledStages,
+    stages: { ...stagesUpTo(cancelledStages), seeds: { seeds: 0, missing: 0, openalex: 0, s2: 0, fullText: 0, at: now - 2 * DAY } },
+    seeds: [],
+    queries: ["slab fluid redox state", "oxygen fugacity subduction zone fluids", "sulfur speciation slab-derived fluids", "俯冲带流体的氧化还原状态"],
+    pool: cancelledPool,
+    readIds: [],
+    report: null,
+    references: [],
+    themes: [],
+    errors: [],
+    counts: { seeds: 0, candidates: pool.length, read: 6, references: 0 },
+  };
+  const failed = {
+    ...done,
+    id: "mvk3p9x07c",
+    input: { ...input, topic: "Tibetan Plateau uplift and monsoon climate", description: "", keywords: ["Tibetan Plateau uplift", "Asian monsoon"], depth: "deep" },
+    status: "failed",
+    stage: "expand",
+    createdAt: now - 6 * DAY,
+    updatedAt: now - 6 * DAY + 60000,
+    finishedAt: null,
+    completed: ["seeds", "queries"],
+    stages: stagesUpTo(["seeds", "queries"]),
+    queries: ["Tibetan Plateau uplift monsoon", "Asian monsoon onset Cenozoic", "Tibetan Plateau uplift"],
+    pool: [],
+    readIds: [],
+    report: null,
+    references: [],
+    themes: [],
+    errors: [{ stage: "expand", source: "Semantic Scholar", message: "检索 1/3 失败：HTTP 429 Too Many Requests" }],
+    error: { stage: "expand", message: "所有数据源都请求失败：OpenAlex 免费额度已用完（HTTP 429）" },
+    counts: { seeds: 2, candidates: 0, read: 0, references: 0 },
+  };
 
   // Made without an LLM: nothing read, the result is the candidate list grouped by cluster (labels = top terms)
   const listThemes = themes.map((t) => ({ ...t, label: t.terms.join(" · "), summary: "" }));
@@ -250,7 +299,15 @@ export function createSurveyFixtures(now = Date.now()) {
     pool: listPool,
     readIds: [],
     themes: listThemes,
-    stages: { ...stageSummaries(now - 26 * HOUR, pool.length, 0), read: { skipped: true, at: now - 26 * HOUR }, themes: { themes: 3, papers: 12, labelled: "terms", at: now - 26 * HOUR } },
+    // Without the LLM the queries are the keywords and the topic, nothing is read and the result is a list
+    queries: ["铜同位素勘查矢量", input.keywords.join(" "), ...input.keywords],
+    stages: {
+      ...stageSummaries(now - 26 * HOUR, pool.length, 0),
+      queries: { queries: 5, source: "input", at: now - 26 * HOUR },
+      read: { skipped: true, reason: "llm-off", at: now - 26 * HOUR },
+      themes: { themes: 3, papers: 12, labelled: "terms", at: now - 26 * HOUR },
+      write: { kind: "list", groups: 3, at: now - 26 * HOUR },
+    },
     report: { kind: "list", title: "铜同位素勘查矢量（未启用大模型）", notice: NO_LLM_NOTICE, groups: listThemes.map((t, i) => ({ label: t.label, terms: t.terms, refs: references.filter((r) => r.theme === i).map((r) => r.n) })), generatedAt: now - 26 * HOUR + 3 * 60000, model: null },
     errors: [],
     counts: { seeds: 2, candidates: pool.length, read: 0, references: references.length },
@@ -270,7 +327,11 @@ export function createSurveyFixtures(now = Date.now()) {
       { key: "SEEDKEY2", title: "Sulfur isotopes of arc magmas", year: 2020, creators: ["Li Wang"], doi: "10.5555/survey.17", itemType: "journalArticle" },
       { key: "LIBKEY3", title: "Porphyry copper deposits of the world: database and grade-tonnage models", year: 2008, creators: ["Dennis Singer"], doi: null, itemType: "report" },
     ],
-    selectedItems: [{ key: "SEEDKEY1", title: PAPERS[0][0], year: 2019, creators: ["Li Wang", "Mei Chen"], doi: "10.5555/survey.1", itemType: "journalArticle", tags: ["Copper isotopes", "Porphyry"] }],
+    // Items selected in Zotero's main window (使用 Zotero 中选中的条目, and the item context menu's draft)
+    selectedItems: [
+      { key: "SEEDKEY1", title: PAPERS[0][0], year: 2019, creators: ["Li Wang", "Mei Chen"], doi: "10.5555/survey.1", itemType: "journalArticle", tags: ["Copper isotopes", "Porphyry"] },
+      { key: "SEEDKEY2", title: "Sulfur isotopes of arc magmas", year: 2020, creators: ["Li Wang"], doi: "10.5555/survey.17", itemType: "journalArticle", tags: ["Sulfur"] },
+    ],
   };
 }
 

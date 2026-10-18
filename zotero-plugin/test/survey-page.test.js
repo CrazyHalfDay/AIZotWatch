@@ -547,6 +547,11 @@ test("survey page helpers: citations, keywords, validation, provenance, sorting,
   assert.match(lines.get("检索词"), /copper isotope fractionation porphyry；/);
   assert.match(lines.get("扩展"), /找到 21 篇不重复的文献（各来源返回 OpenAlex 24 条、Semantic Scholar 9 条、Crossref 5 条），请求 31 次（1 次失败），3 篇早于起始年份被排除，候选池保留 18 篇/);
   assert.equal(lines.get("精读"), "精读 12 篇，其中 2 篇来自缓存");
+  assert.equal(lines.get("排序"), "按相似度、与种子的关联、被引次数和新近程度为 17 篇打分");
+  assert.equal(lines.get("综述"), "3 节");
+  assert.deepEqual([...lines.keys()], ["种子", "检索词", "扩展", "去重", "排序", "补全", "精读", "主题", "综述"], "in stage order");
+  assert.equal(new Map(plain(page.processLines({ stages: { write: { kind: "review", sections: 4, failed: 1, unverified: 2 } } }))).get("综述"), "4 节，1 节生成失败，2 节没有有效引用");
+  assert.equal(new Map(plain(page.processLines({ stages: { write: { kind: "list", groups: 3 } } }))).get("综述"), "未启用大模型，按 3 组列出候选文献");
   assert.deepEqual(plain(page.processLines({ stages: "garbage", queries: "x" })), []);
   assert.deepEqual(plain(page.processLines({ stages: { read: { skipped: true } } })), [["精读", "未启用大模型，跳过"]]);
 });
@@ -651,14 +656,23 @@ test("new survey: validation, seeds from the library and the selection, cost hin
   assert.equal(w.api.lastPage, "survey/newsurvey01", "the new survey is shown");
   assert.equal(w.doc.getElementById("nav-survey-dot").hidden, false, "the sidebar shows a survey running");
 
-  // A refused start (another survey runs) is shown on the form
+  // Back on the list the form is empty for the next survey; depth and sources stay as chosen
   await w.navigate("survey");
+  for (const id of ["sv-topic", "sv-description", "sv-keywords", "sv-year", "sv-seed-search"]) assert.equal(byId(root, id).value, "", id);
+  assert.equal(byClass(root, "sv-seed").length, 0);
+  assert.equal(byClass(root, "sv-seed-status")[0].hidden, true);
+  assert.equal(byKey(root, "depth:deep").getAttribute("aria-pressed"), "true");
+  assert.equal(byId(root, "sv-source-crossref").checked, true);
+
+  // A refused start (another survey runs) is shown on the form, which keeps its input
   control.errors.start = "已有一项调研正在进行，请等待它完成或先取消";
   const again = byId(root, "sv-start");
   w.control.options.running = null;
   w.emit({ type: "survey", action: "cancelled", id: "newsurvey01" });
   await flush();
   assert.equal(again.disabled, false);
+  type(byId(root, "sv-topic"), "第二项调研");
+  type(byId(root, "sv-keywords"), "slab fluids");
   again.click();
   await flush();
   assert.equal(byClass(root, "sv-form-error")[0].textContent, "已有一项调研正在进行，请等待它完成或先取消");
@@ -773,6 +787,12 @@ test("the running view: stepper, counters, cancel; it turns into the result when
   assert.ok(has(root, "已完成到「补全」，「继续」会从下一步开始。"));
   for (const key of ["save", "export", "regenerate"]) assert.equal(byKey(root, key), null, key);
   assert.ok(byKey(root, "delete"));
+  // Without a review yet, the candidates found so far are shown first
+  assert.equal(byKey(root, "tab:candidates").getAttribute("aria-pressed"), "true");
+  assert.equal(byClass(root, "sv-table")[0].querySelectorAll("tr").length, 18, "header + 17 candidates");
+  byKey(root, "tab:report").click();
+  assert.ok(has(root, "还没有生成综述"));
+  assert.equal(byKey(root, "tab:report").getAttribute("aria-pressed"), "true", "a chosen tab stays");
 
   // 继续 → the survey runs: the running view with its stepper
   const progress = { stage: "read", index: 6, label: "精读", message: "精读 5/15：Paper", current: 5, total: 15, counts: { seeds: 0, candidates: 142, read: 5, references: 0 } };
@@ -829,7 +849,7 @@ test("a finished survey: review with [n] citations, references, candidates and t
   assert.equal(byClass(root, "sv-status")[0].textContent, "已完成");
   assert.match(byClass(root, "sv-meta")[0].textContent, / · 深度：标准 · 种子 2 篇 · 候选 17 篇 · 精读 12 篇 · 模型 deepseek\/deepseek-chat$/);
   assert.ok(has(root, "本综述由 AI 根据所列文献"), "the AI notice");
-  assert.ok(has(root, "调研中有 1 个问题"));
+  assert.ok(has(root, "调研中有 1 个问题（其余步骤照常完成）"));
   assert.equal(byClass(root, "sv-sec-title").map((n) => n.textContent).join("|"), "总述|岩浆–热液过程中的铜同位素分馏|铜同位素分带与勘查应用|流体沸腾与去气的实验约束|主要争议|研究空白|未来方向|推荐阅读顺序");
   // Model text is text: "[1, 4]" became two buttons inside a superscript group
   const summary = byClass(root, "sv-summary")[0];
@@ -1031,6 +1051,9 @@ test("actions that do not apply are disabled: no LLM, another survey running, a 
   assert.ok(has(root, "所有数据源都请求失败：OpenAlex 免费额度已用完（HTTP 429）。已完成到「检索词」，「继续」会从下一步开始。另一项调研完成或取消后才能继续。"));
   assert.ok(has(root, "还没有生成综述"));
   assert.ok(has(root, "还没有候选文献") === false, "the report tab is shown first");
+  // A stopped survey's problems do not claim that the rest went on
+  assert.ok(has(root, "调研中有 1 个问题扩展 · Semantic Scholar：检索 1/3 失败"));
+  assert.equal(has(root, "其余步骤照常完成"), false);
   byKey(root, "tab:candidates").click();
   assert.ok(has(root, "还没有候选文献"));
 

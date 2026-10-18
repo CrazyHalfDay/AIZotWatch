@@ -507,7 +507,9 @@ export class SurveyEngine {
           if (isCancel(e)) throw e;
           failures++;
           stats.failed++;
-          this.warn(survey, { source: name, message: `${task.label}失败：${message(e)}${failures >= MAX_SOURCE_FAILURES ? `（连续失败 ${MAX_SOURCE_FAILURES} 次，跳过其余请求）` : ""}` });
+          // "检索 6/7 失败" but "推荐文献失败": a space only after a number
+          const label = /\d$/.test(task.label) ? `${task.label} ` : task.label;
+          this.warn(survey, { source: name, message: `${label}失败：${message(e)}${failures >= MAX_SOURCE_FAILURES ? `（连续失败 ${MAX_SOURCE_FAILURES} 次，跳过其余请求）` : ""}` });
         }
         checkpoint();
         papers.forEach((p, rank) => collector.add(p, task.via, task.kind === "search" ? { searchRank: rank } : {}));

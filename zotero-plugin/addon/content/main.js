@@ -335,8 +335,10 @@ function navigate(route) {
   const next = parseRoute(route);
   const previous = shell.page;
   const pagesNode = $("pages");
+  // 调研's list and each survey are separate views of one page, with their own scroll positions
+  const moved = previous !== next.page || (next.page === "survey" && scrollKey(previous, shell.section) !== scrollKey(next.page, next.section));
+  if (previous && moved) shell.scroll[scrollKey(previous, shell.section)] = pagesNode.scrollTop;
   if (previous && previous !== next.page) {
-    shell.scroll[scrollKey(previous, shell.section)] = pagesNode.scrollTop;
     try {
       // Unsaved input (e.g. a settings field still in its debounce) is saved on leaving
       pages[previous]?.flush?.();
@@ -364,7 +366,7 @@ function navigate(route) {
     Zotero.logError(e);
   }
   // A settings section scrolls itself into view; 调研 remembers its list and each survey
-  if (previous !== next.page && (!next.section || next.page === "survey")) pagesNode.scrollTop = shell.scroll[scrollKey(next.page, next.section)] || 0;
+  if (moved && (!next.section || next.page === "survey")) pagesNode.scrollTop = shell.scroll[scrollKey(next.page, next.section)] || 0;
   // Switching from a control the switch hides (a link or button on the old
   // page, Ctrl+1…4 in a field) would drop focus to the window: move it to
   // the new page's heading (sidebar buttons stay visible and keep it)
