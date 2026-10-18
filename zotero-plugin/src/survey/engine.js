@@ -17,13 +17,12 @@
 // cancellation always propagates.
 
 import { mapWithConcurrency } from "../core/http.js";
-import { TitleIndex } from "../core/dedupe.js";
-import { collapseWhitespace, contentForEmbedding, normalizeDoi } from "../core/text.js";
+import { collapseWhitespace, contentForEmbedding, normalizeDoi, normalizeTitle } from "../core/text.js";
 import { CancelledError } from "../engine.js";
 import { createEmbedder } from "../embedding/providers.js";
 import { createLlmClient } from "../llm/llm.js";
 import { enrichMissingAbstracts } from "../sources/abstracts.js";
-import { PaperCollector, VIA_REC, VIA_SEARCH, VIA_SEED, dedupePool, selectPool, viaCites, viaRef } from "./pool.js";
+import { PaperCollector, VIA_REC, VIA_SEARCH, VIA_SEED, dedupePool, sameTitle, selectPool, viaCites, viaRef, yearsAgree } from "./pool.js";
 import { SURVEY_DEPTHS, SURVEY_STAGES, STAGE_KEYS } from "./presets.js";
 import {
   MAX_EXCERPT_CHARS,
@@ -66,8 +65,10 @@ const MAX_SOURCE_FAILURES = 3;
 // Reading notes: LLM calls at once, and failures before giving up when none succeeded
 const READ_CONCURRENCY = 2;
 const READ_GIVE_UP = 3;
-// Full text read from the library for an excerpt (the excerpt itself is MAX_EXCERPT_CHARS)
-const FULL_TEXT_CHARS = 60000;
+// Full text read from the library for an excerpt (the excerpt itself is MAX_EXCERPT_CHARS):
+// all of it (Zotero indexes 500,000 characters by default), so that the excerpt finds the
+// conclusions and the reference list of a long paper
+const FULL_TEXT_CHARS = 500000;
 // Papers of a theme shown to the section prompt
 const MAX_SECTION_PAPERS = 25;
 const MAX_READING = 12;
@@ -78,6 +79,17 @@ const message = (e) => String(e?.message || e || "未知错误");
 const isCancel = (e) => !!e?.cancelled || e instanceof CancelledError;
 // Mostly Latin text: a query the English databases can match
 const LATIN = /^[\p{Script=Latin}\p{N}\s\p{P}\p{S}]+$/u;
+
+/**
+ * The search result that is the seed: the same normalised title first, else
+ * the same title up to spelling variants (pool.js sameTitle: not "…: a
+ * review", "Corrigendum to …" or another part), from about the same year.
+ */
+export function titleMatch(seed, results) {
+  const title = normalizeTitle(seed.title);
+  const list = (results || []).filter((p) => p && yearsAgree(seed.year, p.year));
+  return list.find((p) => normalizeTitle(p.title) === title) || list.find((p) => sameTitle(seed.title, p.title)) || null;
+}
 
 /**
  * A new survey record for a validated input (see normalizeSurveyInput).
@@ -201,7 +213,16 @@ export class SurveyEngine {
       if (at < 0) throw new Error(`Unknown survey stage: ${from}`);
       survey.completed = survey.completed.filter((key) => STAGE_KEYS.indexOf(key) < at);
     }
-    const start = STAGE_KEYS.findIndex((key) => !survey.completed.includes(key));
+    let start = STAGE_KEYS.findIndex((key) => !survey.completed.includes(key));
+    if (!from && start >= 0 && start <= STAGE_KEYS.indexOf("expand")) {
+      // Seeds and queries that finished with failed lookups (an outage) are redone
+      // before the expansion that needs them; they are cheap
+      const redo = STAGE_KEYS.findIndex((key, i) => i < start && survey.stages[key]?.retry);
+      if (redo >= 0) {
+        start = redo;
+        survey.completed = survey.completed.filter((key) => STAGE_KEYS.indexOf(key) < redo);
+      }
+    }
     survey.status = "running";
     survey.error = null;
     survey.finishedAt = null;
@@ -252,9 +273,12 @@ export class SurveyEngine {
     return ctx.libraryItems;
   }
 
-  /** Full text of a library item (cached for the run), "" when it has none. */
+  /**
+   * Full text of a library item as {length, excerpt} (fullTextExcerpt; only
+   * the excerpt is kept for the run), {length: 0, excerpt: ""} when it has none.
+   */
   async fullTextOf(ctx, key) {
-    if (!key || typeof this.library.getItemFullText !== "function") return "";
+    if (!key || typeof this.library.getItemFullText !== "function") return { length: 0, excerpt: "" };
     if (!ctx.fullTexts.has(key)) {
       let text = "";
       try {
@@ -262,7 +286,8 @@ export class SurveyEngine {
       } catch (e) {
         this.log(`Full text of ${key} unavailable: ${message(e)}`);
       }
-      ctx.fullTexts.set(key, typeof text === "string" ? text : "");
+      text = typeof text === "string" ? text : "";
+      ctx.fullTexts.set(key, { length: text.length, excerpt: text ? fullTextExcerpt(text, MAX_EXCERPT_CHARS) : "" });
     }
     return ctx.fullTexts.get(key);
   }
@@ -308,6 +333,8 @@ export class SurveyEngine {
     const seeds = survey.seeds;
     const sources = this.sourcesOf(survey);
 
+    // Lookups that failed (not "not found"): the stage is redone when the survey goes on
+    let lookupFailed = false;
     if (sources.openalex && seeds.length) {
       let failures = 0;
       for (const [i, seed] of seeds.entries()) {
@@ -328,6 +355,7 @@ export class SurveyEngine {
           }
         } catch (e) {
           if (isCancel(e)) throw e;
+          lookupFailed = true;
           this.warn(survey, { source: "OpenAlex", message: `种子文献查找失败：${message(e)}` });
           if (++failures >= MAX_SOURCE_FAILURES) break;
         }
@@ -344,6 +372,7 @@ export class SurveyEngine {
         }
       } catch (e) {
         if (isCancel(e)) throw e;
+        lookupFailed = true;
         this.warn(survey, { source: "Semantic Scholar", message: `种子文献查找失败：${message(e)}` });
       }
     }
@@ -357,22 +386,19 @@ export class SurveyEngine {
       openalex: seeds.filter((s) => s.openalexId).length,
       s2: seeds.filter((s) => s.s2Id).length,
       fullText: seeds.filter((s) => s.fullText > 0).length,
+      retry: lookupFailed,
     };
   }
 
-  /** OpenAlex id of a seed without a DOI by an exact (fuzzy) title match; null when none. */
+  /** OpenAlex id of a seed not found by DOI, by its title (see titleMatch); null when none. */
   async openAlexByTitle(seed) {
     const results = await openAlexSearch(this.http, seed.title, { limit: 5, ...this.openAlexOptions });
-    const index = new TitleIndex(0.95);
-    index.add(seed.title);
-    return results.find((p) => index.has(p.title))?.openalexId || null;
+    return titleMatch(seed, results)?.openalexId || null;
   }
 
   async s2ByTitle(seed) {
     const results = await s2SearchPapers(this.http, seed.title, { limit: 5, ...this.s2Options });
-    const index = new TitleIndex(0.95);
-    index.add(seed.title);
-    return results.find((p) => index.has(p.title))?.s2Id || null;
+    return titleMatch(seed, results)?.s2Id || null;
   }
 
   // ------------------------------------------------------- 2. queries
@@ -393,6 +419,7 @@ export class SurveyEngine {
     let queries = inputQueries.slice(0, preset.maxQueries);
     let terms = [];
     let source = "input";
+    let retry = false;
     if (this.llmOn) {
       try {
         const reply = await this.llm.chat(queryPrompt(input, survey.seeds), { maxTokens: 800, temperature: 0.2 });
@@ -402,12 +429,13 @@ export class SurveyEngine {
         source = "llm";
       } catch (e) {
         if (isCancel(e)) throw e;
+        retry = true;
         this.warn(survey, { source: "大模型", message: `检索词生成失败，改用主题和关键词：${message(e)}` });
       }
     }
     survey.queries = queries;
     survey.terms = terms;
-    return { queries: queries.length, source };
+    return { queries: queries.length, source, retry };
   }
 
   // -------------------------------------------------------- 3. expand
@@ -662,7 +690,7 @@ export class SurveyEngine {
     for (const p of head) {
       if (p.itemKey && !hasText(p.abstract)) await this.fullTextOf(ctx, p.itemKey);
     }
-    const readSet = selectReadSet(survey.pool, preset.deepRead, (p) => !!(p.itemKey && ctx.fullTexts.get(p.itemKey)));
+    const readSet = selectReadSet(survey.pool, preset.deepRead, (p) => !!(p.itemKey && ctx.fullTexts.get(p.itemKey)?.excerpt));
     survey.readIds = readSet.map((p) => p.id);
     ctx.cache ||= await loadNoteCache(this.storage);
     const cache = ctx.cache;
@@ -685,7 +713,7 @@ export class SurveyEngine {
           }
           stats.cached++;
         } else {
-          const excerpt = p.itemKey ? fullTextExcerpt(await this.fullTextOf(ctx, p.itemKey), MAX_EXCERPT_CHARS) : "";
+          const excerpt = p.itemKey ? (await this.fullTextOf(ctx, p.itemKey)).excerpt : "";
           const reply = await this.llm.chat(extractionPrompt(survey.input, p, excerpt), { maxTokens: 700, temperature: 0.2 });
           // Kept (and cached) even when the survey was cancelled meanwhile: the call is paid for
           p.read = parseExtraction(reply);

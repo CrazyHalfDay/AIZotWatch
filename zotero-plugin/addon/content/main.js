@@ -647,7 +647,12 @@ function initShell() {
   refresh().then(() => document.documentElement.setAttribute("data-ready", "true"));
 }
 
-window.ZotWatchMain = { navigate, refresh, toast, setSubtitle, setActiveSection, registerPage };
+/** The remembered scroll position of a page (and 调研 survey), for a page that renders after loading. */
+function rememberedScroll(page, section = null) {
+  return shell.scroll[scrollKey(page, section)] || 0;
+}
+
+window.ZotWatchMain = { navigate, refresh, toast, setSubtitle, setActiveSection, registerPage, rememberedScroll };
 
 window.addEventListener("load", initShell);
 

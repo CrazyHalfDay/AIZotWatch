@@ -146,6 +146,13 @@ class FakeNode {
     if (this.disabled) return null;
     return this.dispatch("click");
   }
+  // External text never goes through HTML parsing: any use fails the test
+  set innerHTML(value) {
+    throw new Error(`innerHTML is not allowed (${String(value).slice(0, 40)})`);
+  }
+  set outerHTML(value) {
+    throw new Error(`outerHTML is not allowed (${String(value).slice(0, 40)})`);
+  }
   focus() {
     this.ownerDocument.activeElement = this;
   }
@@ -266,6 +273,8 @@ async function openPage({ hash = "#survey", options = {}, wide = false, draft = 
     addErrors: {},
     showResult: true,
     saveResult: null,
+    // Files that exist (IOUtils.exists)
+    existing: [],
   };
   /** Wait at `name` when a gate is set (a promise the test resolves). */
   const gate = async (name) => {
@@ -428,6 +437,7 @@ async function openPage({ hash = "#survey", options = {}, wide = false, draft = 
     ChromeUtils: { importESModule: (url) => (url.endsWith("filePicker.mjs") ? { FilePicker } : { Zotero }) },
     window,
     document: doc,
+    IOUtils: { exists: async (path) => control.existing.includes(path) },
     location: { hash },
     Intl,
     setTimeout: clock.setTimeout,
@@ -969,6 +979,8 @@ test("toolbar: 保存到 Zotero with progress and stop, Markdown export, regener
   assert.deepEqual(w.callsOf("saveSurveyToZotero")[0], ["saveSurveyToZotero", DONE, { addPapers: "read" }]);
   assert.ok(has(root, "正在保存笔记…"));
   assert.equal(root.querySelectorAll('input[name="sv-save-mode"]').every((r) => r.disabled), true);
+  // While it is saved, the survey is neither written again nor deleted
+  assert.deepEqual(["save", "regenerate", "delete"].map((k) => byKey(root, k).disabled), [true, true, true]);
   w.emit({ type: "survey", action: "save-progress", id: DONE, progress: { current: 1, total: 12, title: "Fluid exsolution" } });
   assert.ok(has(root, "正在加入文献 2/12：Fluid exsolution"));
   assert.equal(byClass(byClass(root, "sv-save")[0], "progress-fill")[0].style.width, "8%");
@@ -980,6 +992,7 @@ test("toolbar: 保存到 Zotero with progress and stop, Markdown export, regener
   assert.equal(byClass(root, "sv-save-result")[0].textContent, "已保存到「ZotWatch 调研 · 斑岩铜矿成矿流体中的铜同位素示踪」：笔记已写入，1 篇已在文库的文献加入分类，导入 3 篇；已停止导入，其余文献未加入。");
   assert.match(w.toasts(), /已停止导入，笔记已保存/);
   assert.ok(w.callsOf("getSurvey").length > reloads, "reloaded: imported papers are in the library now");
+  assert.deepEqual(["save", "regenerate", "delete"].map((k) => byKey(root, k).disabled), [false, false, false]);
   byKey(root, "save-close").click();
   assert.equal(byClass(root, "sv-save").length, 0);
 
@@ -1002,6 +1015,20 @@ test("toolbar: 保存到 Zotero with progress and stop, Markdown export, regener
   await flush();
   assert.deepEqual(w.callsOf("exportSurveyMarkdown").at(-1), ["exportSurveyMarkdown", DONE, "/home/me/综述.md"]);
   assert.match(w.toasts(), /已导出：综述\.md/);
+  // The picker only checked "综述": replacing an existing "综述.md" is confirmed here
+  control.existing = ["/home/me/综述.md"];
+  control.confirmReply = false;
+  const exports = w.callsOf("exportSurveyMarkdown").length;
+  byKey(root, "export").click();
+  await flush();
+  assert.match(w.confirms.at(-1), /「综述\.md」已存在，要替换它吗？/);
+  assert.equal(w.callsOf("exportSurveyMarkdown").length, exports + 1, "only the text was asked for, nothing written");
+  assert.equal(w.callsOf("exportSurveyMarkdown").at(-1)[2], null);
+  control.confirmReply = true;
+  byKey(root, "export").click();
+  await flush();
+  assert.deepEqual(w.callsOf("exportSurveyMarkdown").at(-1), ["exportSurveyMarkdown", DONE, "/home/me/综述.md"]);
+  control.existing = [];
   control.pickPath = "C:\\docs\\review.markdown";
   byKey(root, "export").click();
   await flush();
@@ -1032,6 +1059,138 @@ test("toolbar: 保存到 Zotero with progress and stop, Markdown export, regener
   assert.equal(w.api.lastPage, "survey");
   assert.ok(byClass(root, "sv-form")[0]);
   assert.match(w.toasts(), /已删除这项调研/);
+});
+
+test("a save belongs to its survey: another survey shown meanwhile, and coming back to it", async () => {
+  const w = await openPage({ hash: `#survey/${DONE}` });
+  const { root, control } = w;
+  const OTHER = "mvq2k3a02y";
+  control.surveys[OTHER] = { ...control.surveys[DONE], id: OTHER, input: { ...control.surveys[DONE].input, topic: "另一项调研" }, saved: null };
+  let release;
+  control.gates.save = new Promise((r) => (release = r));
+  control.saveResult = { collectionName: "ZotWatch 调研 · 第一项", total: 3, linked: 1, imported: 2, failed: 0, skipped: 0, cancelled: false };
+  byKey(root, "save").click();
+  byKey(root, "save-go").click();
+  await flush();
+
+  // Another survey: no save panel, its actions free
+  await w.navigate(`survey/${OTHER}`);
+  assert.equal(byClass(root, "sv-save").length, 0);
+  assert.deepEqual(["save", "regenerate", "delete"].map((k) => byKey(root, k).disabled), [false, false, false]);
+  w.emit({ type: "survey", action: "save-progress", id: DONE, progress: { current: 1, total: 3, title: "x" } });
+  assert.equal(byClass(root, "sv-save").length, 0, "the other survey's progress is not shown here");
+  release();
+  await flush();
+  w.emit({ type: "survey", action: "updated", id: OTHER });
+  await flush();
+  assert.equal(byClass(root, "sv-save").length, 0, "nor its result");
+  assert.ok(!has(root, "ZotWatch 调研 · 第一项"));
+
+  // Coming back to a survey whose save still runs shows its progress and 停止导入
+  control.gates.save = new Promise((r) => (release = r));
+  byKey(root, "save").click();
+  byKey(root, "save-go").click();
+  await flush();
+  await w.navigate(`survey/${DONE}`);
+  w.emit({ type: "survey", action: "save-progress", id: OTHER, progress: { current: 0, total: 3, title: "y" } });
+  await w.navigate(`survey/${OTHER}`);
+  assert.ok(has(root, "正在加入文献 1/3：y"));
+  assert.ok(byKey(root, "save-stop"));
+  assert.equal(byKey(root, "delete").disabled, true);
+  release();
+  await flush();
+  assert.equal(byKey(root, "delete").disabled, false);
+});
+
+test("a survey opened from the list scrolls back to where it was left once it has loaded", async () => {
+  const w = await openPage({ hash: `#survey/${DONE}` });
+  const { root, control, doc } = w;
+  // Like Gecko, the scroll container clamps scrollTop to its content: only a loaded survey (or the list) is tall
+  const pages = doc.getElementById("pages");
+  let top = 0;
+  Object.defineProperty(pages, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (value) => {
+      const tall = byClass(root, "sv-head").length > 0 || byClass(root, "sv-form").length > 0;
+      top = Math.max(0, Math.min(Number(value) || 0, tall ? 5000 : 0));
+    },
+  });
+  pages.scrollTop = 1500;
+  assert.equal(pages.scrollTop, 1500);
+  await w.navigate("survey");
+  let release;
+  control.gates[`get:${DONE}`] = new Promise((r) => (release = r));
+  await w.navigate(`survey/${DONE}`);
+  assert.ok(has(root, "正在加载…"));
+  assert.equal(pages.scrollTop, 0, "clamped while loading");
+  release();
+  await flush();
+  assert.ok(byClass(root, "sv-head").length);
+  assert.equal(pages.scrollTop, 1500, "restored once the survey is shown");
+  // A later reload (an event) does not jump back
+  pages.scrollTop = 200;
+  w.emit({ type: "survey", action: "updated", id: DONE });
+  await flush();
+  assert.equal(pages.scrollTop, 200);
+});
+
+test("keyboard focus stays near a control that turns busy or is replaced", async () => {
+  const w = await openPage({ hash: `#survey/${DONE}` });
+  const { root, control, doc } = w;
+  const inTree = (node) => all(root).includes(node);
+  // 加入 Zotero: the busy button is disabled, focus parks on its reference, and stays there
+  const key = "add:doi:10.5555/survey.2";
+  let release;
+  control.gates[key] = new Promise((r) => (release = r));
+  byKey(root, key).focus();
+  byKey(root, key).click();
+  await flush();
+  assert.equal(doc.activeElement.getAttribute("data-key"), "item:doi:10.5555/survey.2");
+  assert.ok(inTree(doc.activeElement), "a node of the new view");
+  release();
+  await flush();
+  assert.ok(inTree(doc.activeElement));
+
+  // A toolbar action disables the toolbar: focus goes to the toolbar itself
+  let releaseExport;
+  const exportGate = new Promise((r) => (releaseExport = r));
+  const exportMarkdown = w.api.exportSurveyMarkdown;
+  w.api.exportSurveyMarkdown = async (...args) => (await exportGate, exportMarkdown(...args));
+  byKey(root, "export").focus();
+  byKey(root, "export").click();
+  await flush();
+  assert.equal(doc.activeElement.getAttribute("data-key"), "toolbar");
+  assert.ok(inTree(doc.activeElement));
+  releaseExport();
+  await flush();
+
+  // The history list is redrawn every minute: a focused entry keeps the focus
+  await w.navigate("survey");
+  const entry = byClass(root, "sv-hist")[0];
+  entry.focus();
+  w.page.tick();
+  assert.equal(doc.activeElement.getAttribute("data-key"), entry.getAttribute("data-key"));
+  assert.notEqual(doc.activeElement, entry, "a new node");
+  assert.ok(inTree(doc.activeElement));
+});
+
+test("model text and paper metadata with markup are shown as text", async () => {
+  const w = await openPage({ hash: "#survey" });
+  const { root, control } = w;
+  const s = control.surveys[DONE];
+  s.report.summary = "总述 <b>粗体</b> <img src=x onerror=alert(1)> [1]\n\n第二段 [2]";
+  s.report.sections[0].paragraphs[0] = "一节 <script>alert(1)</script> [1]";
+  s.report.debates = ["争议 <i>斜体</i> [1]"];
+  s.references[0].title = "Isotopes of <sup>65</sup>Cu & <em>fluids</em>";
+  await w.navigate(`survey/${DONE}`);
+  const pars = byClass(root, "sv-par");
+  assert.equal(pars[0].textContent, "总述 <b>粗体</b> <img src=x onerror=alert(1)> [1]");
+  assert.ok(pars.some((p) => p.textContent === "一节 <script>alert(1)</script> [1]"));
+  assert.ok(has(root, "争议 <i>斜体</i> [1]"));
+  assert.ok(byClass(root, "sv-ref-title").some((n) => n.textContent === "Isotopes of <sup>65</sup>Cu & <em>fluids</em>"));
+  // (the page uses <sup> itself; compare names, not nodes, so that a failure stays readable)
+  assert.deepEqual(all(root).map((n) => n.localName).filter((name) => ["b", "img", "script", "i", "em"].includes(name)), [], "no element was made from the text");
 });
 
 test("actions that do not apply are disabled: no LLM, another survey running, a list without a review", async () => {

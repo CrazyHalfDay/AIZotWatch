@@ -8,8 +8,8 @@ import test from "node:test";
 
 import { CancelledError } from "../src/engine.js";
 import { createMemoryStorage } from "../src/store.js";
-import { SurveyEngine, canResume, createSurvey, regenerateFrom, surveyCounts } from "../src/survey/engine.js";
-import { LINKED_SHARE, PaperCollector, dedupePool, linkedSeeds, selectPool } from "../src/survey/pool.js";
+import { SurveyEngine, canResume, createSurvey, regenerateFrom, surveyCounts, titleMatch } from "../src/survey/engine.js";
+import { LINKED_SHARE, PaperCollector, dedupePool, linkedSeeds, sameTitle, selectPool } from "../src/survey/pool.js";
 import { SURVEY_DEPTHS, SURVEY_STAGES, normalizeSurveyInput, parseKeywords, surveyEstimate } from "../src/survey/presets.js";
 import {
   UNVERIFIED_MARK,
@@ -46,7 +46,7 @@ import {
   writeCachedNote,
 } from "../src/survey/store.js";
 import { mockHttp, noSleep } from "./helpers.js";
-import { CROSSREF_ITEM, FULL_TEXT, LLM_URL, SURVEY_INPUT, WORKS, createLibrary, libraryItems, llmHandler, surveyHttp, surveySettings } from "./survey-fixtures.js";
+import { CROSSREF_ITEM, FULL_TEXT, LLM_URL, SURVEY_INPUT, WORKS, createLibrary, libraryItems, llmHandler, oaWork, surveyHttp, surveySettings } from "./survey-fixtures.js";
 
 const NOW = Date.UTC(2026, 9, 17, 8);
 
@@ -65,6 +65,9 @@ function setup({ prefs = {}, overrides = {}, hooks = {}, llm, input = SURVEY_INP
 }
 
 const callsTo = (http, prefix) => http.calls.filter((c) => c.url.startsWith(prefix));
+// Requests to the scholarly services (seeds, searches, expansion, abstracts), not to the LLM or embeddings
+const SERVICES = /^https:\/\/api\.(openalex|semanticscholar|crossref)\.org/;
+const serviceCalls = (http) => http.calls.filter((c) => SERVICES.test(c.url)).length;
 const byTitle = (survey, title) => survey.pool.find((p) => p.title === title);
 
 // ------------------------------------------------------------------ full run
@@ -101,8 +104,12 @@ test("a survey runs every stage: seeds, expansion, dedupe, ranking, reading, the
   assert.ok(seed1.fullText > 1000);
   assert.equal(seed2.fullText, 0);
   assert.deepEqual(seed1.tags, ["Copper isotopes", "Porphyry"]);
-  assert.ok(callsTo(http, "https://api.openalex.org/works/doi:10.1000/seed1")[0].url.includes("api_key=oa-key"), "OpenAlex requests carry the key");
-  assert.equal(callsTo(http, "https://api.semanticscholar.org")[0].headers["x-api-key"], "s2-key");
+  assert.ok(callsTo(http, "https://api.openalex.org").every((c) => c.url.includes("api_key=oa-key")), "every OpenAlex request carries the key");
+  assert.ok(callsTo(http, "https://api.semanticscholar.org").every((c) => c.headers["x-api-key"] === "s2-key"), "every Semantic Scholar request carries the key");
+  // (seeds, searches, references and citations, recommendations and abstracts all among them)
+  assert.ok(callsTo(http, "https://api.openalex.org/works?").some((c) => decodeURIComponent(c.url).includes("W201|W202")), "the seeds' references");
+  assert.ok(callsTo(http, "https://api.openalex.org/works?").some((c) => decodeURIComponent(c.url).includes("cites:W100")), "the seeds' citations");
+  assert.ok(callsTo(http, "https://api.semanticscholar.org/recommendations").length && callsTo(http, "https://api.semanticscholar.org/graph/v1/paper/s2seed1/").length);
 
   // 2. Queries: the LLM's (cleaned, distinct) plus the Latin input queries
   assert.equal(stats.queries, 1);
@@ -193,6 +200,12 @@ test("a survey runs every stage: seeds, expansion, dedupe, ranking, reading, the
     const allowed = new Set(survey.themes[s.theme].paperIds.map((id) => survey.pool.find((p) => p.id === id).n));
     for (const p of s.paragraphs) for (const m of p.matchAll(/\[(\d+(?:, \d+)*)\]/g)) for (const n of m[1].split(", ")) assert.ok(allowed.has(Number(n)), `[${n}] cites a paper of its own theme`);
   }
+  // The fixture's second paragraph cites a valid reference of another theme: removed
+  const firstNumbers = survey.themes[first.theme].paperIds.map((id) => survey.pool.find((p) => p.id === id).n).sort((a, b) => a - b);
+  const otherTheme = firstNumbers[0] === 1 ? firstNumbers.at(-1) + 1 : firstNumbers[0] - 1;
+  assert.ok(survey.references.some((r) => r.n === otherTheme && r.theme !== first.theme), "a real reference of another theme");
+  assert.match(first.paragraphs[1], /旁及/);
+  assert.doesNotMatch(first.paragraphs[1], new RegExp(`\\b${otherTheme}\\b`), "a number the section prompt did not give is removed");
   assert.equal(report.summary, "总述第一段 [1]，以及不存在的文献。\n\n总述第二段 [2]。");
   assert.deepEqual(report.debates, ["争议一 [1]"], "an entry citing nothing valid disappears");
   assert.deepEqual(report.reading, [2, 1]);
@@ -214,12 +227,30 @@ test("a survey runs every stage: seeds, expansion, dedupe, ranking, reading, the
   assert.equal(regenerateFrom(survey), "write");
 });
 
+test("a long paper's excerpt keeps its conclusions (the whole indexed text is read)", async () => {
+  // 92,000 characters, the conclusions at 72,000: beyond a 60,000-character cut
+  const body =
+    "Copper isotope fractionation in porphyry copper deposits\nAbstract\nWe measured copper isotopes.\n1. Introduction\n" +
+    "Porphyry deposits are the main source of copper. ".repeat(1440) +
+    "\n5. Conclusions\nBoiling fluids carry the heavy copper isotopes upward.\nReferences\n" +
+    "Another reference line. ".repeat(850);
+  assert.ok(body.indexOf("5. Conclusions") > 70000 && body.length > 90000);
+  const { stats, engine, survey } = setup({ library: createLibrary(libraryItems(), { fullText: { SEED1: body } }) });
+  await engine().run(survey);
+  const seedPrompt = stats.prompts.find((p) => p.kind === "read" && p.prompt.includes("论文标题：Copper isotope fractionation in porphyry copper deposits")).prompt;
+  assert.match(seedPrompt, /Boiling fluids carry the heavy copper isotopes upward\./);
+  assert.doesNotMatch(seedPrompt, /Another reference line/);
+  assert.equal(survey.seeds[0].fullText, body.length);
+});
+
 test("rerunning the writing stage reuses everything before it", async () => {
-  const { stats, engine, survey } = setup();
+  const { stats, engine, survey, http } = setup();
   await engine().run(survey);
   const reads = stats.read;
   const overviews = stats.overview;
+  const services = serviceCalls(http);
   await engine().run(survey, { from: "write" });
+  assert.equal(serviceCalls(http), services, "no service request");
   assert.equal(survey.status, "done");
   assert.equal(stats.read, reads, "nothing is read again");
   assert.equal(stats.overview, overviews + 1);
@@ -251,6 +282,22 @@ test("without an LLM, stages 1–6 run and the report is a clustered candidate l
   assert.match(md, /## 参考文献/);
 });
 
+test("the depth caps the pool and the number of papers read", async () => {
+  // Searches return far more distinct papers than the quick preset keeps
+  const word = (i, k) => Array.from({ length: 4 }, (_, j) => "bcdfghjklmnpqrstvwxz"[(i * (k + 3) + j * 7 + k) % 20] + "aeiou"[(i + j + k) % 5]).join("");
+  const many = Array.from({ length: 220 }, (_, i) =>
+    oaWork(`W9${String(i).padStart(4, "0")}`, `${word(i, 1)} ${word(i, 2)} ${word(i, 3)} copper isotopes`, { doi: `10.9000/many${i}`, abstract: `Copper isotope study ${word(i, 4)} of porphyry fluids with measurements and models.` }),
+  );
+  const { engine, survey, stats } = setup({
+    overrides: { oaWorks: (req) => ({ results: new URL(req.url).searchParams.get("search") ? many : [] }) },
+  });
+  await engine().run(survey);
+  const preset = SURVEY_DEPTHS.quick;
+  assert.equal(survey.status, "done");
+  assert.equal(survey.pool.length, preset.pool);
+  assert.equal(stats.read, preset.deepRead);
+});
+
 test("a survey from keywords alone searches only", async () => {
   const { http, engine, survey } = setup({ input: { ...SURVEY_INPUT, seedKeys: [] } });
   await engine().run(survey);
@@ -268,7 +315,7 @@ test("a survey from keywords alone searches only", async () => {
 
 test("a cancelled survey keeps its finished stages and resumes without repeating work", async () => {
   let cancelled = false;
-  const { stats, storage, engine, survey } = setup({
+  const { stats, storage, engine, survey, http } = setup({
     hooks: {
       read: (prompt, s) => {
         if (s.read >= 3) cancelled = true;
@@ -289,17 +336,48 @@ test("a cancelled survey keeps its finished stages and resumes without repeating
   const cached = (await loadNoteCache(storage)).entries.size;
   assert.ok(cached >= 3, "the note answered while cancelling is kept too");
   const readBefore = stats.read;
-  const expandRequests = stats.queries;
+  const queryPrompts = stats.queries;
+  const servicesBefore = serviceCalls(http);
 
   // Resume from the stored survey with a fresh engine (as after a restart)
   const resumed = await loadSurvey(storage, survey.id);
   cancelled = false;
   await engine().run(resumed);
   assert.equal(resumed.status, "done");
-  assert.equal(stats.queries, expandRequests, "earlier stages are not rerun");
+  assert.equal(stats.queries, queryPrompts, "the queries are not generated again");
+  assert.equal(serviceCalls(http), servicesBefore, "seeds, expansion and abstracts are not requested again");
   assert.equal(stats.read, resumed.pool.length + (readBefore - cached), "cached notes are not requested again");
   assert.ok(resumed.report.sections.length >= 1);
   assert.equal(resumed.stages.read.cached, cached);
+});
+
+test("every finished stage is saved before the next one starts", async () => {
+  // Hold the first reading call: what is stored at that moment must already hold stages 1–6
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  let reached;
+  const reading = new Promise((resolve) => (reached = resolve));
+  const answer = llmHandler({});
+  const { engine, survey, storage } = setup({
+    overrides: {
+      llm: async (req) => {
+        if (JSON.parse(req.body).messages[0].content.includes("精读笔记")) {
+          reached();
+          await gate;
+        }
+        return answer(req);
+      },
+    },
+  });
+  const run = engine().run(survey);
+  await reading;
+  const stored = await loadSurvey(storage, survey.id);
+  assert.deepEqual(stored.completed, ["seeds", "queries", "expand", "dedupe", "rank", "enrich"]);
+  assert.equal(stored.status, "running");
+  assert.ok(stored.pool.length > 0 && stored.pool.every((p) => p.scores), "the ranked pool is stored");
+  release();
+  await run;
+  assert.equal((await loadSurvey(storage, survey.id)).status, "done");
 });
 
 test("cancelling while the services answer stops the expansion at once", async () => {
@@ -362,7 +440,7 @@ test("a survey fails (resumably) when no source answers, and goes on later", asy
   const fail = (handler) => (req) => (down ? { status: 500, data: "down" } : handler(req));
   const base = surveyHttp();
   const passthrough = (name) => (req) => base.request(req).then((res) => (res.status === 200 ? res.data : res));
-  const { engine, survey, storage } = setup({
+  const { engine, survey, storage, http } = setup({
     retry: { retries: 0, ...noSleep },
     prefs: { "apis.semanticScholarKey": "" },
     overrides: {
@@ -376,10 +454,19 @@ test("a survey fails (resumably) when no source answers, and goes on later", asy
   assert.equal(survey.error.stage, "expand");
   assert.ok(survey.errors.some((e) => e.source === "Semantic Scholar" && /未配置/.test(e.message)));
   assert.equal((await readIndex(storage))[0].error, survey.error.message);
+  assert.deepEqual(survey.seeds.map((s) => s.openalexId), [null, null], "the seed lookups failed too");
+  assert.equal(survey.stages.seeds.retry, true);
+  const citing = () => http.calls.filter((c) => decodeURIComponent(c.url).includes("cites:"));
+  assert.equal(citing().length, 0);
   down = false;
   await engine().run(survey);
   assert.equal(survey.status, "done");
   assert.equal(survey.error, null);
+  // The seeds were looked up again, so the expansion follows their citations and references
+  assert.equal(survey.seeds[0].openalexId, "W100");
+  assert.equal(survey.stages.seeds.retry, false);
+  assert.ok(citing().length > 0, "citing works of the seeds are requested");
+  assert.ok(survey.pool.some((p) => p.via.some((v) => /^(cites|ref):/.test(v))), "the pool holds seed-linked papers");
 });
 
 test("odd JSON from every service never crashes a survey", async () => {
@@ -433,10 +520,12 @@ test("a section without any citation and an overview that fails still give a par
 });
 
 test("reading gives up when every LLM call fails", async () => {
-  const { engine, survey } = setup({ hooks: { read: () => ({ status: 401, data: { error: { message: "Invalid key" } } }) } });
+  const { engine, survey, stats } = setup({ hooks: { read: () => ({ status: 401, data: { error: { message: "Invalid key" } } }) } });
   await assert.rejects(engine().run(survey), /精读失败：HTTP 401/);
   assert.equal(survey.status, "failed");
   assert.equal(survey.error.stage, "read");
+  // Three failures, plus the calls already in flight, and no more (each would be a paid call)
+  assert.ok(stats.read <= 4 && stats.read < survey.pool.length, `stopped after ${stats.read} read prompts`);
 });
 
 test("without an OpenAlex key the survey warns and still runs; keyless S2 is skipped", async () => {
@@ -635,6 +724,55 @@ test("stage 4 merges near-duplicate titles and flags library papers by DOI or ti
   assert.equal(inLibrary, 2);
 });
 
+test("title matching tells near-identical titles of one paper from related papers", () => {
+  // One paper: case, punctuation, word order and spelling variants
+  for (const [a, b] of [
+    ["Copper isotope tracers of porphyry fluids", "Copper Isotope Tracers of Porphyry Fluids."],
+    ["Copper isotope tracers of porphyry fluids", "Copper isotope tracers of porphyry fluid"],
+    ["Copper isotope behaviour during magmatic degassing", "Copper isotope behavior during magmatic degassing"],
+  ]) assert.equal(sameTitle(a, b), true, `${a} ~ ${b}`);
+  // Different papers that token-set matching would merge
+  for (const [a, b] of [
+    ["Copper isotopes in porphyry deposits", "Copper isotopes in porphyry deposits of Iran"],
+    ["Lithium isotopes in the oceanic crust", "Lithium isotopes in the oceanic crust: a review"],
+    ["Subduction initiation in the western Pacific", "Corrigendum to Subduction initiation in the western Pacific"],
+    ["Subduction initiation in the western Pacific", "Reply to comment on Subduction initiation in the western Pacific"],
+    ["Fluid evolution of porphyry systems, Part 1", "Fluid evolution of porphyry systems, Part 2"],
+    ["Fluid evolution of porphyry systems I", "Fluid evolution of porphyry systems II"],
+    ["Zircon U-Pb ages of granites from South China", "Zircon U-Pb ages of granites from North China"],
+    ["Crustal thickening and copper fertility of arc magmas in the central Andes", "Crustal thickening and copper fertility of arc magmas in the central Alps"],
+  ]) assert.equal(sameTitle(a, b), false, `${a} ≠ ${b}`);
+
+  // Seeds without a DOI: the exact title first, never a notice or a superset; years must agree
+  const seed = { title: "Subduction initiation in the western Pacific", year: 2019 };
+  const hit = (id, title, year = 2019) => ({ openalexId: id, title, year });
+  assert.equal(titleMatch(seed, [hit("W1", "Corrigendum to Subduction initiation in the western Pacific"), hit("W2", "Subduction initiation in the western Pacific: a review"), hit("W3", "subduction initiation in the Western Pacific")])?.openalexId, "W3");
+  assert.equal(titleMatch(seed, [hit("W1", "Corrigendum to Subduction initiation in the western Pacific")]), null);
+  assert.equal(titleMatch(seed, [hit("W4", "Subduction initiation in the western Pacific", 2009)]), null, "another paper of the same title");
+  assert.equal(titleMatch({ ...seed, year: null }, [hit("W5", "Subduction initiation in the western Pacific", 2009)])?.openalexId, "W5");
+
+  // Library flags: a DOI-less library item marks only the same paper
+  const { papers } = dedupePool(
+    [
+      { id: "doi:10.1/iran", title: "Copper isotopes in porphyry deposits of Iran", doi: "10.1/iran", year: 2021, via: ["search"], sources: [], citations: 0 },
+      { id: "doi:10.1/p2", title: "Fluid evolution of porphyry systems, Part 2", doi: "10.1/p2", year: 2020, via: ["search"], sources: [], citations: 0 },
+      { id: "doi:10.1/same", title: "Copper isotope behavior during magmatic degassing", doi: "10.1/same", year: 2018, via: ["search"], sources: [], citations: 0 },
+    ],
+    [
+      { key: "L1", doi: "", title: "Copper isotopes in porphyry deposits", year: 2021 },
+      { key: "L2", doi: "", title: "Fluid evolution of porphyry systems, Part 1", year: 2020 },
+      { key: "L3", doi: "", title: "Copper isotope behaviour during magmatic degassing", year: 2018 },
+    ],
+  );
+  assert.deepEqual(papers.map((p) => [p.inLibrary, p.itemKey]), [[false, null], [false, null], [true, "L3"]]);
+  // In the pool: a DOI-less part 1 does not swallow part 2
+  const parts = dedupePool([
+    { id: "s2:a", title: "Fluid evolution of porphyry systems, Part 1", year: 2020, via: ["search"], sources: [], citations: 0 },
+    { id: "s2:b", title: "Fluid evolution of porphyry systems, Part 2", year: 2020, via: ["search"], sources: [], citations: 0 },
+  ], []);
+  assert.equal(parts.papers.length, 2);
+});
+
 test("scores combine similarity, seed links, citations and recency", () => {
   const v = (x, y) => Float32Array.from([x, y]);
   const papers = [
@@ -654,6 +792,8 @@ test("scores combine similarity, seed links, citations and recency", () => {
   // Read set: seeds first, papers without text skipped
   const rs = selectReadSet([{ id: 1, abstract: "x" }, { id: 2, seed: 1, abstract: "y" }, { id: 3 }, { id: 4, itemKey: "K" }], 3, (p) => p.itemKey === "K");
   assert.deepEqual(rs.map((p) => p.id), [2, 1, 4]);
+  // Fewer places than readable papers: seeds still come first
+  assert.deepEqual(selectReadSet([{ id: 1, abstract: "x" }, { id: 2, seed: 1, abstract: "y" }, { id: 4, itemKey: "K" }], 2, (p) => p.itemKey === "K").map((p) => p.id), [2, 1]);
 });
 
 test("themes are chosen by silhouette and labelled by distinctive terms", async () => {
@@ -704,6 +844,24 @@ test("surveys are stored in an index capped at 30, newest first; damaged files a
   assert.deepEqual(await readIndex(storage), []);
   assert.ok(isSurveyId(newSurveyId(NOW)));
   assert.notEqual(newSurveyId(NOW), newSurveyId(NOW));
+});
+
+test("overlapping saves and deletes never lose an index entry", async () => {
+  // Every read and write yields, as file I/O does, so unlocked updates would interleave
+  const files = createMemoryStorage();
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const storage = {
+    files: files.files,
+    readJSON: async (name) => (await tick(), files.readJSON(name)),
+    writeJSON: async (name, obj) => (await tick(), files.writeJSON(name, obj)),
+    remove: async (name) => (await tick(), files.remove(name)),
+  };
+  const input = normalizeSurveyInput({ topic: "T", keywords: "k" });
+  const [a, b, c, d] = [1, 2, 3, 4].map((i) => createSurvey(input, { now: NOW + i * 1000 }));
+  await saveSurvey(storage, b);
+  await Promise.all([saveSurvey(storage, a), saveSurvey(storage, c), deleteSurvey(storage, b.id), saveSurvey(storage, d)]);
+  assert.deepEqual((await readIndex(storage)).map((e) => e.id), [d.id, c.id, a.id]);
+  assert.ok(!storage.files.has(`survey-${b.id}.json`));
 });
 
 test("reading notes are cached by paper and model, with the relevance per topic", async () => {
@@ -785,6 +943,13 @@ test("Markdown and note HTML render the report as escaped text with DOI links", 
   assert.equal(referenceText({ authors: ["X"], authorCount: 5, title: "T.", venue: null, year: 2020 }), "X et al. T. 2020.");
   assert.equal(referenceText({ authors: [], authorCount: 0, title: "", venue: null, year: null }), "");
   assert.equal(escapeHtml(`<"&>`), "&lt;&quot;&amp;&gt;");
+
+  // An old Wiley SICI DOI holds "<" and ">": percent-encoded, the Markdown autolink stays one link
+  const sici = "10.1002/(sici)1099-1085(199605)10:5<641::aid-hyp333>3.0.co;2-s";
+  const old = { ...survey, references: [{ n: 1, id: `doi:${sici}`, title: "Old Wiley paper", authors: ["A B"], authorCount: 1, year: 1996, venue: "Hydrol. Process.", doi: sici, url: null, inLibrary: false }] };
+  const encoded = "https://doi.org/10.1002/(sici)1099-1085(199605)10:5%3C641::aid-hyp333%3E3.0.co;2-s";
+  assert.match(surveyMarkdown(old), new RegExp(`1\\. A B\\. Old Wiley paper\\. Hydrol\\. Process\\., 1996\\. <${encoded.replace(/[.()?*+]/g, "\\$&")}>`));
+  assert.ok(surveyNoteHtml(old).includes(`<a href="${encoded}">doi:10.1002/(sici)1099-1085(199605)10:5&lt;641::aid-hyp333&gt;3.0.co;2-s</a>`));
 });
 
 // --------------------------------------------------------------- sources

@@ -102,18 +102,58 @@ async function removeFile(storage, name) {
  * surveys falling off the index are removed). Returns the ids removed.
  */
 export async function saveSurvey(storage, survey) {
+  return withSurveyLock(storage, () => writeSurvey(storage, survey));
+}
+
+/** saveSurvey's work; the caller holds the lock. */
+async function writeSurvey(storage, survey) {
+  await storage.writeJSON(surveyFile(survey.id), survey);
+  const index = (await readIndex(storage)).filter((e) => e.id !== survey.id);
+  index.sort((a, b) => b.createdAt - a.createdAt);
+  // The survey being saved always stays; the oldest others make room
+  const dropped = index.splice(SURVEY_LIMIT - 1);
+  index.push(indexEntry(survey));
+  index.sort((a, b) => b.createdAt - a.createdAt);
+  await storage.writeJSON(SURVEY_INDEX_FILE, index);
+  for (const e of dropped) await removeFile(storage, surveyFile(e.id));
+  return dropped.map((e) => e.id);
+}
+
+/**
+ * Change a stored survey in place: load it, apply `mutate(survey)` and write
+ * it, all under the write lock, so that a copy loaded long before (e.g. at the
+ * start of a save to Zotero) never overwrites newer stages. Resolves with the
+ * written survey, or null (nothing written) when it no longer exists.
+ */
+export async function updateSurvey(storage, id, mutate) {
   return withSurveyLock(storage, async () => {
-    await storage.writeJSON(surveyFile(survey.id), survey);
-    const index = (await readIndex(storage)).filter((e) => e.id !== survey.id);
-    index.sort((a, b) => b.createdAt - a.createdAt);
-    // The survey being saved always stays; the oldest others make room
-    const dropped = index.splice(SURVEY_LIMIT - 1);
-    index.push(indexEntry(survey));
-    index.sort((a, b) => b.createdAt - a.createdAt);
-    await storage.writeJSON(SURVEY_INDEX_FILE, index);
-    for (const e of dropped) await removeFile(storage, surveyFile(e.id));
-    return dropped.map((e) => e.id);
+    const survey = await loadSurvey(storage, id);
+    if (!survey) return null;
+    mutate(survey);
+    await writeSurvey(storage, survey);
+    return survey;
   });
+}
+
+/**
+ * Copy what saving papers to Zotero changes from `source` (a working copy)
+ * into `target` (the stored survey): `saved` and the library flags of the
+ * papers and references (inLibrary, itemKey, itemLibraryID), matched by id.
+ */
+export function mergeLibraryState(target, source) {
+  if (isRecord(source.saved)) target.saved = source.saved;
+  for (const key of ["pool", "references"]) {
+    const byId = new Map((Array.isArray(source[key]) ? source[key] : []).map((p) => [p?.id, p]));
+    for (const p of Array.isArray(target[key]) ? target[key] : []) {
+      const from = byId.get(p.id);
+      if (!from?.inLibrary || !from.itemKey) continue;
+      p.inLibrary = true;
+      p.itemKey = from.itemKey;
+      if (from.itemLibraryID !== undefined) p.itemLibraryID = from.itemLibraryID;
+    }
+  }
+  target.updatedAt = Math.max(Number(target.updatedAt) || 0, Number(source.updatedAt) || 0) || Date.now();
+  return target;
 }
 
 /** A stored survey, or null when missing or damaged. */

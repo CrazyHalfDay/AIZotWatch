@@ -11,7 +11,9 @@
 
 /**
  * Limits per host: requests per second and requests in flight. Hosts not
- * listed (LLM and embedding services, EarthArXiv) are unlimited.
+ * listed (LLM and embedding services, EarthArXiv) are unlimited. The Crossref
+ * entry fits its polite pool (requests with a contact address); see
+ * PUBLIC_CROSSREF_LIMIT for requests without one.
  */
 export const DEFAULT_RATE_LIMITS = Object.freeze({
   "api.crossref.org": { rps: 3, concurrency: 3 },
@@ -23,6 +25,12 @@ export const DEFAULT_RATE_LIMITS = Object.freeze({
   "api.elsevier.com": { rps: 2, concurrency: 2 },
   "api.springernature.com": { rps: 2, concurrency: 2 },
 });
+
+/**
+ * Crossref's public pool (requests without a mailto) allows one request in
+ * flight at a time; used instead of the default when no contact address is set.
+ */
+export const PUBLIC_CROSSREF_LIMIT = Object.freeze({ rps: 3, concurrency: 1 });
 
 /** Lower-case host name of a URL ("" when it has none). */
 export function hostOf(url) {
@@ -49,7 +57,8 @@ function validLimit(limit) {
 /**
  * Merge limit overrides (e.g. from a hidden pref holding JSON) into the
  * defaults: `{host: {rps, concurrency} | null}`, null removing a host's limit.
- * Anything malformed is ignored.
+ * Fields an override leaves out keep the host's default ({"rps": 0.2} slows a
+ * host down without lifting its concurrency cap). Anything malformed is ignored.
  */
 export function mergeRateLimits(base = DEFAULT_RATE_LIMITS, overrides = null) {
   const out = { ...base };
@@ -57,8 +66,13 @@ export function mergeRateLimits(base = DEFAULT_RATE_LIMITS, overrides = null) {
   for (const [host, limit] of Object.entries(overrides)) {
     const key = String(host).trim().toLowerCase();
     if (!key) continue;
-    if (limit === null) delete out[key];
-    else if (validLimit(limit)) out[key] = limit;
+    if (limit === null) {
+      delete out[key];
+      continue;
+    }
+    if (!limit || typeof limit !== "object" || Array.isArray(limit)) continue;
+    const merged = { ...(base[key] || {}), ...limit };
+    if (validLimit(merged)) out[key] = merged;
   }
   return out;
 }

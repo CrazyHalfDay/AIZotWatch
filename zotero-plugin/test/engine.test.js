@@ -117,6 +117,14 @@ test("full run ranks relevant papers and fills the inbox", async () => {
   assert.ok(counter.texts >= 18 + 5);
 });
 
+test("the watch run's OpenAlex abstract batches carry the key", async () => {
+  const { engine, http } = setup({ prefs: { "apis.openalexKey": "oa-key", "abstracts.crossref": false } });
+  await engine.run();
+  const batches = http.calls.filter((c) => c.url.startsWith("https://api.openalex.org/works") && decodeURIComponent(c.url).includes("doi:"));
+  assert.ok(batches.length > 0, "the paper without an abstract was looked up on OpenAlex");
+  assert.ok(batches.every((c) => c.url.includes("api_key=oa-key")), "with the key");
+});
+
 test("second run reuses cached embeddings and skips dismissed works", async () => {
   const { engine, counter } = setup();
   await engine.run();

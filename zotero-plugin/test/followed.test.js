@@ -204,6 +204,16 @@ test("works with a truncated author list are attributed from their full author l
   assert.match(lookups[0], /\?select=id,authorships&mailto=me@x\.org$/);
   assert.ok(logs.some((m) => /author lookup failed for W1051/.test(m)));
 
+  // With a key, the full-author lookups carry it too
+  const keyed = mockHttp([
+    [(r) => decodeURIComponent(r.url).includes("author.orcid:"), () => ({ meta: { next_cursor: null }, results: [big] })],
+    ["https://api.openalex.org/works/W1050?", () => ({ id: big.id, authorships: big.authorships })],
+  ]);
+  await fetchFollowedWorks(keyed, { authors: [ANN, WANG], apiKey: "oa-key", now: NOW, retry: noSleep });
+  const keyedLookup = keyed.calls.find((c) => c.url.startsWith("https://api.openalex.org/works/W1050"));
+  assert.ok(keyedLookup, "the full author list was looked up");
+  assert.ok(keyed.calls.every((c) => c.url.includes("api_key=oa-key")), "every OpenAlex request carries the key");
+
   // The note never shows an empty list of names
   assert.match(summaryNoteHtml({ label: "followed", score: 0, followedAuthors: [], summary: {} }), /<p>来源：关注作者<\/p>/);
 

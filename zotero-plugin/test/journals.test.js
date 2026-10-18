@@ -100,13 +100,30 @@ test("OpenAlex sources map to whitelist journals: category, approximate IF, ISSN
   assert.equal(categoryFromTopic(null), "");
   assert.equal(mapOpenAlexSource({ id: "S1", topics: "junk", summary_stats: { "2yr_mean_citedness": "x" } }), null, "no name");
   assert.equal(mapOpenAlexSource({ display_name: "No topics", topics: [null, 4], summary_stats: { "2yr_mean_citedness": "2.345" } }).impactFactor, 2.3);
+  // A citedness of 0 (a journal younger than two years) is unknown, not an impact factor of 0
+  assert.equal(mapOpenAlexSource({ display_name: "Brand New Journal", summary_stats: { "2yr_mean_citedness": 0 } }).impactFactor, null);
+  assert.equal(mapOpenAlexSource({ display_name: "Barely Cited", summary_stats: { "2yr_mean_citedness": 0.02 } }).impactFactor, 0.1);
   for (const odd of [null, 4, "x", [], {}]) assert.equal(mapOpenAlexSource(odd), null);
 
   // Chinese-language journals published in China get "(CN)"; English ones from China do not
   const cjk = mapOpenAlexSource(source(5, "岩石学报", ["1000-0569"], { country_code: "CN" }));
   assert.equal(cjk.category, "GEOCHEMISTRY_AND_PETROLOGY (CN)");
   assert.equal(cjk.chinese, true);
-  assert.equal(isChineseSource(source(6, "Acta Petrologica Sinica", ["1000-0569"], { country_code: "cn" })), true);
+  assert.equal(isChineseSource(source(6, "Acta Petrologica Sinica", ["1000-0569"], { country_code: "cn", host_organization_name: "Science Press" })), true);
+  assert.equal(isChineseSource(source(6, "Chinese Journal of Geophysics", ["0001-5733"], { country_code: "CN", host_organization_name: null })), true);
+  assert.equal(isChineseSource(source(6, "Earth Science Frontiers", ["1005-2321"], { country_code: "CN", alternate_titles: ["Diqiu Kexue Qianyuan"] })), true, "a pinyin alternate title marks it whoever publishes it");
+  // English journals from China with "Sinica" / "Chinese" in their title are not marked
+  for (const [name, host] of [
+    ["Acta Geologica Sinica - English Edition", null],
+    ["Acta Geologica Sinica (English Edition)", "Wiley"],
+    ["Acta Oceanologica Sinica", "Springer Science+Business Media"],
+    ["Chinese Geographical Science", "Springer Science+Business Media"],
+    ["Chinese Chemical Letters", "Elsevier BV"],
+    ["Acta Pharmacologica Sinica", "Nature Portfolio"],
+  ]) {
+    assert.equal(isChineseSource(source(6, name, ["1000-9515"], { country_code: "CN", host_organization_name: host })), false, name);
+  }
+  assert.equal(isChineseSource(source(6, "Acta Geologica Sinica - English Edition", ["1000-9515"], { country_code: "CN", alternate_titles: ["地质学报"] })), false, "an English edition stays English");
   assert.equal(isChineseSource(source(7, "Geological Review", ["0371-5736"], { country_code: "CN", alternate_titles: ["地质论评"] })), true);
   assert.equal(isChineseSource(source(8, "Science China Earth Sciences", ["1674-7313"], { country_code: "CN" })), false);
   assert.equal(isChineseSource(source(9, "Acta Geologica Sinica", ["1000-9515"], { country_code: "US" })), false, "only journals published in China");
@@ -373,7 +390,7 @@ function proposalHttp({ openalex = "ok", llm = null } = {}) {
     "0024-4937": source(3, "Lithos", ["0024-4937"], { summary_stats: { "2yr_mean_citedness": 1.93 } }),
   };
   const searches = {
-    "Acta Petrologica Sinica": [source(4, "Acta Petrologica Sinica", ["1000-0569"], { country_code: "CN", summary_stats: { "2yr_mean_citedness": 1.2 } })],
+    "Acta Petrologica Sinica": [source(4, "Acta Petrologica Sinica", ["1000-0569"], { country_code: "CN", host_organization_name: "Science Press", summary_stats: { "2yr_mean_citedness": 1.2 } })],
     "Chemical Geology": [source(5, "Chemical Geology", ["0009-2541", "1872-6836"], { summary_stats: { "2yr_mean_citedness": 3.94 } })],
     "Journal of Petrology": [source(6, "Journal of Petrology", ["0022-3530"], { publisher: "OUP", summary_stats: { "2yr_mean_citedness": 1.6 } })],
     "Earth and Planetary Science Letters": [sources["0012-821X"]],
@@ -558,6 +575,11 @@ test("补全学科与影响因子 fills blanks from OpenAlex and never overwrite
   const none = await fillJournalMetadata({ http, text: complete, settings: SETTINGS });
   assert.deepEqual(none, { text: complete, filled: 0, incomplete: 0, notFound: [] });
   assert.equal(http.calls.length, 1, "a complete list needs no request");
+
+  // A citedness of 0 leaves the IF blank (the journal keeps the neutral score; a later 补全 fills it)
+  const fresh = mockHttp([["https://api.openalex.org/sources", () => ({ results: [source(2, "Earth and Planetary Science Letters", ["0012-821X"], { summary_stats: { "2yr_mean_citedness": 0 } })] })]]);
+  const zero = await fillJournalMetadata({ http: fresh, text: "issn,title,category,impact_factor\n0012-821X,EPSL,,", settings: SETTINGS, retry: noSleep });
+  assert.equal(zero.text.split("\n")[1], "0012-821X,EPSL,GEOCHEMISTRY_AND_PETROLOGY,");
 
   const failing = mockHttp([["https://api.openalex.org/", () => ({ status: 503, data: "down" })]]);
   await assert.rejects(fillJournalMetadata({ http: failing, text, settings: SETTINGS, retry: { retries: 0, ...noSleep } }), (e) => e.status === 503);

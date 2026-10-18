@@ -9,6 +9,7 @@ import test from "node:test";
 import { apiUsage, createCancelSignal, getJson, limitedRequest, openAlexUsageFromHeaders, request, resetApiUsage, responseHeader } from "../src/core/http.js";
 import {
   DEFAULT_RATE_LIMITS,
+  PUBLIC_CROSSREF_LIMIT,
   createRateLimiter,
   hostOf,
   mergeRateLimits,
@@ -74,8 +75,16 @@ test("host names and limit overrides", () => {
   assert.equal(hostOf("https://API.OpenAlex.org/works?x=1"), "api.openalex.org");
   assert.equal(hostOf("https://user@api.crossref.org:443/works"), "api.crossref.org");
   assert.equal(hostOf("not a url"), "");
-  assert.equal(DEFAULT_RATE_LIMITS["api.semanticscholar.org"].rps, 1);
-  assert.equal(DEFAULT_RATE_LIMITS["export.arxiv.org"].concurrency, 1);
+  // The documented table (README §工作原理)
+  assert.deepEqual(DEFAULT_RATE_LIMITS, {
+    "api.crossref.org": { rps: 3, concurrency: 3 },
+    "api.openalex.org": { rps: 8, concurrency: 4 },
+    "api.semanticscholar.org": { rps: 1, concurrency: 1 },
+    "export.arxiv.org": { rps: 1 / 3, concurrency: 1 },
+    "api.elsevier.com": { rps: 2, concurrency: 2 },
+    "api.springernature.com": { rps: 2, concurrency: 2 },
+  });
+  assert.deepEqual(PUBLIC_CROSSREF_LIMIT, { rps: 3, concurrency: 1 });
 
   const merged = mergeRateLimits(DEFAULT_RATE_LIMITS, { "API.Crossref.org": { rps: 10, concurrency: 5 }, "export.arxiv.org": null, "bad.example.org": "fast", "x.org": { rps: -1 } });
   assert.deepEqual(merged["api.crossref.org"], { rps: 10, concurrency: 5 });
@@ -83,6 +92,13 @@ test("host names and limit overrides", () => {
   assert.equal("bad.example.org" in merged, false);
   assert.equal("x.org" in merged, false);
   assert.deepEqual(mergeRateLimits(DEFAULT_RATE_LIMITS, "garbage"), { ...DEFAULT_RATE_LIMITS });
+
+  // A partial override keeps the other field: slowing arXiv down keeps its single connection
+  const slower = mergeRateLimits(DEFAULT_RATE_LIMITS, { "export.arxiv.org": { rps: 0.2 }, "api.crossref.org": { concurrency: 1 }, "api.openalex.org": { rps: null } });
+  assert.deepEqual(createRateLimiter({ limits: slower }).limitOf("https://export.arxiv.org/api/query"), { rps: 0.2, concurrency: 1, burst: 1 });
+  assert.deepEqual(slower["api.crossref.org"], { rps: 3, concurrency: 1 }, "still paced");
+  assert.deepEqual(createRateLimiter({ limits: slower }).limitOf(OPENALEX), { rps: Infinity, concurrency: 4, burst: 1 }, "an explicit null field drops only that field");
+  assert.deepEqual(mergeRateLimits(DEFAULT_RATE_LIMITS, { "new.example.org": { rps: 2 } })["new.example.org"], { rps: 2 });
 });
 
 test("requests to a host are spaced by its rate", async () => {
@@ -135,6 +151,21 @@ test("at most `concurrency` requests of a host are in flight", async () => {
   s2.releases[0]();
   await clock.advance(0);
   assert.equal(s2.granted.length, 2, "the token refilled while the first request was in flight");
+
+  // A request arriving after the token refilled still waits for the slot of a slow request
+  const clock2 = fakeClock();
+  const limiter2 = createRateLimiter({ clock: clock2 });
+  const slow = await limiter2.acquire(S2);
+  await clock2.advance(2000);
+  let second = null;
+  limiter2.acquire(S2).then((done) => (second = done));
+  await clock2.advance(0);
+  assert.equal(second, null, "the cap holds at a fresh acquire");
+  assert.deepEqual(limiter2.stats()["api.semanticscholar.org"], { active: 1, waiting: 1 });
+  slow();
+  await clock2.advance(0);
+  assert.equal(typeof second, "function", "granted once the first request is done");
+  second();
 });
 
 test("a queued request is cancelled without blocking the others", async () => {
@@ -287,6 +318,20 @@ test("a 429 with Retry-After pauses the host; Semantic Scholar retries 5xx with 
   assert.deepEqual(await done, { ok: true });
   assert.deepEqual(s2Sleeps, [3000, 6000]);
   assert.deepEqual(s2.calls.map((c) => c.at), [0, 1000, 2000], "one request per second");
+
+  // ... and a Semantic Scholar 5xx with Retry-After pauses the host for other requests too
+  const clock3 = fakeClock();
+  const s2b = limitedTransport(clock3, (req, n) =>
+    n === 1 ? { status: 503, data: {}, headers: { "retry-after": "5" } } : { status: 200, data: { ok: n } },
+  );
+  const firstS2 = request(s2b, { url: S2, method: "POST" }, { sleep: async () => {} });
+  await clock3.advance(0);
+  const otherS2 = getJson(s2b, `${S2}?other`, { sleep: async () => {} });
+  await clock3.advance(4500);
+  assert.equal(s2b.calls.length, 1, "nothing is sent to Semantic Scholar during the pause");
+  await clock3.advance(3000);
+  await Promise.all([firstS2, otherS2]);
+  assert.ok(s2b.calls.slice(1).every((c) => c.at >= 5000));
 
   // Other hosts keep the 2 s base delay; a 4xx is not retried
   const plain = limitedTransport(fakeClock(), () => ({ status: 404, data: { message: "nope" } }));

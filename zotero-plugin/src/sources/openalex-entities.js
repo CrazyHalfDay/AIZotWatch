@@ -32,8 +32,15 @@ const isRecord = (value) => !!value && typeof value === "object" && !Array.isArr
 const text = (value) => (typeof value === "string" ? collapseWhitespace(value) : "");
 const count = (value) => (Number.isFinite(Number(value)) && value !== null && value !== "" ? Number(value) : null);
 const CJK = /[㐀-鿿豈-﫿]/;
-// Romanised words of Chinese-language journal titles ("Acta Petrologica Sinica" = 岩石学报, "Dizhi Xuebao")
-const CHINESE_TITLE_WORDS = /\b(sinica|chinese|xuebao|kexue|dizhi|diqiu|zhongguo|tongbao|yanjiu|jinzhan|huaxue|kuangwu|yanshi|dili)\b/i;
+// Pinyin words of Chinese-language journal titles ("Dizhi Xuebao" = 地质学报)
+const PINYIN_TITLE_WORDS = /\b(xuebao|kexue|dizhi|diqiu|zhongguo|tongbao|yanjiu|jinzhan|huaxue|kuangwu|yanshi|dili)\b/i;
+// Latin / English words of Chinese-language titles ("Acta Petrologica Sinica" = 岩石学报) that
+// English journals from China use as well ("Acta Oceanologica Sinica", "Chinese Chemical Letters")
+const CHINESE_TITLE_HINTS = /\b(sinica|chinese)\b/i;
+const ENGLISH_EDITION = /\bEnglish\s+(edition|series|version)\b/i;
+// International publishers of English journals from China (co-published titles)
+const INTERNATIONAL_PUBLISHER =
+  /\b(springer|elsevier|wiley|taylor\s*(&|and)\s*francis|nature|oxford university press|cambridge university press|iop|keai|de gruyter|frontiers|mdpi|sage|ieee|american|royal society|bmc|hindawi|wolters kluwer)\b/i;
 
 /** "S1234" / "A5023888391" from an OpenAlex URL or id; "" when absent. */
 export function openAlexShortId(value, prefix) {
@@ -69,17 +76,24 @@ function topTopic(topics) {
 
 /**
  * Heuristic for a Chinese-language journal (Chinese core, "(CN)" in the
- * whitelist category): published in China (country_code "CN") and a title,
- * abbreviation or alternate title that is Chinese (CJK characters) or a
- * romanised Chinese title ("Acta Petrologica Sinica", "Dizhi Xuebao",
- * "Chinese Journal of Geophysics"). OpenAlex has no language field for
- * sources; English journals published in China ("Science China Earth
- * Sciences") are not marked and keep their impact factor.
+ * whitelist category), as OpenAlex has no language field for sources:
+ * published in China (country_code "CN"), not an "English Edition", and
+ * - a title, abbreviation or alternate title in Chinese characters or pinyin
+ *   ("岩石学报", "Dizhi Xuebao"), or
+ * - a Latin title with "Sinica" / "Chinese" ("Acta Petrologica Sinica",
+ *   "Chinese Journal of Geophysics") from a publisher other than the
+ *   international ones that co-publish English journals from China
+ *   (Springer, Elsevier, Wiley, ...: "Acta Oceanologica Sinica", "Chinese
+ *   Chemical Letters" are English).
+ * Other English journals published in China ("Science China Earth Sciences")
+ * are not marked and keep their impact factor.
  */
 export function isChineseSource(src) {
   if (!isRecord(src) || String(src.country_code || "").toUpperCase() !== "CN") return false;
   const names = [src.display_name, src.abbreviated_title, ...(Array.isArray(src.alternate_titles) ? src.alternate_titles : [])].map(text).filter(Boolean);
-  return names.some((name) => CJK.test(name) || CHINESE_TITLE_WORDS.test(name));
+  if (names.some((name) => ENGLISH_EDITION.test(name))) return false;
+  if (names.some((name) => CJK.test(name) || PINYIN_TITLE_WORDS.test(name))) return true;
+  return !INTERNATIONAL_PUBLISHER.test(text(src.host_organization_name)) && names.some((name) => CHINESE_TITLE_HINTS.test(name));
 }
 
 /** Normalised distinct ISSNs of a source (its list, falling back to issn_l). */
@@ -93,7 +107,8 @@ function sourceIssns(src) {
 /**
  * Map an OpenAlex source to a journal of the whitelist; null without a name.
  * `impactFactor` is OpenAlex's two-year mean citedness (summary_stats
- * "2yr_mean_citedness", an impact-factor-like metric) rounded to 1 decimal;
+ * "2yr_mean_citedness", an impact-factor-like metric) rounded to 1 decimal
+ * (null when it is 0, i.e. unknown, so the journal keeps the neutral score);
  * `category` comes from the top topic, with " (CN)" for Chinese-language
  * journals (see isChineseSource).
  * @returns {{openalexId, title, issns, issnL, impactFactor, category, subfield, chinese, country, publisher, type, worksCount, citedByCount, titles}|null}
@@ -112,7 +127,8 @@ export function mapOpenAlexSource(src) {
     title,
     issns: sourceIssns(src),
     issnL: normalizeIssn(src.issn_l) || null,
-    impactFactor: citedness !== null && citedness >= 0 ? Math.round(citedness * 10) / 10 : null,
+    // 0 means "no citations linked yet" (journals younger than two years): unknown, not a zero IF
+    impactFactor: citedness !== null && citedness > 0 ? Math.max(0.1, Math.round(citedness * 10) / 10) : null,
     category: chinese ? (base ? `${base} (CN)` : "(CN)") : base,
     subfield: text(topic?.subfield?.display_name) || text(topic?.field?.display_name),
     chinese,

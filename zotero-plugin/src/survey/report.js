@@ -27,11 +27,16 @@ export function referenceOf(p, n, theme = null) {
   };
 }
 
-/** Link of a reference: its DOI, else an http(s) URL, else null. */
+// Characters a URL may not hold as they are (old Wiley SICI DOIs contain "<" and ">"):
+// percent-encoded, so that a Markdown <autolink> or an href stays one link
+const UNSAFE_URL_CHARS = /[<>\s"`{}|\\^]/g;
+const safeUrl = (url) => url.replace(UNSAFE_URL_CHARS, (c) => encodeURIComponent(c));
+
+/** Link of a reference: its DOI, else an http(s) URL, else null (unsafe characters percent-encoded). */
 export function referenceLink(ref) {
   const doi = normalizeDoi(ref.doi);
-  if (doi) return `https://doi.org/${doi}`;
-  return /^https?:\/\//i.test(ref.url || "") ? ref.url : null;
+  if (doi) return safeUrl(`https://doi.org/${doi}`);
+  return /^https?:\/\//i.test(ref.url || "") ? safeUrl(ref.url) : null;
 }
 
 /** "Wang L, Li M et al. Title. Venue, 2021." style citation text of a reference. */

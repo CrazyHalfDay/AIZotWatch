@@ -5,7 +5,7 @@
 
 import { apiUsage, createCancelSignal, limitedRequest } from "../core/http.js";
 import { parseFollowedAuthors } from "../core/authors.js";
-import { DEFAULT_RATE_LIMITS, mergeRateLimits, sharedRateLimiter } from "../core/ratelimit.js";
+import { DEFAULT_RATE_LIMITS, PUBLIC_CROSSREF_LIMIT, mergeRateLimits, sharedRateLimiter } from "../core/ratelimit.js";
 import { journalRows, mergeWhitelistRows, parseWhitelist, summarizeWhitelist } from "../core/journals.js";
 import { FLAGSHIP_JOURNALS } from "../core/flagship.js";
 import { normalizeIssn } from "../core/text.js";
@@ -22,7 +22,7 @@ import { checkSemanticScholarRow } from "../sources/semanticscholar.js";
 import { SurveyEngine, createSurvey, regenerateFrom } from "../survey/engine.js";
 import { MAX_SEEDS, SURVEY_DEPTHS, SURVEY_STAGES, normalizeSurveyInput, surveyEstimate } from "../survey/presets.js";
 import { markdownFileName, surveyMarkdown } from "../survey/report.js";
-import { deleteSurvey as deleteStoredSurvey, isSurveyId, loadSurvey, readIndex, saveSurvey } from "../survey/store.js";
+import { deleteSurvey as deleteStoredSurvey, isSurveyId, loadSurvey, mergeLibraryState, readIndex, saveSurvey, updateSurvey } from "../survey/store.js";
 import { addWorkToZotero } from "./items.js";
 import {
   getItemFullText,
@@ -185,6 +185,11 @@ export function surveyDoneNotice(survey) {
   return `主题调研「${survey.input?.topic || ""}」已完成：候选 ${survey.counts?.candidates ?? 0} 篇${read}。在 ZotWatch →「调研」中查看。`;
 }
 
+/** Text of the notice for a survey that failed in the background. */
+export function surveyFailedNotice(survey, error) {
+  return `主题调研「${survey.input?.topic || ""}」未完成：${error?.message || error || "未知错误"}。可在 ZotWatch →「调研」中继续。`;
+}
+
 /**
  * When the scheduler starts the next automatic run (ms since the epoch), or
  * null when automatic runs are off. Same rule as isRunDue: the interval since
@@ -199,9 +204,10 @@ export function nextRunAt({ autoRun, intervalHours, lastRun, lastAttempt }, retr
 /**
  * Rate limits from the hidden pref extensions.zotwatch.http.rateLimits (JSON
  * {host: {rps, concurrency} | null}) merged into the defaults; malformed text
- * is ignored.
+ * is ignored. Without a Crossref contact address (`mailto`) Crossref requests
+ * go to its public pool, which allows one request in flight at a time.
  */
-export function rateLimitsFromPref(text) {
+export function rateLimitsFromPref(text, { mailto = "" } = {}) {
   let overrides = null;
   if (typeof text === "string" && text.trim()) {
     try {
@@ -210,7 +216,8 @@ export function rateLimitsFromPref(text) {
       overrides = null;
     }
   }
-  return mergeRateLimits(DEFAULT_RATE_LIMITS, overrides);
+  const base = String(mailto ?? "").trim() ? DEFAULT_RATE_LIMITS : { ...DEFAULT_RATE_LIMITS, "api.crossref.org": PUBLIC_CROSSREF_LIMIT };
+  return mergeRateLimits(base, overrides);
 }
 
 /**
@@ -521,10 +528,13 @@ export class ZotWatchAddon {
     return sharedRateLimiter();
   }
 
-  /** Apply the hidden rate-limit pref to the shared limiter (at startup and before each run). */
+  /**
+   * Apply the hidden rate-limit pref and the Crossref contact address to the
+   * shared limiter (at startup, before each run, survey and journal action).
+   */
   applyRateLimits() {
     try {
-      sharedRateLimiter().setLimits(rateLimitsFromPref(getPref("http.rateLimits")));
+      sharedRateLimiter().setLimits(rateLimitsFromPref(getPref("http.rateLimits"), { mailto: getPref("sources.crossref.mailto") || "" }));
     } catch (e) {
       Zotero.logError(e);
     }
@@ -1002,14 +1012,28 @@ export class ZotWatchAddon {
     return this.whitelist;
   }
 
+  /**
+   * Save the whitelist. Replacing a file that could not be read keeps a copy of
+   * it as journals.csv.bak first; resolves with {backup} naming that copy, else {}.
+   */
   async setJournalWhitelist(text) {
     const value = String(text ?? "");
-    if (value === this.whitelist && !this.whitelistError) return;
+    if (value === this.whitelist && !this.whitelistError) return {};
+    let backup = null;
+    if (this.whitelistError) {
+      // The unreadable file still holds the user's list (e.g. saved as GBK by Excel)
+      const bytes = await this.storage.readBinary(WHITELIST_FILE);
+      if (bytes?.length) {
+        backup = `${WHITELIST_FILE}.bak`;
+        await this.storage.writeBinary(backup, bytes);
+      }
+    }
     // Written first: after a failed write the list in memory stays the saved
     // one, so the settings page sees the edit as unsaved and retries it
     await this.storage.writeText(WHITELIST_FILE, value);
     this.whitelist = value;
     this.whitelistError = null;
+    return backup ? { backup } : {};
   }
 
   // ---------------------------------------------------------- settings helpers
@@ -1023,6 +1047,7 @@ export class ZotWatchAddon {
    */
   async checkConnections(only = null) {
     const settings = this.getSettings();
+    this.applyRateLimits();
     const want = (key) => !only || only.includes(key);
     const rows = [];
     if (want("embedding")) {
@@ -1135,6 +1160,7 @@ export class ZotWatchAddon {
    */
   async withJournalSignal(task) {
     this.journalSignal?.cancel();
+    this.applyRateLimits();
     const signal = createCancelSignal();
     this.journalSignal = signal;
     try {
@@ -1387,6 +1413,8 @@ export class ZotWatchAddon {
         }
         Zotero.logError(e);
         this.emit({ type: "survey", action: "error", id, message: e?.message || String(e) });
+        // The page promises a notice once the window is closed: a failure gets one too
+        if (!Services.wm.getMostRecentWindow(DIALOG_TYPE)) this.notify("ZotWatch 主题调研失败", surveyFailedNotice(survey, e), { sticky: true });
         return null;
       } finally {
         if (this.surveyTask === task) this.surveyTask = null;
@@ -1422,9 +1450,18 @@ export class ZotWatchAddon {
     }
   }
 
+  /**
+   * Refuse while a survey is being saved to Zotero or edited (a paper added):
+   * a run started now would save its own copy over the edit, or the edit over the run.
+   */
+  assertSurveyIdle(id) {
+    if (this.surveySaves.has(id) || this.surveyEdits.has(id)) throw new Error("正在保存这项调研，请等保存完成");
+  }
+
   /** Go on with a cancelled or failed survey from its last finished stage: {id}. */
   async resumeSurvey(id) {
     this.assertNoSurvey();
+    this.assertSurveyIdle(id);
     const survey = await this.requireSurvey(id);
     if (survey.status === "done") throw new Error("这项调研已经完成");
     this.launchSurvey(survey, this.getSettings());
@@ -1437,6 +1474,7 @@ export class ZotWatchAddon {
    */
   async regenerateReport(id) {
     this.assertNoSurvey();
+    this.assertSurveyIdle(id);
     const settings = this.getSettings();
     if (!ZotWatchAddon.llmReady(settings)) throw new Error("生成综述需要开启大模型（设置 → AI 助手）");
     const survey = await this.requireSurvey(id);
@@ -1480,14 +1518,22 @@ export class ZotWatchAddon {
     return { ...survey, status: interrupted ? "cancelled" : survey.status, interrupted, running: false, progress: null };
   }
 
-  /** Delete a survey (a running one is cancelled first); true when it existed. */
+  /**
+   * Delete a survey (a running one is cancelled first, a save to Zotero stops
+   * importing and is waited for); true when it existed.
+   */
   async deleteSurvey(id) {
+    this.cancelSurveySave(id);
     const task = this.surveyTask;
     if (task?.id === id) {
       task.signal.cancel();
       await settleWithin(task.promise, this.shutdownGraceMs);
+      // A step that does not notice the cancel (a large PDF's full text) saves the
+      // survey once it ends: delete it again then
+      if (this.surveyTask === task) task.promise.finally(() => deleteStoredSurvey(this.storage, id)).catch(() => {});
     }
-    const removed = await deleteStoredSurvey(this.storage, id);
+    // After the pending edits (their writes find the survey gone afterwards)
+    const removed = await this.withSurveyEdit(id, () => deleteStoredSurvey(this.storage, id));
     this.emit({ type: "survey", action: "deleted", id });
     return removed;
   }
@@ -1527,7 +1573,8 @@ export class ZotWatchAddon {
       log,
     });
     survey.updatedAt = Date.now();
-    await saveSurvey(this.storage, survey);
+    // Into the stored survey (not the copy loaded when the save started); nothing when it was deleted meanwhile
+    await updateSurvey(this.storage, id, (stored) => mergeLibraryState(stored, survey));
     this.emit({ type: "survey", action: "saved", id, result });
     return result;
   }
@@ -1556,8 +1603,9 @@ export class ZotWatchAddon {
     const source = paper || ref;
     if (!source) throw new Error("这篇文献不在调研结果中");
     if (source.inLibrary && source.itemKey) {
-      const item = await itemByKey(source.itemKey);
-      if (item) return { itemID: item.id, itemKey: item.key, existing: true };
+      // Imports may have gone to My Library (a read-only profile library): look there
+      const item = await itemByKey(source.itemKey, source.itemLibraryID ?? profileLibraryID());
+      if (item) return { itemID: item.id, itemKey: item.key, itemLibraryID: item.libraryID, existing: true };
     }
     const settings = this.getSettings();
     const item = await addWorkToZotero(workOfPaper(source), {
@@ -1572,16 +1620,20 @@ export class ZotWatchAddon {
       if (!target) continue;
       target.inLibrary = true;
       target.itemKey = item.key;
+      target.itemLibraryID = item.libraryID;
     }
     survey.updatedAt = Date.now();
-    await saveSurvey(this.storage, survey);
+    await updateSurvey(this.storage, id, (stored) => mergeLibraryState(stored, survey));
     this.emit({ type: "survey", action: "updated", id });
-    return { itemID: item.id, itemKey: item.key, existing: false };
+    return { itemID: item.id, itemKey: item.key, itemLibraryID: item.libraryID, existing: false };
   }
 
-  /** Select a library item (by key) in Zotero's main window; false when it no longer exists. */
-  async showItemByKey(key) {
-    const item = await itemByKey(key);
+  /**
+   * Select a library item (by key, in `libraryID`, default the profile
+   * library) in Zotero's main window; false when it no longer exists.
+   */
+  async showItemByKey(key, libraryID = null) {
+    const item = await itemByKey(key, libraryID ?? profileLibraryID());
     if (!item) return false;
     await this.showItem(item.id);
     return true;
@@ -1637,6 +1689,8 @@ export class ZotWatchAddon {
   async resetData() {
     if (this.running) throw new Error("正在运行，请稍后再试");
     if (this.surveyTask) throw new Error("正在进行主题调研，请等待完成或先取消");
+    // A save would write its survey back after the reset
+    if (this.surveySaves.size || this.surveyEdits.size) throw new Error("正在把调研保存到 Zotero，请等保存完成后再试");
     await this.storage.clear();
     // In-memory OpenAlex answers of the settings page are caches too
     this.searchCache?.clear();

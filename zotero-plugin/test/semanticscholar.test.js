@@ -152,19 +152,23 @@ test("search, references, citations, recommendations and author search", async (
   const refs = await s2References(http, "abc1", { key, limit: 5000 });
   assert.deepEqual(refs.map((p) => [p.paperId, p.influential]), [["abc3", true], ["abc4", false]]);
   assert.match(urls(http)[2], /\/paper\/abc1\/references\?fields=paperId,.*,isInfluential&limit=1000$/);
-  const cits = await s2Citations(http, "DOI:10.1016/j.x");
+  assert.equal(http.calls[2].headers["x-api-key"], "k", "references carry the key");
+  const cits = await s2Citations(http, "DOI:10.1016/j.x", { key });
   assert.deepEqual(cits.map((p) => p.paperId), ["abc5"]);
+  assert.equal(http.calls[3].headers["x-api-key"], "k", "citations carry the key");
   assert.deepEqual(await s2References(http, ""), []);
 
   const recs = await s2Recommendations(http, ["abc1", "abc1", " ", "abc2"], { negativeIds: ["abc9"], key, limit: 50 });
   assert.deepEqual(recs.map((p) => p.paperId), ["abc6"]);
   const recCall = http.calls.at(-1);
   assert.equal(recCall.method, "POST");
+  assert.equal(recCall.headers["x-api-key"], "k", "recommendations carry the key");
   assert.match(decodeURIComponent(recCall.url), /^https:\/\/api\.semanticscholar\.org\/recommendations\/v1\/papers\?limit=50&fields=/);
   assert.deepEqual(JSON.parse(recCall.body), { positivePaperIds: ["abc1", "abc2"], negativePaperIds: ["abc9"] });
   assert.deepEqual(await s2Recommendations(http, []), []);
 
   const authors = await s2AuthorSearch(http, "Ann Lee", { key });
+  assert.equal(http.calls.at(-1).headers["x-api-key"], "k", "author search carries the key");
   assert.deepEqual(authors, [{ authorId: "123", name: "Ann Lee", affiliations: ["MIT"], paperCount: 40, citationCount: 900, hIndex: 12, orcid: "0000-0002-1825-0097" }]);
 
   // Malformed bodies give empty results

@@ -140,6 +140,9 @@ function createSearchBox(options) {
       return row;
     });
     list.replaceChildren(...state.rows.map((row) => row.li));
+    // New results start with nothing highlighted: Enter must never pick a row
+    // the user highlighted among older results
+    setActive(-1);
     refresh();
     open(results.length > 0);
   }
@@ -192,6 +195,8 @@ function createSearchBox(options) {
       open(true);
       return;
     }
+    // The shown rows belong to another query now: Enter searches instead of picking one
+    setActive(-1);
     state.timer = setTimeout(searchNow, delay);
   });
 

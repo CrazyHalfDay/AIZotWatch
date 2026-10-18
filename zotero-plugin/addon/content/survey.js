@@ -1,4 +1,4 @@
-/* global Zotero, ChromeUtils, window, document, $, el, svgIcon, emptyState, navigate, setSubtitle, registerPage, confirmAction,
+/* global Zotero, ChromeUtils, IOUtils, window, document, $, el, svgIcon, emptyState, navigate, setSubtitle, registerPage, confirmAction,
    api, toast, formatNumber, formatRelative, formatDateTime, createSearchBox, searchResultText */
 
 // 调研 page: topic literature surveys (src/survey/, run by src/zotero/addon.js).
@@ -89,7 +89,10 @@ var ZotWatchSurvey = (() => {
     busy: new Map(),
     rowErrors: new Map(),
     action: null,
-    save: { open: false, mode: "cited", running: false, progress: null, result: null, error: null },
+    // Survey id whose remembered scroll position waits for its first full render
+    restoreScroll: null,
+    // 保存到 Zotero, per survey (a save goes on while another survey is shown): id -> {open, mode, running, progress, result, error}
+    saves: new Map(),
     saveHost: null,
     saveButton: null,
     bodyHost: null,
@@ -101,6 +104,13 @@ var ZotWatchSurvey = (() => {
   };
 
   // ------------------------------------------------------------ helpers
+
+  /** The 保存到 Zotero state of a survey. */
+  function saveOf(id) {
+    let sv = state.saves.get(id);
+    if (!sv) state.saves.set(id, (sv = { open: false, mode: "cited", running: false, progress: null, result: null, error: null }));
+    return sv;
+  }
 
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
   const isRecord = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -315,7 +325,8 @@ var ZotWatchSurvey = (() => {
     if (r.failed) parts.push(`${r.failed} 篇导入失败`);
     if (r.skipped) parts.push(`${r.skipped} 篇在其他文库中，未加入`);
     const tail = r.cancelled ? "；已停止导入，其余文献未加入" : "";
-    return `已保存到「${r.collectionName}」：笔记已写入${parts.length ? `，${parts.join("，")}` : ""}${tail}。`;
+    const note = r.keptEditedNote ? "原笔记在 Zotero 中修改过，已保留，综述写入了一篇新笔记" : "笔记已写入";
+    return `已保存到「${r.collectionName}」：${note}${parts.length ? `，${parts.join("，")}` : ""}${tail}。`;
   }
 
   /** Lines of the 调研过程 panel from the stage summaries: [[label, text]]. */
@@ -428,6 +439,13 @@ var ZotWatchSurvey = (() => {
       }
     }
     render();
+    // The shell restored this survey's scroll position while only 正在加载… was shown (and
+    // clamped it): apply it again now that the survey is there
+    if (state.restoreScroll && state.restoreScroll === state.id && state.survey?.id === state.id) {
+      state.restoreScroll = null;
+      const top = window.ZotWatchMain?.rememberedScroll?.("survey", state.id) || 0;
+      if (top) $("pages").scrollTop = top;
+    }
   }
 
   // -------------------------------------------------------------- shell
@@ -449,6 +467,21 @@ var ZotWatchSurvey = (() => {
     return count ? `检索、精读并撰写文献综述 · 共 ${count} 项调研` : "围绕一个主题检索、精读并撰写文献综述";
   }
 
+  const TOOLBAR_KEYS = new Set(["resume", "save", "export", "regenerate", "delete"]);
+
+  /**
+   * Where focus goes when its control is gone or busy (disabled) after a
+   * re-render: 加入 Zotero -> 已在文库 -> its row, a toolbar button -> the toolbar,
+   * a button of the save panel -> the panel's other buttons.
+   */
+  function focusFallbacks(key) {
+    const add = /^add:(.*)$/.exec(key);
+    if (add) return [`show:${add[1]}`, `item:${add[1]}`];
+    if (TOOLBAR_KEYS.has(key)) return ["toolbar"];
+    if (key.startsWith("save-")) return ["save-stop", "save-again", "save-go", "save"];
+    return [];
+  }
+
   /** Remember the focused control (by data-key) across a re-render. */
   function withFocus(fn) {
     const active = document.activeElement;
@@ -456,8 +489,13 @@ var ZotWatchSurvey = (() => {
     fn();
     if (!key) return;
     const root = $("survey-root");
-    const next = root.querySelector?.(`[data-key="${String(key).replace(/["\\]/g, "\\$&")}"]`);
-    if (next && !next.disabled) next.focus?.({ preventScroll: true });
+    for (const k of [key, ...focusFallbacks(String(key))]) {
+      const next = root.querySelector?.(`[data-key="${String(k).replace(/["\\]/g, "\\$&")}"]`);
+      if (next && !next.disabled) {
+        next.focus?.({ preventScroll: true });
+        return;
+      }
+    }
   }
 
   // --------------------------------------------------------------- form
@@ -900,7 +938,7 @@ var ZotWatchSurvey = (() => {
     state.heading = state.formNodes.title;
     updateFormOptions();
     renderRunningCard();
-    renderHistory();
+    withFocus(renderHistory);
   }
 
   function runningEntry() {
@@ -988,7 +1026,7 @@ var ZotWatchSurvey = (() => {
             {},
             el(
               "a",
-              { class: "sv-hist", href: `#survey/${e.id}`, title: status.title || null },
+              { class: "sv-hist", href: `#survey/${e.id}`, title: status.title || null, "data-key": `hist:${e.id}` },
               el("span", { class: `dot ${status.tone}` }),
               el("span", { class: "sv-hist-main" }, el("span", { class: "sv-hist-topic", text: e.topic || "（未命名）" }), el("span", { class: "sv-hist-meta", text: historyMeta(e) })),
               el("span", { class: `sv-hist-status ${status.tone}`, text: status.label }),
@@ -1181,34 +1219,40 @@ var ZotWatchSurvey = (() => {
     const hasReport = !!s.report;
     const resumable = s.status !== "done";
     const other = otherRunning(s.id);
+    // While it is saved to Zotero, the survey is neither run again nor deleted
+    const saving = saveOf(s.id).running;
+    const savingTitle = "正在保存到 Zotero，请等保存完成";
     const llm = !!options().llm;
     const regenerateTitle = !llm
       ? "需要开启大模型（设置 → AI 助手）"
       : other
         ? "已有一项调研正在进行"
-        : s.report?.kind === "list"
-          ? "精读排名靠前的文献并撰写综述，不重新检索"
-          : "用当前的大模型设置重新撰写综述，不重新检索";
+        : saving
+          ? savingTitle
+          : s.report?.kind === "list"
+            ? "精读排名靠前的文献并撰写综述，不重新检索"
+            : "用当前的大模型设置重新撰写综述，不重新检索";
     return el(
       "div",
-      { class: "sv-toolbar", role: "toolbar", "aria-label": "调研操作" },
+      // Focusable (not in the tab order) so that focus stays here while its buttons are busy
+      { class: "sv-toolbar", role: "toolbar", "aria-label": "调研操作", "data-key": "toolbar", tabindex: "-1" },
       resumable
-        ? toolbarButton("resume", "继续", "play", () => resume(), { cls: "btn primary", disabled: other, title: other ? "已有一项调研正在进行" : "从中断的那一步继续" })
+        ? toolbarButton("resume", "继续", "play", () => resume(), { cls: "btn primary", disabled: other || saving, title: other ? "已有一项调研正在进行" : saving ? savingTitle : "从中断的那一步继续" })
         : null,
       (state.saveButton = hasReport
         ? toolbarButton("save", "保存到 Zotero", "note", () => toggleSave(), {
             expanded: isSaveOpen(),
             cls: resumable ? "btn" : "btn primary",
-            disabled: state.save.running,
+            disabled: saving,
             title: "保存为 Zotero 笔记，可同时加入文献",
           })
         : null),
       hasReport ? toolbarButton("export", "导出 Markdown", "download", () => exportMarkdown(), { title: "保存为 Markdown 文件" }) : null,
       s.status === "done"
-        ? toolbarButton("regenerate", s.report?.kind === "list" ? "生成综述" : "重新生成综述", "sparkle", () => regenerate(), { disabled: !llm || other, title: regenerateTitle })
+        ? toolbarButton("regenerate", s.report?.kind === "list" ? "生成综述" : "重新生成综述", "sparkle", () => regenerate(), { disabled: !llm || other || saving, title: regenerateTitle })
         : null,
       el("span", { class: "sv-toolbar-spacer" }),
-      toolbarButton("delete", "删除", "trash", () => remove(), { cls: "btn ghost sv-delete", title: "删除这项调研（不影响已保存到 Zotero 的内容）" }),
+      toolbarButton("delete", "删除", "trash", () => remove(), { cls: "btn ghost sv-delete", disabled: saving, title: saving ? savingTitle : "删除这项调研（不影响已保存到 Zotero 的内容）" }),
     );
   }
 
@@ -1531,7 +1575,7 @@ var ZotWatchSurvey = (() => {
       : null;
     const li = el(
       "li",
-      { class: "sv-ref", tabindex: "-1" },
+      { class: "sv-ref", tabindex: "-1", "data-key": `item:${ref.id}` },
       el("span", { class: "sv-ref-n", text: `[${ref.n}]` }),
       el(
         "div",
@@ -1626,7 +1670,7 @@ var ZotWatchSurvey = (() => {
     fill.style.width = `${Math.round(total * 100)}%`;
     return el(
       "tr",
-      { class: p.read ? "is-read" : null },
+      { class: p.read ? "is-read" : null, tabindex: "-1", "data-key": `item:${p.id}` },
       el("td", { class: "num sv-rank", text: Number.isFinite(p.rank) ? String(p.rank) : "" }),
       el("td", { class: "num sv-score", title: scoreTitle(p) }, el("span", { class: "sv-score-value", text: scoreText(p) }), el("span", { class: "sv-score-bar", "aria-hidden": "true" }, fill)),
       el(
@@ -1837,9 +1881,22 @@ var ZotWatchSurvey = (() => {
     if (rv !== fp.returnOK && rv !== fp.returnReplace) return null;
     let path = typeof fp.file === "string" ? fp.file : fp.file?.path;
     if (!path) return null;
-    // A name typed without any extension gets ".md"
-    if (!/\.[^\\/.]+$/.test(path)) path += ".md";
+    // A name typed without any extension gets ".md"; the picker only asked about
+    // replacing the name as typed (GTK), so ask before replacing the ".md" file
+    if (!/\.[^\\/.]+$/.test(path)) {
+      const withExt = `${path}.md`;
+      if ((await fileExists(withExt)) && !confirmAction(`「${withExt.split(/[\\/]/).pop()}」已存在，要替换它吗？`)) return null;
+      path = withExt;
+    }
     return path;
+  }
+
+  async function fileExists(path) {
+    try {
+      return typeof IOUtils !== "undefined" && !!(await IOUtils.exists(path));
+    } catch {
+      return false;
+    }
   }
 
   function exportMarkdown() {
@@ -1867,6 +1924,7 @@ var ZotWatchSurvey = (() => {
         if (p.id !== paper.id) continue;
         p.inLibrary = true;
         p.itemKey = result?.itemKey || p.itemKey || null;
+        if (result?.itemLibraryID !== undefined) p.itemLibraryID = result.itemLibraryID;
       }
       toast(result?.existing ? "这篇文献已在 Zotero 中" : "已加入 Zotero");
     } catch (e) {
@@ -1880,7 +1938,7 @@ var ZotWatchSurvey = (() => {
   async function showInZotero(paper) {
     if (!paper.itemKey) return;
     try {
-      if (!(await api().showItemByKey(paper.itemKey))) toast("这篇文献已不在 Zotero 文库中", { tone: "error" });
+      if (!(await api().showItemByKey(paper.itemKey, paper.itemLibraryID ?? null))) toast("这篇文献已不在 Zotero 文库中", { tone: "error" });
     } catch (e) {
       toast(e?.message || String(e), { tone: "error" });
     }
@@ -1889,7 +1947,8 @@ var ZotWatchSurvey = (() => {
   // ------------------------------------------------------------- save
 
   function toggleSave() {
-    const sv = state.save;
+    if (!state.survey) return;
+    const sv = saveOf(state.survey.id);
     if (sv.running) return;
     sv.open = !sv.open;
     sv.result = null;
@@ -1914,17 +1973,17 @@ var ZotWatchSurvey = (() => {
     ];
   }
 
-  const isSaveOpen = () => !!(state.save.open || state.save.running || state.save.result || state.save.error);
+  const isSaveOpen = (sv = state.survey ? saveOf(state.survey.id) : null) => !!sv && !!(sv.open || sv.running || sv.result || sv.error);
 
   /** The 保存到 Zotero panel under the toolbar (re-rendered in place on progress). */
   function renderSave() {
     const host = state.saveHost;
     const s = state.survey;
     if (!host || !s) return;
-    const sv = state.save;
-    state.saveButton?.setAttribute("aria-expanded", isSaveOpen() ? "true" : "false");
+    const sv = saveOf(s.id);
+    state.saveButton?.setAttribute("aria-expanded", isSaveOpen(sv) ? "true" : "false");
     if (state.saveButton) state.saveButton.disabled = !!state.action || sv.running;
-    if (!isSaveOpen()) {
+    if (!isSaveOpen(sv)) {
       host.replaceChildren();
       return;
     }
@@ -1973,7 +2032,9 @@ var ZotWatchSurvey = (() => {
           { class: "sv-save", role: "group", "aria-label": "保存到 Zotero" },
           el("div", { class: "sv-save-title", text: "保存到 Zotero" }),
           el("p", { class: "sv-help", text: `在分类「${collectionName(s)}」中保存一篇笔记（综述正文与编号参考文献，注明由 AI 生成）。已在文库中的文献直接加入分类，其余通过 DOI 导入。` }),
-          s.saved?.at ? el("p", { class: "sv-help", text: `上次保存于 ${formatDateTime(s.saved.at)}；再次保存会更新同一篇笔记。` }) : null,
+          s.saved?.at
+            ? el("p", { class: "sv-help", text: `上次保存于 ${formatDateTime(s.saved.at)}；再次保存会更新同一篇笔记（在 Zotero 中修改过的笔记会保留，另写一篇新笔记）。` })
+            : null,
           el("div", { class: "sv-radios", role: "radiogroup", "aria-label": "一同加入的文献" }, radios),
           progress,
           sv.result ? el("p", { class: "sv-save-result", role: "status" }, svgIcon("check-circle"), saveResultText(sv.result)) : null,
@@ -1985,17 +2046,19 @@ var ZotWatchSurvey = (() => {
   }
 
   function closeSave() {
-    Object.assign(state.save, { open: false, result: null, error: null });
+    if (state.survey) Object.assign(saveOf(state.survey.id), { open: false, result: null, error: null });
     renderSave();
     $("survey-root").querySelector?.('[data-key="save"]')?.focus?.();
   }
 
   async function doSave() {
     const s = state.survey;
-    const sv = state.save;
-    if (!s || sv.running) return;
+    if (!s) return;
+    const sv = saveOf(s.id);
+    if (sv.running) return;
     Object.assign(sv, { open: true, running: true, progress: null, result: null, error: null });
-    renderSave();
+    // The whole view: 继续, 重新生成综述 and 删除 wait for the save
+    render();
     try {
       sv.result = await api().saveSurveyToZotero(s.id, { addPapers: sv.mode });
       toast(sv.result?.cancelled ? "已停止导入，笔记已保存" : "已保存到 Zotero");
@@ -2049,14 +2112,16 @@ var ZotWatchSurvey = (() => {
         break;
       case "updated":
       case "saved":
-        if (state.visible && state.id === event.id && !state.save.running) load();
+        if (state.visible && state.id === event.id && !state.saves.get(event.id)?.running) load();
         break;
-      case "save-progress":
-        if (state.id === event.id && state.save.running) {
-          state.save.progress = event.progress || null;
-          renderSave();
+      case "save-progress": {
+        const sv = state.saves.get(event.id);
+        if (sv?.running) {
+          sv.progress = event.progress || null;
+          if (state.id === event.id) renderSave();
         }
         break;
+      }
       default:
     }
   }
@@ -2094,11 +2159,14 @@ var ZotWatchSurvey = (() => {
     if (id !== state.id) {
       state.id = id;
       state.survey = state.survey?.id === id ? state.survey : null;
+      // Shown only once loaded: the shell's restored scroll position is applied then (see load)
+      state.restoreScroll = id && !state.survey ? id : null;
       state.tab = null;
       state.table = { ...state.table, filter: "all", limit: PAGE_SIZE };
       state.expanded = new Set();
       state.rowErrors = new Map();
-      Object.assign(state.save, { open: false, running: false, progress: null, result: null, error: null });
+      // Finished saves are forgotten; a running one keeps its progress for when its survey is shown again
+      for (const [key, sv] of state.saves) if (!sv.running) state.saves.delete(key);
       $("pages").scrollTop = 0;
     }
     // load() marks the page as loading before it awaits: render() shows 正在加载… rather than 找不到
@@ -2114,7 +2182,7 @@ var ZotWatchSurvey = (() => {
 
   /** Relative times of the list stay current. */
   function tick() {
-    if (state.visible && !state.id && state.home) renderHistory();
+    if (state.visible && !state.id && state.home) withFocus(renderHistory);
   }
 
   return {

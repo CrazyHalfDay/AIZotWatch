@@ -127,6 +127,13 @@ class FakeNode {
     return event;
   }
   focus() {}
+  // External text never goes through HTML parsing: any use fails the test
+  set innerHTML(value) {
+    throw new Error(`innerHTML is not allowed (${String(value).slice(0, 40)})`);
+  }
+  set outerHTML(value) {
+    throw new Error(`outerHTML is not allowed (${String(value).slice(0, 40)})`);
+  }
   append(...nodes) {
     this.childNodes.push(...nodes);
   }
@@ -1030,6 +1037,83 @@ test("search box: debounce, minimum length, stale answers, keyboard and 已在�
   input.dispatch("keydown", { key: "Enter" });
   await flushPromises();
   assert.equal(byClass(box, "sb-status")[0].hidden, true);
+});
+
+test("search box: a highlight never outlives its results (Enter searches, never adds an unseen row)", async () => {
+  const { page, root, clock, control, saved } = loadSettingsPage({ whitelist: "issn,title,category,impact_factor\n0016-7037,GCA,GEO,5.0" });
+  control.searchJournals = async (query) =>
+    query.startsWith("nature") ? [journal("Nature", ["0028-0836"]), journal("Nature Geoscience", ["1752-0894"])] : [journal("Chemical Geology", ["0009-2541"])];
+  page.init();
+  page.show({ section: "journals" });
+  const input = byId(root, "sp-journal-search");
+  const results = byId(root, "sp-journal-search-results");
+  input.value = "nature";
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  input.dispatch("keydown", { key: "ArrowDown" });
+  assert.equal(input.getAttribute("aria-activedescendant"), "sp-journal-search-results-0");
+
+  // A new query: typing drops the highlight, and the new rows start unselected
+  input.value = "chemical geology";
+  input.dispatch("input");
+  assert.equal(input.getAttribute("aria-activedescendant"), null);
+  await clock.advance(400);
+  await flushPromises();
+  const rows = byClass(results, "sb-result");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].getAttribute("aria-selected"), "false");
+  assert.equal(input.getAttribute("aria-activedescendant"), null);
+
+  // Enter (while the list is open and nothing is highlighted) searches again; nothing is added
+  const searches = control.searches.length;
+  input.value = "chemical geology letters";
+  input.dispatch("input");
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(control.searches.length, searches + 1, "searched at once");
+  assert.equal(saved.length, 0, "no journal was added");
+
+  // A hovered row is forgotten as soon as the query changes
+  byClass(results, "sb-result")[0].dispatch("mousemove");
+  assert.ok(input.getAttribute("aria-activedescendant"));
+  input.value = "chemical geol";
+  input.dispatch("input");
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(saved.length, 0);
+});
+
+test("an unreadable journals.csv is never replaced by one click on 添加 / 加入所选 / 补全", async () => {
+  const { page, root, control, saved, api } = loadSettingsPage({ whitelist: "" });
+  api.whitelistError = "无法读取 journals.csv（请以 UTF-8 编码保存）：not UTF-8 encoded";
+  control.searchJournals = async () => [journal("Chemical Geology", ["0009-2541"])];
+  control.proposals = { proposals: [{ title: "Lithos", issns: ["0024-4937"], category: "GEOLOGY", impactFactor: 2.1, libraryCount: 3, origin: "library", checked: true, verified: true }], warnings: [], missing: [] };
+  page.init();
+  page.show({ section: "journals" });
+  const input = byId(root, "sp-journal-search");
+  input.value = "chemical geology";
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  const add = byClass(byId(root, "sp-journal-search-results"), "sb-action")[0];
+  assert.equal(add.disabled, true, "「添加」 is off while the file cannot be read");
+  input.dispatch("keydown", { key: "ArrowDown" });
+  input.dispatch("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(saved.length, 0);
+
+  byId(root, "sp-journals-suggest").dispatch("click");
+  await flushPromises();
+  await flushPromises();
+  byId(root, "sp-journals-add").dispatch("click");
+  await flushPromises();
+  assert.equal(saved.length, 0, "加入所选 does not write");
+  assert.match(byClass(root, "sf-action-message")[0].textContent, /期刊列表文件无法读取/);
+
+  byId(root, "sp-journals-fill").disabled = false;
+  byId(root, "sp-journals-fill").dispatch("click");
+  await flushPromises();
+  assert.deepEqual(control.fills, [], "补全 does not run");
+  assert.equal(saved.length, 0);
 });
 
 test("从文库生成: a review panel with defaults, 已在列表, 全选 and 加入所选", async () => {

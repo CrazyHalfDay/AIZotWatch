@@ -3,8 +3,8 @@
 // the papers that fit the pool cap, and the fuzzy dedupe with library
 // matching of stage 4 (core/dedupe.js TitleIndex).
 
-import { TitleIndex } from "../core/dedupe.js";
-import { normalizeDoi } from "../core/text.js";
+import { TitleIndex, ratio } from "../core/dedupe.js";
+import { normalizeDoi, normalizeTitle } from "../core/text.js";
 
 /**
  * Provenance tags (`via`): "seed" (a seed itself), "search" (a query hit),
@@ -22,6 +22,46 @@ export const viaCites = (n) => `cites:seed${n}`;
 export const LINKED_SHARE = 0.6;
 
 const hasText = (v) => typeof v === "string" && v.trim() !== "";
+
+// Words that make two otherwise equal titles two papers ("Part 1" / "Part 2", "… II")
+const DISTINCT_WORD = /^(\d+|[ivx]+|part|series)$/;
+// Titles of notices about another paper ("Corrigendum to …", "Reply to comment on …")
+const NOTICE_TITLE = /^(corrigendum|erratum|correction|retraction|retracted|reply|comment|comments|discussion|response)\b/;
+// Spelling variants of one word ("behaviour" / "behavior", "fluids" / "fluid")
+const VARIANT_RATIO = 75;
+const TITLE_RATIO = 90;
+
+/**
+ * Whether two titles that fuzzy title matching paired (core/dedupe.js
+ * TitleIndex, which accepts any title whose words contain the other's) name
+ * the same paper: the same words in any order, case and punctuation, or the
+ * same words up to spelling variants. A title with extra words ("… of Iran",
+ * "…: a review"), another number or part ("Part 1" / "Part 2") or a notice
+ * about the other ("Corrigendum to …") is another paper.
+ */
+export function sameTitle(a, b) {
+  const na = normalizeTitle(a);
+  const nb = normalizeTitle(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (NOTICE_TITLE.test(na) !== NOTICE_TITLE.test(nb)) return false;
+  const wa = new Set(na.split(" "));
+  const wb = new Set(nb.split(" "));
+  const onlyA = [...wa].filter((w) => !wb.has(w));
+  const onlyB = [...wb].filter((w) => !wa.has(w));
+  if (!onlyA.length && !onlyB.length) return true;
+  if (onlyA.length !== onlyB.length || [...onlyA, ...onlyB].some((w) => DISTINCT_WORD.test(w))) return false;
+  const variant = (w, others) => others.some((o) => ratio(w, o) >= VARIANT_RATIO);
+  return onlyA.every((w) => variant(w, onlyB)) && onlyB.every((w) => variant(w, onlyA)) && ratio(na, nb) >= TITLE_RATIO;
+}
+
+/** Publication years at most one apart (preprint and article), or one unknown. */
+export function yearsAgree(a, b) {
+  return !Number.isInteger(a) || !Number.isInteger(b) || Math.abs(a - b) <= 1;
+}
+
+/** Whether a title match of two records without a common DOI is safe to trust (see sameTitle). */
+const sameWork = (a, b) => sameTitle(a.title, b.title) && yearsAgree(a.year, b.year);
 
 /** Seed numbers (1-based) a paper is linked to through references or citations. */
 export function linkedSeeds(via) {
@@ -153,8 +193,9 @@ export function dedupePool(papers, libraryItems, { threshold = 0.9 } = {}) {
     if (!target) {
       const id = titles.find(p.title);
       const candidate = id >= 0 ? byTitleId.get(id) : null;
-      // Two different DOIs are two papers, however close their titles (a preprint and its article merge: one has no DOI)
-      if (candidate && !(doi && candidate.doi && normalizeDoi(candidate.doi) !== doi)) target = candidate;
+      // Two different DOIs are two papers, however close their titles (a preprint and its
+      // article merge: one has no DOI, and then the titles must really match)
+      if (candidate && !(doi && candidate.doi && normalizeDoi(candidate.doi) !== doi) && sameWork(candidate, p)) target = candidate;
     }
     if (target) {
       mergePaper(target, p);
@@ -185,8 +226,9 @@ export function dedupePool(papers, libraryItems, { threshold = 0.9 } = {}) {
     if (!item) {
       const id = libraryTitles.find(p.title);
       item = id >= 0 ? libraryByTitleId.get(id) : null;
-      // A title match with a different DOI is another paper
+      // A title match with a different DOI is another paper; without a common DOI the titles must really match
       if (item && doi && normalizeDoi(item.doi) && normalizeDoi(item.doi) !== doi) item = null;
+      if (item && !sameWork(item, p)) item = null;
     }
     if (item) {
       p.inLibrary = true;

@@ -1287,9 +1287,9 @@ var ZotWatchSettings = (() => {
     const text = wl.node.value;
     if (text === api().getJournalWhitelist() && !api().whitelistError) return;
     try {
-      await api().setJournalWhitelist(text);
+      const result = await api().setJournalWhitelist(text);
       if (state.disposed) return;
-      toast("已保存", { key: "settings-saved", duration: 1600 });
+      toast(savedText(result), { key: "settings-saved", duration: result?.backup ? 6000 : 1600 });
       renderWhitelistSummary();
       renderStatuses();
     } catch (e) {
@@ -1297,6 +1297,19 @@ var ZotWatchSettings = (() => {
       wl.dirty = true;
       if (!state.disposed) toast(`期刊列表保存失败：${e.message || e}`, { tone: "error", key: "settings-saved" });
     }
+  }
+
+  /** The toast after saving the list (naming the backup of a file that could not be read). */
+  const savedText = (result) => (result?.backup ? `已保存；无法读取的旧文件已备份为 ${result.backup}` : "已保存");
+
+  /**
+   * While journals.csv cannot be read, adding or completing rows would replace
+   * the user's file with the few new rows: refuse and say why.
+   */
+  function whitelistUnreadable() {
+    if (!api()?.whitelistError) return false;
+    setJournalsMessage("期刊列表文件无法读取，为免覆盖其中的期刊，暂不能添加或补全。请先以 UTF-8 编码重新保存 journals.csv，或导入一份新列表。", "error");
+    return true;
   }
 
   function lockJournals(on) {
@@ -1324,9 +1337,9 @@ var ZotWatchSettings = (() => {
         wl.node.value = result.text;
         // Until it is saved: a failed save is retried on the next blur, flush or section switch
         wl.dirty = true;
-        await api().setJournalWhitelist(result.text);
+        const saved = await api().setJournalWhitelist(result.text);
         wl.dirty = false;
-        toast("已保存", { key: "settings-saved", duration: 1600 });
+        toast(savedText(saved), { key: "settings-saved", duration: saved?.backup ? 6000 : 1600 });
       }
       setJournalsMessage(result?.message || "", result?.tone || "info");
     } catch (e) {
@@ -1367,11 +1380,13 @@ var ZotWatchSettings = (() => {
 
   /**
    * Merge journals into the list (one row per ISSN; listed rows only get
-   * blanks filled) and save it. Returns {added, filled} or null when the list is busy.
+   * blanks filled) and save it. Returns {added, filled}, null when the list is
+   * busy, or {unreadable: true} while journals.csv cannot be read.
    */
   async function addJournals(journals) {
     const wl = state.whitelist;
     if (!wl.node || wl.busy) return null;
+    if (whitelistUnreadable()) return { unreadable: true };
     const { text, added, filled } = api().mergeJournals(wl.node.value, journals);
     if (text !== wl.node.value) {
       wl.node.value = text;
@@ -1423,9 +1438,17 @@ var ZotWatchSettings = (() => {
       placeholder: "刊名或 ISSN，如 Chemical Geology、0009-2541",
       search: (query) => api().searchJournals(query),
       render: journalResultText,
-      action: (j) => (!j.issns?.length ? { label: "无 ISSN", disabled: true } : journalListed(j) ? { label: "已在列表", disabled: true } : { label: "添加" }),
+      action: (j) =>
+        !j.issns?.length
+          ? { label: "无 ISSN", disabled: true }
+          : journalListed(j)
+            ? { label: "已在列表", disabled: true }
+            : api()?.whitelistError
+              ? { label: "添加", disabled: true, title: "期刊列表文件无法读取，请先以 UTF-8 编码重新保存" }
+              : { label: "添加" },
       pick: async (j) => {
         const result = await addJournals([j]);
+        if (result?.unreadable) return "";
         return result ? `已添加 ${j.title}（${result.added} 行 ISSN${Number.isFinite(j.impactFactor) ? `，近似 IF ${j.impactFactor.toFixed(1)}` : ""}）` : "期刊列表正在更新，请稍后再试";
       },
       emptyText: "OpenAlex 中没有找到匹配的期刊",
@@ -1587,7 +1610,7 @@ var ZotWatchSettings = (() => {
     review.button.disabled = true;
     const result = await addJournals(chosen);
     if (state.disposed) return;
-    if (!result) {
+    if (!result || result.unreadable) {
       // The list was busy (an import or another action): nothing was added
       updateReviewCount();
       return;
@@ -1619,6 +1642,7 @@ var ZotWatchSettings = (() => {
 
   /** 「补全学科与影响因子」: fill blank categories / impact factors of the listed journals from OpenAlex. */
   function fillJournals() {
+    if (whitelistUnreadable()) return Promise.resolve();
     return journalAction(
       "正在从 OpenAlex 查询学科与影响因子…",
       async () => {
@@ -1788,7 +1812,7 @@ var ZotWatchSettings = (() => {
           { title: "Semantic Scholar", help: "可选：补全其他来源找不到的摘要，并提供 TLDR（一句话总结）。入门级 Key 每秒只能请求 1 次，ZotWatch 会自动控制速率。" },
           row("apis.semanticScholarKey", { extraHelp: [helpLink("https://www.semanticscholar.org/product/api", "Semantic Scholar API 申请页")] }),
         ),
-        card({ title: "Crossref", help: "Crossref 不需要 Key，填写联系邮箱即可进入更稳定的礼貌池。" }, row("sources.crossref.mailto")),
+        card({ title: "Crossref", help: "Crossref 不需要 Key，填写联系邮箱即可进入更稳定的礼貌池；不填时请求进入公共池，只能一个一个地发，会慢一些。" }, row("sources.crossref.mailto")),
         card(
           { title: "连接测试", help: "每个服务一个 Key；ZotWatch 按服务自动限速（如 Crossref 每秒 3 次、OpenAlex 每秒 8 次），遇到限流时等待后重试。" },
           testRow("测试接口", ["openalex", "semanticscholar", "crossref"]),

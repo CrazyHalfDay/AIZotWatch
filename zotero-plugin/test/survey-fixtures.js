@@ -150,7 +150,10 @@ export function defaultReply(kind, prompt) {
     const numbers = [...prompt.matchAll(/^\[(\d+)\] /gm)].map((m) => Number(m[1]));
     const label = prompt.match(/主题为「([^」]*)」/)[1];
     if (label.startsWith("主题2")) return { heading: "未引用的一节", paragraphs: ["这一段没有任何引用。"] };
-    return { heading: `${label} 的进展`, paragraphs: [`研究表明铜同位素可以示踪成矿流体 [${numbers[0]}]，并与硫同位素耦合 [${numbers[0]}, 99]。`, `另一段讨论 [${numbers.join("-")}]【${numbers[0]}】。`] };
+    // The second paragraph also cites a paper of the neighbouring theme (references are numbered by
+    // theme): a valid number this prompt did not give, which the section check must remove
+    const other = numbers[0] === 1 ? numbers.at(-1) + 1 : numbers[0] - 1;
+    return { heading: `${label} 的进展`, paragraphs: [`研究表明铜同位素可以示踪成矿流体 [${numbers[0]}]，并与硫同位素耦合 [${numbers[0]}, 99]。`, `另一段讨论 [${numbers.join("-")}]【${numbers[0]}】，旁及 [${other}]。`] };
   }
   if (kind === "overview") {
     return { title: "斑岩铜矿中的铜同位素研究综述", summary: "总述第一段 [1]，以及不存在的文献 [120]。\n\n总述第二段 [2]。", debates: ["争议一 [1]", "[300]"], gaps: ["空白一"], future: ["方向一 [2]"], reading: [2, 1, 99, 2] };

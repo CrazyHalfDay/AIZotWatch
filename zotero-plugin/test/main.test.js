@@ -499,6 +499,8 @@ test("inbox controls: tabs, filters, search, 全部忽略 and the card actions",
   assert.deepEqual(w.errors, []);
 });
 
+// The shell's bookkeeping only (this scroll container does not clamp); that a survey shown
+// after loading gets its position back is tested in survey-page.test.js
 test("调研 remembers the scroll position of its list and of each survey", () => {
   const w = openWindow();
   w.fire("load");

@@ -166,6 +166,9 @@ function createEnvironment({ dataDir, items, http, zoteroVersion }) {
     setNote(html) {
       this.note = html;
     }
+    getNote() {
+      return this.note || "";
+    }
     getCollections() {
       return this.collections;
     }
@@ -1115,9 +1118,19 @@ test("Zotero 10: followed authors reach the inbox, the notice, the status and th
   env.prefs.set("extensions.zotwatch.apis.openalexKey", "oa-key");
   // arXiv's one request per 3 s would slow this test down: the hidden pref lifts that limit for the next run
   assert.deepEqual(plain(addon.limiter.limitOf("https://export.arxiv.org/api/query")), { rps: 1 / 3, concurrency: 1, burst: 1 });
+  // No contact address: Crossref's public pool allows one request at a time
+  assert.equal(addon.limiter.limitOf("https://api.crossref.org/works").concurrency, 1);
   env.prefs.set("extensions.zotwatch.http.rateLimits", '{"export.arxiv.org": null, "api.crossref.org": {"rps": 50, "concurrency": 3}}');
+  // Every request of the run goes through the shared limiter (the transports' default)
+  const acquired = [];
+  const acquire = addon.limiter.acquire;
+  addon.limiter.acquire = (url, signal) => (acquired.push(new URL(url).host), acquire(url, signal));
+  t.after(() => (addon.limiter.acquire = acquire));
 
   const result = await addon.runNow({ background: true });
+  addon.limiter.acquire = acquire;
+  assert.ok(acquired.includes("api.crossref.org") && acquired.includes("api.openalex.org"), "the run's requests go through the shared limiter");
+  assert.equal(addon.transport.limiter, addon.limiter, "so do the UI's requests");
   assert.equal(addon.limiter.limitOf("https://export.arxiv.org/api/query"), null);
   assert.deepEqual(plain(addon.limiter.limitOf("https://api.crossref.org/works")), { rps: 50, concurrency: 3, burst: 1 });
   assert.deepEqual(plain(addon.limiter.limitOf("https://api.semanticscholar.org/x")), { rps: 1, concurrency: 1, burst: 1 }, "defaults stay for the rest");
@@ -1514,6 +1527,21 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
   assert.ok(events.some((e) => e.progress?.stage === "read" && e.progress.total > 0));
   // The window was closed: a notice says the survey is done
   assert.match(Zotero.notifications.at(-1).text, /主题调研「Copper isotopes in porphyry systems」已完成/);
+  // ... and so does a survey that fails in the background
+  const createEngine = addon.createSurveyEngine;
+  addon.createSurveyEngine = () => ({
+    run: async () => {
+      throw new Error("精读失败：HTTP 401");
+    },
+  });
+  const failing = await addon.startSurvey({ ...SURVEY_INPUT, topic: "Failing survey", seedKeys: ["SEED1"] });
+  for (let i = 0; i < 100 && !events.some((e) => e.id === failing.id && e.action === "error"); i++) await new Promise((r) => setTimeout(r, 5));
+  addon.createSurveyEngine = createEngine;
+  assert.equal(Zotero.notifications.at(-1).headline, "ZotWatch 主题调研失败");
+  assert.match(Zotero.notifications.at(-1).text, /主题调研「Failing survey」未完成：精读失败：HTTP 401。可在 ZotWatch →「调研」中继续。/);
+  assert.match(String(Zotero.errors.pop()), /精读失败/);
+  await addon.deleteSurvey(failing.id);
+  events.length = 0;
   assert.ok(Zotero.HTTP.requests.every((r) => r.options.anon === true));
   assert.ok(llm.read > 0, "the LLM read papers");
   assert.ok(llm.prompts.some((p) => p.kind === "read" && p.prompt.includes("全文节选")), "the seed's PDF text was read");
@@ -1564,7 +1592,7 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
   assert.equal(env.savedItems.find((i) => i.key === added.itemKey).collections[0], collection.id);
   const refsNow = (await addon.getSurvey(id)).references;
   assert.deepEqual(plain(uncited.map((r) => refsNow.find((x) => x.id === r.id).itemKey)), [added.itemKey, added2.itemKey]);
-  assert.deepEqual(plain(await addon.addSurveyPaper(id, uncited[0].id)), { itemID: added.itemID, itemKey: added.itemKey, existing: true });
+  assert.deepEqual(plain(await addon.addSurveyPaper(id, uncited[0].id)), { itemID: added.itemID, itemKey: added.itemKey, itemLibraryID: 1, existing: true });
   // Saving again updates the same note and links the papers imported the first time
   const saving = addon.saveSurveyToZotero(id, { addPapers: "read" });
   await assert.rejects(addon.saveSurveyToZotero(id), /正在保存这项调研/);
@@ -1574,6 +1602,65 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
   assert.deepEqual(plain(note.collections), [collection.id], "no duplicate collection entry");
   assert.ok(again.linked >= saved.linked + saved.imported + 2);
   assert.equal(env.collections.filter((c) => c.name === collection.name).length, 1);
+  assert.equal(again.keptEditedNote, false);
+
+  // A note edited in Zotero since is kept: the report goes into a new note, which later saves update
+  note.note = `${note.note}<p>我的批注</p>`;
+  const afterEdit = await addon.saveSurveyToZotero(id, { addPapers: "none" });
+  assert.equal(afterEdit.keptEditedNote, true);
+  assert.notEqual(afterEdit.noteKey, saved.noteKey);
+  assert.match(note.note, /<p>我的批注<\/p>$/, "the user's note is untouched");
+  const newer = await addon.saveSurveyToZotero(id, { addPapers: "none" });
+  assert.equal(newer.noteKey, afterEdit.noteKey);
+  assert.equal(newer.keptEditedNote, false);
+  assert.equal(env.savedItems.filter((i) => i.itemType === "note").length, 2);
+
+  // A save is exclusive: no regenerate, resume or reset meanwhile, and its last write
+  // goes into the stored survey (what changed meanwhile stays)
+  const getByKey = Zotero.Items.getByLibraryAndKeyAsync;
+  const holdItems = () => {
+    let release;
+    const held = new Promise((r) => (release = r));
+    Zotero.Items.getByLibraryAndKeyAsync = async (...args) => (await held, getByKey.apply(Zotero.Items, args));
+    return () => {
+      Zotero.Items.getByLibraryAndKeyAsync = getByKey;
+      release();
+    };
+  };
+  let releaseItems = holdItems();
+  const exclusive = addon.saveSurveyToZotero(id, { addPapers: "read" });
+  await new Promise((r) => setTimeout(r, 10));
+  await assert.rejects(addon.regenerateReport(id), /正在保存这项调研/);
+  await assert.rejects(addon.resumeSurvey(id), /正在保存这项调研/);
+  await assert.rejects(addon.resetData(), /正在把调研保存到 Zotero/);
+  const file = join(dataDir, "zotwatch", `survey-${id}.json`);
+  const stored = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...stored, report: { ...stored.report, title: "保存期间写入的标题" } }));
+  releaseItems();
+  await exclusive;
+  const merged = await addon.getSurvey(id);
+  assert.equal(merged.report.title, "保存期间写入的标题", "the save did not write back its old copy");
+  assert.ok(merged.saved.at >= stored.saved.at);
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), report: stored.report }));
+
+  // A read-only profile library (a group): imports go to My Library and are found there again
+  env.libraries[3] = { libraryType: "group", editable: false, name: "Group", async waitForDataLoad() {} };
+  prefs.set("extensions.zotwatch.profile.libraryID", "3");
+  // (a candidate the earlier saves did not import)
+  const surveyFile = join(dataDir, "zotwatch", `survey-${id}.json`);
+  const beforeGroup = JSON.parse(readFileSync(surveyFile, "utf8"));
+  const outside = beforeGroup.pool.at(-1);
+  Object.assign(outside, { inLibrary: false, itemKey: null });
+  for (const r of beforeGroup.references) if (r.id === outside.id) Object.assign(r, { inLibrary: false, itemKey: null });
+  writeFileSync(surveyFile, JSON.stringify(beforeGroup));
+  const intoMine = await addon.addSurveyPaper(id, outside.id);
+  assert.deepEqual([intoMine.existing, intoMine.itemLibraryID], [false, 1]);
+  assert.equal((await addon.getSurvey(id)).pool.find((p) => p.id === outside.id).itemLibraryID, 1);
+  const importedCount = env.savedItems.length;
+  assert.equal((await addon.addSurveyPaper(id, outside.id)).existing, true, "not imported twice");
+  assert.equal(env.savedItems.length, importedCount);
+  assert.equal(await addon.showItemByKey(intoMine.itemKey, 1), true);
+  prefs.set("extensions.zotwatch.profile.libraryID", "");
 
   await assert.rejects(addon.addSurveyPaper(id, "doi:10.0000/none"), /不在调研结果中/);
   assert.equal(await addon.showItemByKey("SEED1"), true);
@@ -1589,9 +1676,13 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
 
   // --- regenerate the review (stage 9 only)
   const reads = llm.read;
+  const SERVICES = /^https:\/\/api\.(openalex|semanticscholar|crossref)\.org/;
+  const serviceRequests = () => Zotero.HTTP.requests.filter((r) => SERVICES.test(r.url)).length;
+  const servicesBefore = serviceRequests();
   assert.deepEqual(plain(await addon.regenerateReport(id)), { id, from: "write" });
   await addon.waitForSurvey(id);
   assert.equal(llm.read, reads, "nothing is read again");
+  assert.equal(serviceRequests(), servicesBefore, "nothing is searched again");
   assert.equal((await addon.getSurvey(id)).status, "done");
   await assert.rejects(addon.resumeSurvey(id), /已经完成/);
 
@@ -1611,6 +1702,27 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
   await addon.resumeSurvey(second.id);
   assert.equal((await addon.waitForSurvey(second.id)).status, "done");
 
+  // --- a survey deleted during a step that ignores the cancel (a large PDF's text) stays deleted
+  let reachedText;
+  let releaseText;
+  const atText = new Promise((r) => (reachedText = r));
+  const textHeld = new Promise((r) => (releaseText = r));
+  const createLibrary = addon.createSurveyLibrary;
+  addon.createSurveyLibrary = () => ({ ...createLibrary.call(addon), getItemFullText: () => (reachedText(), textHeld) });
+  const stubborn = await addon.startSurvey({ ...SURVEY_INPUT, topic: "Stubborn", seedKeys: ["SEED1"] });
+  await atText;
+  const grace = addon.shutdownGraceMs;
+  addon.shutdownGraceMs = 20;
+  const stubbornRun = addon.waitForSurvey(stubborn.id);
+  assert.equal(await addon.deleteSurvey(stubborn.id), true);
+  releaseText("");
+  assert.equal(await stubbornRun, null);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!(await addon.listSurveys()).some((e) => e.id === stubborn.id), "the run's last save did not bring it back");
+  assert.ok(!existsSync(join(dataDir, "zotwatch", `survey-${stubborn.id}.json`)));
+  addon.shutdownGraceMs = grace;
+  addon.createSurveyLibrary = createLibrary;
+
   // --- the item context menu's entry point: the window opens on 调研 with the selection as seeds
   mainWindow.ZoteroPane.selection = [Zotero.Items.get(502)];
   const draft = await addon.openSurvey();
@@ -1624,8 +1736,15 @@ test("Zotero 10: topic survey from library seeds to a Zotero note", async (t) =>
   assert.equal(mainWindow.opened.at(-1).routes.at(-1), `survey/${second.id}`);
   assert.deepEqual(plain((await addon.openSurvey({ seedKeys: ["SEED1"], topic: " 自定义主题 " })).topic), "自定义主题");
 
-  // --- delete, and reset removes the rest
-  assert.equal(await addon.deleteSurvey(id), true);
+  // --- delete (during a save to Zotero: the save stops importing and its last write finds
+  // the survey gone), and reset removes the rest
+  releaseItems = holdItems();
+  const lastSave = addon.saveSurveyToZotero(id, { addPapers: "read" });
+  const deleting = addon.deleteSurvey(id);
+  await new Promise((r) => setTimeout(r, 10));
+  releaseItems();
+  assert.equal((await lastSave).cancelled, true);
+  assert.equal(await deleting, true);
   assert.equal(events.at(-1).action, "deleted");
   assert.ok(!existsSync(join(dataDir, "zotwatch", `survey-${id}.json`)));
   assert.deepEqual(plain((await addon.listSurveys()).map((e) => e.id)), [second.id]);
@@ -1662,8 +1781,12 @@ test("an unreadable journals.csv does not stop the plugin", async (t) => {
   assert.match(await addon.getStatus(), /UTF-8/);
   assert.equal(env.Zotero.errors.length, 1);
   env.Zotero.errors.length = 0;
-  await addon.setJournalWhitelist("issn,title\n1234-5678,X");
+  // Replacing the unreadable file keeps it as journals.csv.bak
+  assert.deepEqual(plain(await addon.setJournalWhitelist("issn,title\n1234-5678,X")), { backup: "journals.csv.bak" });
+  assert.deepEqual([...readFileSync(join(dataDir, "zotwatch", "journals.csv.bak"))], [0xc6, 0xda, 0xbf, 0xaf], "the user's bytes are kept");
   assert.doesNotMatch(await addon.getStatus(), /UTF-8/);
+  assert.deepEqual(plain(await addon.setJournalWhitelist("issn,title\n1234-5678,Y")), {}, "a readable list is not backed up");
+  await addon.setJournalWhitelist("issn,title\n1234-5678,X");
 
   // A failed write (the CSV locked by Excel) keeps the saved list, so the
   // settings page sees the edit as unsaved and the next attempt writes it
@@ -1777,7 +1900,7 @@ test("preference pane initialises from Zotero's events inside a sandbox", async 
   assert.equal(addonListeners.size, 0, "the listener is removed when the pane closes");
 });
 
-const MAIN_SCRIPTS = ["main.js", "overview.js", "inbox.js", "survey.js", "settings.js"];
+const MAIN_SCRIPTS = ["main.js", "search.js", "overview.js", "inbox.js", "survey.js", "settings.js"];
 
 /** Every element below `node` (document order). */
 const allElements = (node, out = []) => {
@@ -1826,7 +1949,7 @@ test("XHTML files are well-formed and scripts reference existing element ids", (
     const css = file.replace(/\.js$/, ".css");
     assert.match(mainXhtml, new RegExp(`href="chrome://zotwatch/content/${css}"`), `main.xhtml loads ${css}`);
     const js = readFileSync(join(root, "addon/content", file), "utf8");
-    assert.doesNotMatch(js, /\.innerHTML\s*=|insertAdjacentHTML/, `${file} inserts text with textContent only`);
+    assert.doesNotMatch(js, /\b(?:inner|outer)HTML\b|insertAdjacentHTML|DOMParser|parseFromString|createContextualFragment/, `${file} inserts text with textContent only`);
     // Ids reach $() / getElementById directly or through segmented("…") / setSegmented("…")
     for (const [, id] of js.matchAll(/(?:\$|getElementById|segmented|setSegmented)\("([\w-]+)"/g)) {
       assert.ok(mainIds.has(id), `main.xhtml lacks #${id} (used by ${file})`);
@@ -1957,8 +2080,16 @@ test("window routes and the run schedule", () => {
   // The hidden rate-limit pref (JSON) overrides single hosts; garbage keeps the defaults
   assert.equal(rateLimitsFromPref('{"export.arxiv.org": null}')["export.arxiv.org"], undefined);
   assert.deepEqual(rateLimitsFromPref('{"api.crossref.org": {"rps": 5, "concurrency": 2}}')["api.crossref.org"], { rps: 5, concurrency: 2 });
-  assert.deepEqual(rateLimitsFromPref("{not json"), { ...DEFAULT_RATE_LIMITS });
-  assert.deepEqual(rateLimitsFromPref(undefined), { ...DEFAULT_RATE_LIMITS });
+  const polite = { mailto: "me@example.org" };
+  assert.deepEqual(rateLimitsFromPref("{not json", polite), { ...DEFAULT_RATE_LIMITS });
+  assert.deepEqual(rateLimitsFromPref(undefined, polite), { ...DEFAULT_RATE_LIMITS });
+  // Without a contact address Crossref requests go to its public pool: one in flight at a time
+  assert.equal(rateLimitsFromPref("")["api.crossref.org"].concurrency, 1);
+  assert.equal(rateLimitsFromPref("", { mailto: "  " })["api.crossref.org"].concurrency, 1);
+  assert.equal(rateLimitsFromPref("", polite)["api.crossref.org"].concurrency, 3);
+  assert.deepEqual(rateLimitsFromPref('{"api.crossref.org": {"concurrency": 2}}')["api.crossref.org"], { rps: 3, concurrency: 2 }, "the pref still wins");
+  // A partial override keeps the host's other default field
+  assert.deepEqual(rateLimitsFromPref('{"export.arxiv.org": {"rps": 0.2}}')["export.arxiv.org"], { rps: 0.2, concurrency: 1 });
 
   // 学术数据接口 status: keys and OpenAlex's budget
   const status = apiStatus({ apis: { openalexKey: "k", semanticScholarKey: "", mailto: "me@x.org" } }, { remainingUsd: 0.5, limitUsd: 1, at: 1 });

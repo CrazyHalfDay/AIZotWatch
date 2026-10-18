@@ -5,7 +5,7 @@
 
 /* global Zotero, IOUtils */
 
-import { collapseWhitespace, extraFieldDoi, normalizeDoi } from "../core/text.js";
+import { collapseWhitespace, extraFieldDoi, hashString, normalizeDoi } from "../core/text.js";
 import { reportCitations, surveyNoteHtml } from "../survey/report.js";
 import { addWorkToZotero, getOrCreateCollection } from "./items.js";
 import { profileLibraryID } from "./env.js";
@@ -236,14 +236,29 @@ export function papersToAdd(survey, addPapers) {
 }
 
 /**
+ * Fingerprint of a note's text (markup and entities ignored, as Zotero's note
+ * editor may re-wrap a note it opens): tells whether the user edited it.
+ */
+export function noteFingerprint(html) {
+  const plain = String(html ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&[#a-z0-9]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return hashString(plain);
+}
+
+/**
  * Save a survey in Zotero: a collection 「ZotWatch 调研 · <topic>」 (created or
  * reused) holding a standalone note with the report (escaped HTML; an earlier
- * note of this survey is updated instead) and, with `addPapers`, its papers:
- * library items are added to the collection, missing ones imported through
- * addWorkToZotero (DOI translator first), one after another. A paper that
- * fails is counted, not fatal. Mutates the survey's references and pool
- * (inLibrary, itemKey) and `survey.saved`; the caller persists it.
- * @returns {Promise<{collectionName, collectionID, noteID, noteKey, total, linked, imported, failed, skipped, cancelled}>}
+ * note of this survey is updated instead, unless it was edited in Zotero since:
+ * then a new note is written and the edited one kept, `keptEditedNote`) and,
+ * with `addPapers`, its papers: library items are added to the collection,
+ * missing ones imported through addWorkToZotero (DOI translator first), one
+ * after another. A paper that fails is counted, not fatal. Mutates the
+ * survey's references and pool (inLibrary, itemKey, itemLibraryID) and
+ * `survey.saved`; the caller persists it.
+ * @returns {Promise<{collectionName, collectionID, noteID, noteKey, keptEditedNote, total, linked, imported, failed, skipped, cancelled}>}
  */
 export async function saveSurveyToZotero(
   survey,
@@ -252,18 +267,38 @@ export async function saveSurveyToZotero(
   const collection = await getOrCreateCollection(libraryID, collectionName);
   let note = survey.saved?.noteKey && survey.saved.libraryID === libraryID ? await itemByKey(survey.saved.noteKey, libraryID) : null;
   if (note && !(typeof note.isNote === "function" ? note.isNote() : note.itemType === "note")) note = null;
+  // A note the user edited in Zotero since the last save is kept: the report goes into a new one
+  let keptEditedNote = false;
+  if (note && survey.saved?.noteHash && noteFingerprint(note.getNote?.()) !== survey.saved.noteHash) {
+    note = null;
+    keptEditedNote = true;
+  }
   if (!note) {
     note = new Zotero.Item("note");
     note.libraryID = libraryID;
   }
-  note.setNote(surveyNoteHtml(survey));
+  const html = surveyNoteHtml(survey);
+  note.setNote(html);
   if (!inCollection(note, collection.id)) note.addToCollection(collection.id);
   await note.saveTx();
+  // The note as Zotero stored it
+  const noteHash = noteFingerprint(note.getNote?.() ?? html);
 
   const refs = papersToAdd(survey, addPapers);
   const byId = new Map((survey.pool || []).map((p) => [p.id, p]));
-  const sameLibrary = libraryID === profileLibraryID();
-  const result = { collectionName, collectionID: collection.id, noteID: note.id, noteKey: note.key, total: refs.length, linked: 0, imported: 0, failed: 0, skipped: 0, cancelled: false };
+  const result = {
+    collectionName,
+    collectionID: collection.id,
+    noteID: note.id,
+    noteKey: note.key,
+    keptEditedNote,
+    total: refs.length,
+    linked: 0,
+    imported: 0,
+    failed: 0,
+    skipped: 0,
+    cancelled: false,
+  };
   for (const [i, ref] of refs.entries()) {
     if (isCancelled()) {
       result.cancelled = true;
@@ -273,7 +308,8 @@ export async function saveSurveyToZotero(
     const paper = byId.get(ref.id);
     try {
       if (ref.inLibrary && ref.itemKey) {
-        if (!sameLibrary) {
+        // Library flags of the dedupe step name the profile library; imports record theirs
+        if ((ref.itemLibraryID ?? profileLibraryID()) !== libraryID) {
           // The library item lives in another library than the collection
           result.skipped++;
           continue;
@@ -293,6 +329,7 @@ export async function saveSurveyToZotero(
         if (!target) continue;
         target.inLibrary = true;
         target.itemKey = item.key;
+        target.itemLibraryID = item.libraryID;
       }
       result.imported++;
     } catch (e) {
@@ -301,7 +338,7 @@ export async function saveSurveyToZotero(
     }
   }
   onProgress({ current: refs.length, total: refs.length, title: null });
-  survey.saved = { at: Date.now(), libraryID, noteKey: note.key, collectionName, collectionID: collection.id };
+  survey.saved = { at: Date.now(), libraryID, noteKey: note.key, noteHash, collectionName, collectionID: collection.id };
   return result;
 }
 

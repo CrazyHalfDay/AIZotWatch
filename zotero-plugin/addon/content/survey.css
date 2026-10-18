@@ -943,11 +943,16 @@
   margin-top: 2px;
 }
 
-.sv-ref:focus {
+.sv-ref:focus,
+.sv-toolbar:focus,
+.sv-table tr:focus {
   outline: none;
 }
 
-.sv-ref:focus-visible {
+/* Focus parks on the reference, the candidate row or the toolbar while their button is busy */
+.sv-ref:focus-visible,
+.sv-toolbar:focus-visible,
+.sv-table tr:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
