@@ -49,8 +49,43 @@ export function parseJsonReply(text) {
   throw new Error("Unterminated JSON in LLM reply");
 }
 
+/**
+ * Chat client of the configured model. With a backup model (`cfg.backup.model`;
+ * its interface address and API key default to the main model's), a call that
+ * fails on one model is retried on the other, and the model that answered
+ * serves the following calls of this client (one run).
+ */
 export function createLlmClient(cfg, http, { retry = {} } = {}) {
   if (!cfg.apiKey) throw new Error("请先在 ZotWatch 设置中填写大模型 API Key");
+  const main = chatClient(cfg, http, retry);
+  const backup = cfg.backup?.model ? { ...cfg, baseURL: cfg.backup.baseURL || cfg.baseURL, apiKey: cfg.backup.apiKey || cfg.apiKey, model: cfg.backup.model } : null;
+  if (!backup) return { chat: main };
+  const clients = [main, chatClient(backup, http, retry)];
+  const names = ["主模型", "备用大模型"];
+  let current = 0;
+
+  async function chat(prompt, options) {
+    try {
+      return await clients[current](prompt, options);
+    } catch (e) {
+      if (e?.cancelled) throw e;
+      const other = 1 - current;
+      try {
+        const reply = await clients[other](prompt, options);
+        current = other;
+        return reply;
+      } catch (e2) {
+        if (e2?.cancelled) throw e2;
+        throw new Error(`${e?.message || e}（${names[other]}也失败：${e2?.message || e2}）`);
+      }
+    }
+  }
+
+  return { chat };
+}
+
+/** Chat function of one OpenAI-compatible model. */
+function chatClient(cfg, http, retry) {
   const baseURL = (cfg.baseURL || LLM_PRESETS.openrouter).replace(/\/+$/, "");
   const reasoning = /reasoner|thinking|-r1\b/i.test(cfg.model || "");
   // Reasoning tokens count against max_tokens: a small budget would end the
@@ -78,7 +113,7 @@ export function createLlmClient(cfg, http, { retry = {} } = {}) {
     return content;
   }
 
-  return { chat };
+  return chat;
 }
 
 /** Translate titles to Chinese in batches; returns translations aligned with input. */

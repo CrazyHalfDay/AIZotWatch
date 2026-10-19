@@ -18,15 +18,17 @@ export const SURVEY_STAGES = Object.freeze([
 export const STAGE_KEYS = SURVEY_STAGES.map((s) => s.key);
 
 /**
- * Depth presets: `pool` caps the candidate pool, `deepRead` the papers the
- * LLM reads; the per-request limits size the expansion so that the pool can
- * fill up (search results per query and source, references / citations per
- * seed, recommendations).
+ * Depth presets: `pool` caps the candidate pool (the best scored papers),
+ * `scored` the papers found that are scored against the topic and the seeds
+ * before that cut (it only bounds the embedding work), `deepRead` the papers
+ * the LLM reads; the per-request limits size the expansion so that the pool
+ * can fill up (search results per query and source, references / citations
+ * per seed, recommendations).
  */
 export const SURVEY_DEPTHS = Object.freeze({
-  quick: { key: "quick", label: "快速", pool: 150, deepRead: 15, perQuery: 25, crossrefPerQuery: 15, perSeed: 25, recommendations: 50, maxQueries: 6 },
-  standard: { key: "standard", label: "标准", pool: 400, deepRead: 40, perQuery: 50, crossrefPerQuery: 25, perSeed: 50, recommendations: 100, maxQueries: 8 },
-  deep: { key: "deep", label: "深度", pool: 1000, deepRead: 80, perQuery: 100, crossrefPerQuery: 50, perSeed: 100, recommendations: 200, maxQueries: 10 },
+  quick: { key: "quick", label: "快速", pool: 150, scored: 600, deepRead: 15, perQuery: 25, crossrefPerQuery: 15, perSeed: 25, recommendations: 50, maxQueries: 6 },
+  standard: { key: "standard", label: "标准", pool: 400, scored: 1500, deepRead: 40, perQuery: 50, crossrefPerQuery: 25, perSeed: 50, recommendations: 100, maxQueries: 8 },
+  deep: { key: "deep", label: "深度", pool: 1000, scored: 3000, deepRead: 80, perQuery: 100, crossrefPerQuery: 50, perSeed: 100, recommendations: 200, maxQueries: 10 },
 });
 export const DEFAULT_DEPTH = "standard";
 
@@ -109,7 +111,7 @@ export function surveyEstimate(depth, { seeds = 3, llm = true, sources = {}, key
   // Seconds: Semantic Scholar is paced at 1/s, Crossref 3/s, OpenAlex 8/s; LLM calls about 10 s
   // each (two reads at a time) and 30 s per written section; embeddings in batches
   const seconds =
-    s2 * 1.2 + crossref / 3 + openalex / 6 + preset.pool / 40 + (llm ? 10 + (preset.deepRead * 10) / 2 + 10 + (themes + 1) * 30 : 0);
+    s2 * 1.2 + crossref / 3 + openalex / 6 + preset.scored / 40 + (llm ? 10 + (preset.deepRead * 10) / 2 + 10 + (themes + 1) * 30 : 0);
   const minutes = Math.max(1, Math.round(seconds / 60));
   const text = llm ? `约 ${aiCalls} 次 AI 调用、${apiRequests} 次接口请求、预计 ${minutes} 分钟` : `约 ${apiRequests} 次接口请求、预计 ${minutes} 分钟（未启用大模型，不生成综述）`;
   return { depth: preset.key, pool: preset.pool, deepRead: preset.deepRead, aiCalls, apiRequests, minutes, text };

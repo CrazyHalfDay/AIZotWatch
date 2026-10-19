@@ -340,6 +340,7 @@ var ZotWatchSurvey = (() => {
       lines.push(["种子", [`${n(seeds.seeds) ?? 0} 篇`, ...found].filter(Boolean).join("，")]);
     }
     if (Array.isArray(s?.queries) && s.queries.length) lines.push(["检索词", s.queries.join("；")]);
+    if (Array.isArray(s?.terms) && s.terms.length) lines.push(["关键术语", s.terms.join("；")]);
     const ex = st.expand;
     if (ex) {
       const by = isRecord(ex.bySource) ? Object.entries(ex.bySource).filter(([, v]) => Number.isFinite(v) && v > 0) : [];
@@ -348,13 +349,18 @@ var ZotWatchSurvey = (() => {
         by.length ? `（各来源返回 ${by.map(([k, v]) => `${k} ${n(v)} 条`).join("、")}）` : null,
         Number.isFinite(ex.requests) ? `，请求 ${n(ex.requests)} 次${ex.failed ? `（${n(ex.failed)} 次失败）` : ""}` : null,
         ex.beforeYear ? `，${n(ex.beforeYear)} 篇早于起始年份被排除` : null,
+        // Surveys before 0.4.1 cut the pool here, without scoring the rest
         Number.isFinite(ex.pool) ? `，候选池保留 ${n(ex.pool)} 篇` : null,
+        Number.isFinite(ex.scored) && Number.isFinite(ex.found) && ex.scored < ex.found - (ex.beforeYear || 0) ? `，其中 ${n(ex.scored)} 篇参与排序` : null,
       ];
       lines.push(["扩展", bits.filter(Boolean).join("")]);
     }
     const dd = st.dedupe;
     if (dd) lines.push(["去重", [`保留 ${n(dd.after) ?? 0} 篇`, dd.merged ? `合并 ${n(dd.merged)} 篇重复` : null, dd.inLibrary ? `${n(dd.inLibrary)} 篇已在文库` : null].filter(Boolean).join("，")]);
-    if (st.rank) lines.push(["排序", `按相似度、与种子的关联、被引次数和新近程度为 ${n(st.rank.ranked) ?? 0} 篇打分`]);
+    if (st.rank) {
+      const kept = Number.isFinite(st.rank.pool) && st.rank.pool < st.rank.ranked ? `，保留得分最高的 ${n(st.rank.pool)} 篇` : "";
+      lines.push(["排序", `按与主题和种子的相似度、与种子的关联、被引次数和新近程度为 ${n(st.rank.ranked) ?? 0} 篇打分${kept}`]);
+    }
     if (st.enrich) {
       const e = st.enrich;
       lines.push(["补全", [Number.isFinite(e.missing) ? `补全摘要 ${n(e.filled ?? 0)}/${n(e.missing)} 篇` : null, e.tldr ? `TLDR ${n(e.tldr)} 篇` : null].filter(Boolean).join("，") || "无需补全"]);

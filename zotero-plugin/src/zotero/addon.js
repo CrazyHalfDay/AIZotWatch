@@ -1066,7 +1066,8 @@ export class ZotWatchAddon {
       if (settings.llm.enabled) {
         const row = { key: "llm", name: "大模型", target: settings.llm.model, ok: false, detail: "" };
         try {
-          const reply = await createLlmClient(settings.llm, this.transport, { retry: { retries: 0 } }).chat("请只回复：OK", { maxTokens: 20 });
+          // The main model alone (with a backup, a failure would be hidden)
+          const reply = await createLlmClient({ ...settings.llm, backup: null }, this.transport, { retry: { retries: 0 } }).chat("请只回复：OK", { maxTokens: 20 });
           Object.assign(row, { ok: true, detail: reply.trim().slice(0, 30) });
         } catch (e) {
           row.detail = String(e?.message || e);
@@ -1075,6 +1076,18 @@ export class ZotWatchAddon {
       } else {
         rows.push({ key: "llm", name: "大模型", target: null, ok: null, detail: "未启用" });
       }
+    }
+    const backup = settings.llm.backup || {};
+    if (want("llmBackup") && backup.model && settings.llm.enabled) {
+      const row = { key: "llmBackup", name: "备用大模型", target: backup.model, ok: false, detail: "" };
+      try {
+        const cfg = { ...settings.llm, baseURL: backup.baseURL || settings.llm.baseURL, apiKey: backup.apiKey || settings.llm.apiKey, model: backup.model, backup: null };
+        const reply = await createLlmClient(cfg, this.transport, { retry: { retries: 0 } }).chat("请只回复：OK", { maxTokens: 20 });
+        Object.assign(row, { ok: true, detail: reply.trim().slice(0, 30) });
+      } catch (e) {
+        row.detail = String(e?.message || e);
+      }
+      rows.push(row);
     }
     if (want("crossref")) {
       const row = { key: "crossref", name: "Crossref", target: null, ok: false, detail: "" };

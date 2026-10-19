@@ -93,6 +93,8 @@ export function loadSettings(get) {
       // Label the library's research directions (clusters) once; labels are reused across runs
       topicLabels: bool(get("llm.topicLabels"), true),
       summaryTopN: num(get("llm.summaryTopN"), 10, { min: 0, max: 100, int: true }),
+      // Used when the main model fails (see createLlmClient); address and key default to the main ones
+      backup: { baseURL: str(get("llm.backup.baseURL")), apiKey: str(get("llm.backup.apiKey")), model: str(get("llm.backup.model")) },
       temperature: 0.3,
       maxTokens: 2048,
     },

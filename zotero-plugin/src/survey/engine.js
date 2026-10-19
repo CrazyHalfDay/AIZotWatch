@@ -562,8 +562,10 @@ export class SurveyEngine {
     const inRange = collector.papers.filter((p) => p.seed || !yearFrom || !Number.isInteger(p.year) || p.year >= yearFrom);
     stats.beforeYear = collector.papers.length - inRange.length;
     if (inRange.length <= seeds.length) throw new Error(`没有 ${yearFrom} 年以来的候选文献，请放宽起始年份`);
-    survey.pool = selectPool(inRange, preset.pool);
-    return { found: collector.papers.length, pool: survey.pool.length, ...stats };
+    // Everything found is scored against the topic and the seeds (stage 5) before the pool
+    // is cut to the depth's size; this cut only bounds the embedding work
+    survey.pool = selectPool(inRange, preset.scored || preset.pool);
+    return { found: collector.papers.length, scored: survey.pool.length, ...stats };
   }
 
   // -------------------------------------------------------- 4. dedupe
@@ -611,8 +613,13 @@ export class SurveyEngine {
     const [topicVector] = await this.embedder().embed([this.queryText(survey)], { inputType: "query" });
     const seedVectors = pool.filter((p) => p.seed).map((p) => ctx.vectors.get(p.id));
     const centre = centroidOf([topicVector, ...seedVectors]);
-    survey.pool = scorePapers(pool, (p) => ctx.vectors.get(p.id), centre, survey.seeds.length);
-    return { ranked: survey.pool.length, embedder: this.embedder().signature || null };
+    const ranked = scorePapers(pool, (p) => ctx.vectors.get(p.id), centre, survey.seeds.length);
+    // The pool keeps the seeds and the best scored papers, up to the depth's size
+    const preset = SURVEY_DEPTHS[survey.input.depth] || SURVEY_DEPTHS.standard;
+    let room = Math.max(0, preset.pool - ranked.filter((p) => p.seed).length);
+    survey.pool = ranked.filter((p) => p.seed || room-- > 0);
+    survey.pool.forEach((p, i) => (p.rank = i + 1));
+    return { ranked: ranked.length, pool: survey.pool.length, embedder: this.embedder().signature || null };
   }
 
   // -------------------------------------------------------- 6. enrich

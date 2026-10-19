@@ -194,6 +194,9 @@ var ZotWatchSettings = (() => {
     { pref: "llm.baseURL", kind: "text", label: "接口地址", help: "OpenAI 兼容的 /chat/completions 接口。", long: true, placeholder: "https://openrouter.ai/api/v1" },
     { pref: "llm.apiKey", kind: "password", label: "API Key", long: true },
     { pref: "llm.model", kind: "text", label: "模型", long: true, placeholder: "deepseek/deepseek-chat" },
+    { pref: "llm.backup.model", kind: "text", label: "备用模型", help: "留空则不使用备用模型。", long: true, placeholder: "如 deepseek-chat、moonshot-v1-8k" },
+    { pref: "llm.backup.baseURL", kind: "text", label: "备用接口地址", help: "留空时使用主模型的接口地址（同一服务商的另一个模型）。", long: true, placeholder: "https://api.deepseek.com/v1" },
+    { pref: "llm.backup.apiKey", kind: "password", label: "备用 API Key", help: "留空时使用主模型的 API Key。", long: true },
     { pref: "llm.translateTitles", kind: "switch", label: "将英文标题翻译为中文", help: "覆盖本次所有新增论文。" },
     { pref: "llm.summaryTopN", kind: "number", label: "每次自动生成摘要的篇数", help: "个性推荐取分数最高的 N 篇，顶刊地学和关注作者各另取最新的 N 篇。", unit: "篇", min: 0, max: 100, int: true, fallback: 10 },
     {
@@ -1255,7 +1258,7 @@ var ZotWatchSettings = (() => {
     // Services tested together (publisher keys, the scholarly APIs) name themselves
     let text = row.ok === false ? `失败：${detail}` : detail;
     if (["elsevier", "springer", "openalex", "semanticscholar", "crossref"].includes(row.key) && row.name) text = `${row.name}：${detail}`;
-    else if (row.key === "llm" && row.ok === true) text = `正常，模型回复：${detail}`;
+    else if ((row.key === "llm" || row.key === "llmBackup") && row.ok === true) text = `正常，模型回复：${detail}`;
     return el("span", { class: `sf-result ${tone}`, title: text }, svgIcon(icon), el("span", { class: "sf-result-text", text }));
   }
 
@@ -1956,6 +1959,13 @@ var ZotWatchSettings = (() => {
           row("llm.apiKey"),
           row("llm.model"),
           testRow("测试大模型", ["llm"]),
+        ),
+        card(
+          { title: "备用大模型", help: "主模型请求失败（限流、欠费、服务中断等）时，自动改用备用模型重试，本次运行余下的调用也用它；备用模型失败时再换回主模型。" },
+          row("llm.backup.model"),
+          row("llm.backup.baseURL"),
+          row("llm.backup.apiKey"),
+          testRow("测试备用大模型", ["llmBackup"], "未填写备用模型"),
         ),
         card({ title: "功能", help: "启用大模型并填写 API Key 后生效。" }, row("llm.translateTitles"), row("llm.summaryTopN"), row("llm.topicLabels")),
       ];

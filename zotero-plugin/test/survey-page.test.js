@@ -557,9 +557,9 @@ test("survey page helpers: citations, keywords, validation, provenance, sorting,
   assert.match(lines.get("检索词"), /copper isotope fractionation porphyry；/);
   assert.match(lines.get("扩展"), /找到 21 篇不重复的文献（各来源返回 OpenAlex 24 条、Semantic Scholar 9 条、Crossref 5 条），请求 31 次（1 次失败），3 篇早于起始年份被排除，候选池保留 18 篇/);
   assert.equal(lines.get("精读"), "精读 12 篇，其中 2 篇来自缓存");
-  assert.equal(lines.get("排序"), "按相似度、与种子的关联、被引次数和新近程度为 17 篇打分");
+  assert.equal(lines.get("排序"), "按与主题和种子的相似度、与种子的关联、被引次数和新近程度为 17 篇打分");
   assert.equal(lines.get("综述"), "3 节");
-  assert.deepEqual([...lines.keys()], ["种子", "检索词", "扩展", "去重", "排序", "补全", "精读", "主题", "综述"], "in stage order");
+  assert.deepEqual([...lines.keys()], ["种子", "检索词", "关键术语", "扩展", "去重", "排序", "补全", "精读", "主题", "综述"], "in stage order");
   assert.equal(new Map(plain(page.processLines({ stages: { write: { kind: "review", sections: 4, failed: 1, unverified: 2 } } }))).get("综述"), "4 节，1 节生成失败，2 节没有有效引用");
   assert.equal(new Map(plain(page.processLines({ stages: { write: { kind: "list", groups: 3 } } }))).get("综述"), "未启用大模型，按 3 组列出候选文献");
   assert.deepEqual(plain(page.processLines({ stages: "garbage", queries: "x" })), []);

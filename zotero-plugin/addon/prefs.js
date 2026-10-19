@@ -14,6 +14,9 @@ pref("extensions.zotwatch.llm.model", "deepseek/deepseek-chat");
 pref("extensions.zotwatch.llm.translateTitles", true);
 pref("extensions.zotwatch.llm.topicLabels", true);
 pref("extensions.zotwatch.llm.summaryTopN", "10");
+pref("extensions.zotwatch.llm.backup.baseURL", "");
+pref("extensions.zotwatch.llm.backup.apiKey", "");
+pref("extensions.zotwatch.llm.backup.model", "");
 
 pref("extensions.zotwatch.sources.crossref.enabled", true);
 pref("extensions.zotwatch.sources.crossref.mailto", "");
